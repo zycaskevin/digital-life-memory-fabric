@@ -11,6 +11,7 @@ import type {
   MemoryId,
   MemoryOutboxRecord,
   MemoryRevision,
+  MemoryRevisionRef,
   MemoryScope,
 } from "../domain/types.js";
 import { scopeKey } from "../domain/utils.js";
@@ -207,6 +208,18 @@ export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
     await this.afterWrites();
     const value = this.state.revisions.get(revisionKey(memoryId, revision));
     return value === undefined ? undefined : clone(value);
+  }
+
+  async getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>> {
+    await this.afterWrites();
+    return references.map((reference) => {
+      const value = this.state.revisions.get(
+        revisionKey(reference.memoryId, reference.revision),
+      );
+      return value === undefined ? undefined : clone(value);
+    });
   }
 
   async listChangesAfter(

@@ -18,6 +18,7 @@ import type {
   MemoryOutboxRecord,
   MemoryProvenance,
   MemoryRevision,
+  MemoryRevisionRef,
   MemoryScope,
   MemoryStatus,
 } from "../domain/types.js";
@@ -89,6 +90,14 @@ interface RevisionRow {
 interface EvidenceRow {
   source_type: string;
   source_ref: string;
+}
+
+interface RevisionRowWithOrdinal extends RevisionRow {
+  ordinal: string | number;
+}
+
+interface EvidenceRowWithOrdinal extends EvidenceRow {
+  ordinal: string | number;
 }
 
 interface ChangeRow {
@@ -291,6 +300,34 @@ function validateCheckpointCas(
   }
 }
 
+function revisionFromRow(
+  row: RevisionRow,
+  evidenceRefs: EvidenceRef[],
+): MemoryRevision {
+  const value: MemoryRevision = {
+    memoryId: row.memory_id as MemoryId,
+    revision: row.revision,
+    scope: scopeFromRow(row),
+    memoryClass: row.memory_class,
+    memoryKind: row.memory_kind,
+    status: row.status,
+    canonicalContent: contentFromRow(row),
+    contentHash: row.content_hash,
+    author: row.author,
+    provenance: row.provenance,
+    evidenceRefs,
+    committedAt: iso(row.committed_at),
+    commitSeq: numberFromDb(row.commit_seq),
+  };
+  const observedAt = optionalIso(row.observed_at);
+  const validFrom = optionalIso(row.valid_from);
+  const validUntil = optionalIso(row.valid_until);
+  if (observedAt !== undefined) value.observedAt = observedAt;
+  if (validFrom !== undefined) value.validFrom = validFrom;
+  if (validUntil !== undefined) value.validUntil = validUntil;
+  return value;
+}
+
 async function readRevision(
   client: PoolClient,
   memoryId: MemoryId,
@@ -311,31 +348,13 @@ async function readRevision(
     [memoryId, revision],
   );
 
-  const value: MemoryRevision = {
-    memoryId: row.memory_id as MemoryId,
-    revision: row.revision,
-    scope: scopeFromRow(row),
-    memoryClass: row.memory_class,
-    memoryKind: row.memory_kind,
-    status: row.status,
-    canonicalContent: contentFromRow(row),
-    contentHash: row.content_hash,
-    author: row.author,
-    provenance: row.provenance,
-    evidenceRefs: evidenceResult.rows.map((evidence) => ({
+  return revisionFromRow(
+    row,
+    evidenceResult.rows.map((evidence) => ({
       sourceType: evidence.source_type,
       sourceRef: evidence.source_ref,
     })),
-    committedAt: iso(row.committed_at),
-    commitSeq: numberFromDb(row.commit_seq),
-  };
-  const observedAt = optionalIso(row.observed_at);
-  const validFrom = optionalIso(row.valid_from);
-  const validUntil = optionalIso(row.valid_until);
-  if (observedAt !== undefined) value.observedAt = observedAt;
-  if (validFrom !== undefined) value.validFrom = validFrom;
-  if (validUntil !== undefined) value.validUntil = validUntil;
-  return value;
+  );
 }
 
 async function readHead(
@@ -726,6 +745,65 @@ export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
     } finally {
       client.release();
     }
+  }
+
+  async getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>> {
+    if (references.length === 0) return [];
+    const memoryIds = references.map((reference) => reference.memoryId);
+    const revisionNumbers = references.map((reference) => reference.revision);
+
+    const revisionResult = await this.pool.query<RevisionRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT memory_id, revision, ordinal
+           FROM unnest($1::text[], $2::integer[])
+                WITH ORDINALITY AS input(memory_id, revision, ordinal)
+       )
+       SELECT memory_revisions.*, requested.ordinal
+         FROM requested
+         JOIN memory_revisions
+           ON memory_revisions.memory_id = requested.memory_id
+          AND memory_revisions.revision = requested.revision
+        ORDER BY requested.ordinal`,
+      [memoryIds, revisionNumbers],
+    );
+
+    const evidenceResult = await this.pool.query<EvidenceRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT memory_id, revision, ordinal
+           FROM unnest($1::text[], $2::integer[])
+                WITH ORDINALITY AS input(memory_id, revision, ordinal)
+       )
+       SELECT requested.ordinal, memory_evidence.source_type,
+              memory_evidence.source_ref
+         FROM requested
+         JOIN memory_evidence
+           ON memory_evidence.memory_id = requested.memory_id
+          AND memory_evidence.revision = requested.revision
+        ORDER BY requested.ordinal, memory_evidence.evidence_id`,
+      [memoryIds, revisionNumbers],
+    );
+
+    const evidenceByOrdinal = new Map<number, EvidenceRef[]>();
+    for (const row of evidenceResult.rows) {
+      const ordinal = numberFromDb(row.ordinal);
+      const evidence = evidenceByOrdinal.get(ordinal) ?? [];
+      evidence.push({ sourceType: row.source_type, sourceRef: row.source_ref });
+      evidenceByOrdinal.set(ordinal, evidence);
+    }
+
+    const revisions: Array<MemoryRevision | undefined> = references.map(
+      () => undefined,
+    );
+    for (const row of revisionResult.rows) {
+      const ordinal = numberFromDb(row.ordinal);
+      revisions[ordinal - 1] = revisionFromRow(
+        row,
+        evidenceByOrdinal.get(ordinal) ?? [],
+      );
+    }
+    return revisions;
   }
 
   async listChangesAfter(

@@ -61,6 +61,10 @@ The PostgreSQL adapter uses one atomic CTE to update an expected checkpoint or
 insert the initial zero-based checkpoint. Concurrent acknowledgements with the same
 expected value cannot both advance the device.
 
+Revision hydration is set-based: one query loads every requested immutable revision
+and one query loads their evidence, both preserving request ordinality. Page size
+does not multiply PostgreSQL round trips per envelope.
+
 The in-memory reference store serializes checkpoint CAS behind the same write
 barrier used by canonical transactions.
 
@@ -80,7 +84,7 @@ device checkpoint contract.
 
 ## Verification
 
-Deterministic tests cover bounded replay, immutable revision hydration, retry before
+Deterministic tests cover bounded replay, bulk immutable revision hydration, retry before
 acknowledgement, monotonic checkpoint advance, stale compare-and-set rejection,
 backward acknowledgement, sequence-gap rejection, corrupt payload-hash rejection,
 and device independence.
@@ -89,5 +93,5 @@ The PostgreSQL E2E extends the DLFM-001 canonical transaction path with paged de
 pull, durable checkpoint creation, stale acknowledgement rejection, resume from the
 checkpoint, and final catch-up.
 
-Final local evidence on 2026-09-02: typecheck PASS, build PASS, ten tests PASS,
+Final local evidence on 2026-09-02: typecheck PASS, build PASS, eleven tests PASS,
 zero skips, zero remaining `dlfm_test_*` schemas, and no retained test container.

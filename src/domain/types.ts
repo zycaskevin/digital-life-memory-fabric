@@ -108,6 +108,11 @@ export interface MemoryRevision {
   validUntil?: string;
 }
 
+export interface MemoryRevisionRef {
+  memoryId: MemoryId;
+  revision: number;
+}
+
 export interface MemoryChangeEnvelope {
   eventId: EventId;
   scope: MemoryScope;

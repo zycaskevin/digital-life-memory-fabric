@@ -69,40 +69,41 @@ async function hydrateChanges(
   store: CanonicalMemoryStore,
   envelopes: MemoryChangeEnvelope[],
 ): Promise<MemorySyncChange[]> {
-  return Promise.all(
-    envelopes.map(async (envelope) => {
-      const revision = await store.getRevision(
-        envelope.memoryId,
-        envelope.newRevision,
-      );
-      if (revision === undefined) {
-        throw new SyncRevisionIntegrityError(
-          envelope.eventId,
-          `missing immutable revision ${envelope.memoryId}@${envelope.newRevision}`,
-        );
-      }
-      if (
-        revision.memoryId !== envelope.memoryId ||
-        revision.revision !== envelope.newRevision ||
-        revision.commitSeq !== envelope.commitSeq ||
-        !sameScope(revision.scope, envelope.scope) ||
-        envelope.payloadHash !==
-          sha256({
-            memoryId: revision.memoryId,
-            revision: revision.revision,
-            status: revision.status,
-            canonicalContent: revision.canonicalContent,
-            contentHash: revision.contentHash,
-          })
-      ) {
-        throw new SyncRevisionIntegrityError(
-          envelope.eventId,
-          "change envelope and immutable revision do not match",
-        );
-      }
-      return { envelope, revision };
-    }),
+  const revisions = await store.getRevisions(
+    envelopes.map((envelope) => ({
+      memoryId: envelope.memoryId,
+      revision: envelope.newRevision,
+    })),
   );
+  return envelopes.map((envelope, index) => {
+    const revision = revisions[index];
+    if (revision === undefined) {
+      throw new SyncRevisionIntegrityError(
+        envelope.eventId,
+        `missing immutable revision ${envelope.memoryId}@${envelope.newRevision}`,
+      );
+    }
+    if (
+      revision.memoryId !== envelope.memoryId ||
+      revision.revision !== envelope.newRevision ||
+      revision.commitSeq !== envelope.commitSeq ||
+      !sameScope(revision.scope, envelope.scope) ||
+      envelope.payloadHash !==
+        sha256({
+          memoryId: revision.memoryId,
+          revision: revision.revision,
+          status: revision.status,
+          canonicalContent: revision.canonicalContent,
+          contentHash: revision.contentHash,
+        })
+    ) {
+      throw new SyncRevisionIntegrityError(
+        envelope.eventId,
+        "change envelope and immutable revision do not match",
+      );
+    }
+    return { envelope, revision };
+  });
 }
 
 export class MemorySyncService {

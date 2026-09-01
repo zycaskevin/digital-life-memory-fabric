@@ -176,6 +176,9 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       firstPull.changes[0]?.revision.canonicalContent.text,
       "OmniHarness does not own Agent orchestration.",
     );
+    assert.deepEqual(firstPull.changes[0]?.revision.evidenceRefs, [
+      { sourceType: "conversation", sourceRef: "conversation:pg:1" },
+    ]);
     assert.equal(firstPull.hasMore, true);
     assert.equal(await store.getDeviceCheckpoint(scope, "prime-mac"), undefined);
 

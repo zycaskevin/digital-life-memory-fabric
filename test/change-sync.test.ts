@@ -14,6 +14,7 @@ import {
   type MemoryId,
   type MemoryChangeEnvelope,
   type MemoryRevision,
+  type MemoryRevisionRef,
   type MemoryScope,
 } from "../src/index.js";
 
@@ -47,11 +48,10 @@ function createHarness(
 }
 
 class MissingRevisionStore extends InMemoryCanonicalMemoryStore {
-  override async getRevision(
-    _memoryId: MemoryId,
-    _revision: number,
-  ): Promise<MemoryRevision | undefined> {
-    return undefined;
+  override async getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>> {
+    return references.map(() => undefined);
   }
 }
 
@@ -71,6 +71,26 @@ class CorruptChangeStore extends InMemoryCanonicalMemoryStore {
       first.payloadHash = "sha256:corrupt";
     }
     return changes;
+  }
+}
+
+class CountingBulkStore extends InMemoryCanonicalMemoryStore {
+  bulkReads = 0;
+  singleReads = 0;
+
+  override async getRevision(
+    memoryId: MemoryId,
+    revision: number,
+  ): Promise<MemoryRevision | undefined> {
+    this.singleReads += 1;
+    return super.getRevision(memoryId, revision);
+  }
+
+  override async getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>> {
+    this.bulkReads += 1;
+    return super.getRevisions(references);
   }
 }
 
@@ -270,4 +290,19 @@ test("change replay fails closed when the envelope payload hash is corrupt", asy
     harness.sync.readChanges({ scope, afterCommitSeq: 0 }),
     SyncRevisionIntegrityError,
   );
+});
+
+test("change replay hydrates an entire page through one bulk revision read", async () => {
+  const store = new CountingBulkStore();
+  const harness = createHarness(store);
+  await commitEpisodes(harness, 3);
+
+  const page = await harness.sync.readChanges({
+    scope,
+    afterCommitSeq: 0,
+    limit: 3,
+  });
+  assert.equal(page.changes.length, 3);
+  assert.equal(store.bulkReads, 1);
+  assert.equal(store.singleReads, 0);
 });

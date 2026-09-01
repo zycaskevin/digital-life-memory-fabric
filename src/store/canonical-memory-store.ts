@@ -10,6 +10,7 @@ import type {
   MemoryId,
   MemoryOutboxRecord,
   MemoryRevision,
+  MemoryRevisionRef,
   MemoryScope,
 } from "../domain/types.js";
 
@@ -45,6 +46,9 @@ export interface CanonicalMemoryStore {
   getCandidate(candidateId: CandidateId): Promise<MemoryCandidate | undefined>;
   getHead(memoryId: MemoryId): Promise<CanonicalMemoryHead | undefined>;
   getRevision(memoryId: MemoryId, revision: number): Promise<MemoryRevision | undefined>;
+  getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>>;
   listChangesAfter(
     scope: MemoryScope,
     afterCommitSeq: number,
