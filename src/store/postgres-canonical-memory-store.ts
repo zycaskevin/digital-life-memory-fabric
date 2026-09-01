@@ -6,6 +6,7 @@ import type {
   CanonicalMemoryHead,
   CandidateId,
   CandidateStatus,
+  DeviceCheckpoint,
   EvidenceRef,
   MemoryAuthor,
   MemoryCandidate,
@@ -132,6 +133,15 @@ interface ConflictRow {
   detected_at: Date | string;
 }
 
+interface DeviceCheckpointRow {
+  tenant_id: string;
+  life_did: string;
+  memory_namespace: string;
+  device_id: string;
+  last_applied_commit_seq: string | number;
+  last_sync_at: Date | string;
+}
+
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -254,6 +264,31 @@ function conflictFromRow(row: ConflictRow): MemoryConflict {
     currentRevision: row.current_revision,
     detectedAt: iso(row.detected_at),
   };
+}
+
+function deviceCheckpointFromRow(row: DeviceCheckpointRow): DeviceCheckpoint {
+  return {
+    scope: scopeFromRow(row),
+    deviceId: row.device_id,
+    lastAppliedCommitSeq: numberFromDb(row.last_applied_commit_seq),
+    lastSyncAt: iso(row.last_sync_at),
+  };
+}
+
+function validateCheckpointCas(
+  checkpoint: DeviceCheckpoint,
+  expectedLastAppliedCommitSeq: number,
+): void {
+  if (
+    !Number.isSafeInteger(expectedLastAppliedCommitSeq) ||
+    expectedLastAppliedCommitSeq < 0 ||
+    !Number.isSafeInteger(checkpoint.lastAppliedCommitSeq) ||
+    checkpoint.lastAppliedCommitSeq < expectedLastAppliedCommitSeq
+  ) {
+    throw new ValidationError(
+      "Device checkpoint CAS requires non-negative safe integers and cannot move backward",
+    );
+  }
 }
 
 async function readRevision(
@@ -696,15 +731,90 @@ export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
   async listChangesAfter(
     scope: MemoryScope,
     afterCommitSeq: number,
+    limit?: number,
   ): Promise<MemoryChangeEnvelope[]> {
+    if (
+      !Number.isSafeInteger(afterCommitSeq) ||
+      afterCommitSeq < 0 ||
+      (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
+    ) {
+      throw new ValidationError(
+        "Change feed cursor must be non-negative and limit must be a positive safe integer",
+      );
+    }
+    const limitClause = limit === undefined ? "" : " LIMIT $5";
+    const values: unknown[] = [
+      scope.tenantId,
+      scope.lifeDid,
+      scope.memoryNamespace,
+      afterCommitSeq,
+    ];
+    if (limit !== undefined) values.push(limit);
     const result = await this.pool.query<ChangeRow>(
       `SELECT * FROM memory_changes
         WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
           AND commit_seq > $4
-        ORDER BY commit_seq ASC`,
-      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, afterCommitSeq],
+        ORDER BY commit_seq ASC${limitClause}`,
+      values,
     );
     return result.rows.map(changeFromRow);
+  }
+
+  async getDeviceCheckpoint(
+    scope: MemoryScope,
+    deviceId: string,
+  ): Promise<DeviceCheckpoint | undefined> {
+    const result = await this.pool.query<DeviceCheckpointRow>(
+      `SELECT * FROM device_checkpoints
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+          AND device_id = $4`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, deviceId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : deviceCheckpointFromRow(row);
+  }
+
+  async compareAndSetDeviceCheckpoint(
+    checkpoint: DeviceCheckpoint,
+    expectedLastAppliedCommitSeq: number,
+  ): Promise<boolean> {
+    validateCheckpointCas(checkpoint, expectedLastAppliedCommitSeq);
+    const result = await this.pool.query<{ changed: number }>(
+      `WITH updated AS (
+         UPDATE device_checkpoints
+            SET last_applied_commit_seq = $5, last_sync_at = $6
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+            AND device_id = $4 AND last_applied_commit_seq = $7
+         RETURNING 1 AS changed
+       ), inserted AS (
+         INSERT INTO device_checkpoints (
+           tenant_id, life_did, memory_namespace, device_id,
+           last_applied_commit_seq, last_sync_at
+         )
+         SELECT $1, $2, $3, $4, $5, $6
+          WHERE $7 = 0
+            AND NOT EXISTS (
+              SELECT 1 FROM device_checkpoints
+               WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+                 AND device_id = $4
+            )
+         ON CONFLICT DO NOTHING
+         RETURNING 1 AS changed
+       )
+       SELECT changed FROM updated
+       UNION ALL
+       SELECT changed FROM inserted`,
+      [
+        checkpoint.scope.tenantId,
+        checkpoint.scope.lifeDid,
+        checkpoint.scope.memoryNamespace,
+        checkpoint.deviceId,
+        checkpoint.lastAppliedCommitSeq,
+        checkpoint.lastSyncAt,
+        expectedLastAppliedCommitSeq,
+      ],
+    );
+    return result.rowCount === 1;
   }
 
   async listConflicts(scope: MemoryScope): Promise<MemoryConflict[]> {

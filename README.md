@@ -6,8 +6,8 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 ## Status
 
-- Canonical contract: v0.1 proposed/frozen for implementation
-- Current milestone: **DLFM-001 — Canonical Core**
+- Canonical contract: v0.1 frozen at tag `v0.1.0`
+- Current milestone: **DLFM-002 — Change & Device Sync**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -24,13 +24,14 @@ Digital Life Memory Fabric owns:
 - tombstones
 - namespace-scoped `commit_seq`
 - change log and transactional outbox
+- ordered change replay and device checkpoint acknowledgement
 - canonical verification
 - provider materialization mappings
 - device checkpoint schema
 
 It does **not** own provider selection or provider internals. OmniHarness owns provider registry/resolution/health/fallback/adapters. Hindsight, Vault, Mem0, pgvector, local FTS, graphs, embeddings, and reranking state are rebuildable derived/provider state.
 
-## DLFM-001 implemented vertical slice
+## DLFM-001 canonical vertical slice
 
 ```text
 MemoryCandidate
@@ -74,6 +75,18 @@ Enabled commit operations in DLFM-001:
 
 A revision conflict does not consume a commit sequence number.
 
+## DLFM-002 change and device sync
+
+`MemorySyncService` exposes three bounded operations:
+
+- `readChanges` / `replay` reads an ordered page after a namespace `commit_seq`
+- `pullForDevice` reads from the device's durable checkpoint without advancing it
+- `acknowledgeDeviceChanges` advances a checkpoint only after a contiguous apply
+
+Checkpoint writes use compare-and-set semantics. A stale device cannot overwrite a
+newer checkpoint, checkpoints cannot move backward, and an acknowledgement cannot
+jump across a missing canonical change.
+
 ## Temporal semantics
 
 The canonical model distinguishes:
@@ -113,13 +126,15 @@ npm run check
 
 ### Real PostgreSQL integration gate
 
-The integration test is intentionally opt-in because the current Workspace does not have Docker or `psql` installed.
+The integration test is opt-in so callers can supply an isolated PostgreSQL database.
 
 ```bash
 DLFM_TEST_DATABASE_URL='postgres://...' npm test
 ```
 
-The test creates an isolated temporary schema, applies `0001_canonical_core.sql`, runs the canonical create/update/conflict/tombstone E2E, and drops the schema afterward.
+The test creates an isolated temporary schema, applies `0001_canonical_core.sql`,
+runs the canonical create/update/conflict/tombstone flow plus device pull/checkpoint
+replay, and drops the schema afterward.
 
 ## Core invariant
 

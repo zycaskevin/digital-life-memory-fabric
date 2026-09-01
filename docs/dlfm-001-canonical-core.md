@@ -1,6 +1,6 @@
 # DLFM-001 — Canonical Core
 
-**Status:** Implemented locally; real PostgreSQL E2E pending an available test database.  
+**Status:** Complete and frozen at `v0.1.0`.
 **Canonical baseline:** `docs/canonical-memory-model-v0.1.md`
 
 ## Goal
@@ -141,7 +141,9 @@ DLFM-001 is complete when:
 - migration and PostgreSQL E2E are present
 - one real PostgreSQL E2E is executed successfully
 
-The final bullet remains an environment gate, not a code-design gap, because the current Workspace has neither Docker nor `psql`.
+All four acceptance gates passed against commit
+`7d7b97871f6efbf89511d39f6f3c6bf5169381a8` on 2026-09-01. The real PostgreSQL
+run completed with six passing tests, zero skips, and no remaining temporary schema.
 
 ## Next milestone
 
@@ -153,7 +155,9 @@ Planned focus:
 - `changesSince(lastAppliedCommitSeq)` sync contract
 - checkpoint ACK rules
 - replay/idempotent apply semantics
-- offline pending journal contract
 - sync tests across GB10/Mac-style logical devices
+
+Offline pending journals remain a separate runtime contract and are not required for
+the canonical change-feed/checkpoint slice.
 
 Do not connect Hindsight/Vault/Mem0 before the canonical sync path is proven.

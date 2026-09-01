@@ -4,6 +4,7 @@ import type {
   CanonicalMemoryHead,
   CandidateId,
   CandidateStatus,
+  DeviceCheckpoint,
   MemoryCandidate,
   MemoryChangeEnvelope,
   MemoryConflict,
@@ -26,6 +27,7 @@ interface InMemoryState {
   changes: MemoryChangeEnvelope[];
   outbox: MemoryOutboxRecord[];
   conflicts: MemoryConflict[];
+  deviceCheckpoints: Map<string, DeviceCheckpoint>;
   idempotency: Map<string, CanonicalCommitResult>;
 }
 
@@ -38,6 +40,7 @@ function emptyState(): InMemoryState {
     changes: [],
     outbox: [],
     conflicts: [],
+    deviceCheckpoints: new Map(),
     idempotency: new Map(),
   };
 }
@@ -48,6 +51,26 @@ function revisionKey(memoryId: MemoryId, revision: number): string {
 
 function scopedIdempotencyKey(scope: MemoryScope, key: string): string {
   return `${scopeKey(scope)}\u001f${key}`;
+}
+
+function deviceCheckpointKey(scope: MemoryScope, deviceId: string): string {
+  return `${scopeKey(scope)}\u001f${deviceId}`;
+}
+
+function validateCheckpointCas(
+  checkpoint: DeviceCheckpoint,
+  expectedLastAppliedCommitSeq: number,
+): void {
+  if (
+    !Number.isSafeInteger(expectedLastAppliedCommitSeq) ||
+    expectedLastAppliedCommitSeq < 0 ||
+    !Number.isSafeInteger(checkpoint.lastAppliedCommitSeq) ||
+    checkpoint.lastAppliedCommitSeq < expectedLastAppliedCommitSeq
+  ) {
+    throw new ValidationError(
+      "Device checkpoint CAS requires non-negative safe integers and cannot move backward",
+    );
+  }
 }
 
 function clone<T>(value: T): T {
@@ -189,17 +212,62 @@ export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
   async listChangesAfter(
     scope: MemoryScope,
     afterCommitSeq: number,
+    limit?: number,
   ): Promise<MemoryChangeEnvelope[]> {
+    if (
+      !Number.isSafeInteger(afterCommitSeq) ||
+      afterCommitSeq < 0 ||
+      (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
+    ) {
+      throw new ValidationError(
+        "Change feed cursor must be non-negative and limit must be a positive safe integer",
+      );
+    }
     await this.afterWrites();
-    return clone(
-      this.state.changes
-        .filter(
-          (change) =>
-            scopeKey(change.scope) === scopeKey(scope) &&
-            change.commitSeq > afterCommitSeq,
-        )
-        .sort((left, right) => left.commitSeq - right.commitSeq),
+    const changes = this.state.changes
+      .filter(
+        (change) =>
+          scopeKey(change.scope) === scopeKey(scope) &&
+          change.commitSeq > afterCommitSeq,
+      )
+      .sort((left, right) => left.commitSeq - right.commitSeq);
+    return clone(limit === undefined ? changes : changes.slice(0, limit));
+  }
+
+  async getDeviceCheckpoint(
+    scope: MemoryScope,
+    deviceId: string,
+  ): Promise<DeviceCheckpoint | undefined> {
+    await this.afterWrites();
+    const value = this.state.deviceCheckpoints.get(
+      deviceCheckpointKey(scope, deviceId),
     );
+    return value === undefined ? undefined : clone(value);
+  }
+
+  async compareAndSetDeviceCheckpoint(
+    checkpoint: DeviceCheckpoint,
+    expectedLastAppliedCommitSeq: number,
+  ): Promise<boolean> {
+    validateCheckpointCas(checkpoint, expectedLastAppliedCommitSeq);
+    const previous = this.writeBarrier;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.writeBarrier = previous.then(() => gate);
+    await previous;
+
+    try {
+      const key = deviceCheckpointKey(checkpoint.scope, checkpoint.deviceId);
+      const current = this.state.deviceCheckpoints.get(key);
+      const currentCommitSeq = current?.lastAppliedCommitSeq ?? 0;
+      if (currentCommitSeq !== expectedLastAppliedCommitSeq) return false;
+      this.state.deviceCheckpoints.set(key, clone(checkpoint));
+      return true;
+    } finally {
+      release();
+    }
   }
 
   async listConflicts(scope: MemoryScope): Promise<MemoryConflict[]> {

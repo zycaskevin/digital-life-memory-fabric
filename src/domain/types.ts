@@ -152,6 +152,43 @@ export interface DeviceCheckpoint {
   lastSyncAt: string;
 }
 
+export interface MemorySyncChange {
+  envelope: MemoryChangeEnvelope;
+  revision: MemoryRevision;
+}
+
+export interface MemoryChangePage {
+  scope: MemoryScope;
+  afterCommitSeq: number;
+  nextCommitSeq: number;
+  changes: MemorySyncChange[];
+  hasMore: boolean;
+}
+
+export interface DeviceSyncPull extends MemoryChangePage {
+  deviceId: string;
+  lastAppliedCommitSeq: number;
+}
+
+export interface ReadChangesInput {
+  scope: MemoryScope;
+  afterCommitSeq: number;
+  limit?: number;
+}
+
+export interface PullDeviceChangesInput {
+  scope: MemoryScope;
+  deviceId: string;
+  limit?: number;
+}
+
+export interface AcknowledgeDeviceChangesInput {
+  scope: MemoryScope;
+  deviceId: string;
+  expectedLastAppliedCommitSeq: number;
+  appliedThroughCommitSeq: number;
+}
+
 export interface MemoryConflict {
   conflictId: ConflictId;
   candidateId: CandidateId;
