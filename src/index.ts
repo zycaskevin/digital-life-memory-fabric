@@ -3,6 +3,7 @@ export * from "./candidates/memory-candidate-service.js";
 export * from "./domain/errors.js";
 export * from "./domain/types.js";
 export * from "./domain/utils.js";
+export * from "./integrations/omniharness.js";
 export * from "./store/canonical-memory-store.js";
 export * from "./store/in-memory-canonical-memory-store.js";
 export * from "./store/postgres-canonical-memory-store.js";
