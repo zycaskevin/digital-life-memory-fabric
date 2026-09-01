@@ -276,6 +276,13 @@ export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
       const current = this.state.deviceCheckpoints.get(key);
       const currentCommitSeq = current?.lastAppliedCommitSeq ?? 0;
       if (currentCommitSeq !== expectedLastAppliedCommitSeq) return false;
+      const highestCommitted =
+        this.state.commitSeqByScope.get(scopeKey(checkpoint.scope)) ?? 0;
+      if (checkpoint.lastAppliedCommitSeq > highestCommitted) {
+        throw new ValidationError(
+          "Device checkpoint cannot exceed the committed change sequence",
+        );
+      }
       this.state.deviceCheckpoints.set(key, clone(checkpoint));
       return true;
     } finally {

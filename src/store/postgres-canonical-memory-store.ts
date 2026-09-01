@@ -857,6 +857,27 @@ export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
     expectedLastAppliedCommitSeq: number,
   ): Promise<boolean> {
     validateCheckpointCas(checkpoint, expectedLastAppliedCommitSeq);
+    const highWatermarkResult = await this.pool.query<{
+      last_commit_seq: string | number;
+    }>(
+      `SELECT last_commit_seq FROM memory_namespace_sequences
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3`,
+      [
+        checkpoint.scope.tenantId,
+        checkpoint.scope.lifeDid,
+        checkpoint.scope.memoryNamespace,
+      ],
+    );
+    const highWatermarkRow = highWatermarkResult.rows[0];
+    const highestCommitted =
+      highWatermarkRow === undefined
+        ? 0
+        : numberFromDb(highWatermarkRow.last_commit_seq);
+    if (checkpoint.lastAppliedCommitSeq > highestCommitted) {
+      throw new ValidationError(
+        "Device checkpoint cannot exceed the committed change sequence",
+      );
+    }
     const result = await this.pool.query<{ changed: number }>(
       `WITH updated AS (
          UPDATE device_checkpoints

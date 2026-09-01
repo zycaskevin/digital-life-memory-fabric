@@ -251,6 +251,19 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
         {
           scope,
           deviceId: "openclaw-laptop",
+          lastAppliedCommitSeq: 4,
+          lastSyncAt: new Date().toISOString(),
+        },
+        1,
+      ),
+      /cannot exceed the committed change sequence/,
+    );
+
+    await assert.rejects(
+      store.compareAndSetDeviceCheckpoint(
+        {
+          scope,
+          deviceId: "openclaw-laptop",
           lastAppliedCommitSeq: 0,
           lastSyncAt: new Date().toISOString(),
         },

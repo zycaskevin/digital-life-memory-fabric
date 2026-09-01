@@ -34,10 +34,11 @@ checkpoint compare-and-set
 8. Acknowledgement validates every sequence between the expected and new checkpoint.
 9. Checkpoint persistence is compare-and-set; stale writers fail with
    `DEVICE_CHECKPOINT_CONFLICT`.
-10. A missing sequence fails closed with `CHANGE_SEQUENCE_GAP`.
-11. A missing revision, mismatched revision, or invalid envelope payload hash fails with
+10. A checkpoint cannot exceed the namespace committed change high-watermark.
+11. A missing sequence fails closed with `CHANGE_SEQUENCE_GAP`.
+12. A missing revision, mismatched revision, or invalid envelope payload hash fails with
     `SYNC_REVISION_INTEGRITY_ERROR`.
-12. Different devices and namespaces keep independent checkpoints.
+13. Different devices and namespaces keep independent checkpoints.
 
 ## Public service
 
@@ -84,10 +85,10 @@ device checkpoint contract.
 
 ## Verification
 
-Deterministic tests cover bounded replay, bulk immutable revision hydration, retry before
-acknowledgement, monotonic checkpoint advance, stale compare-and-set rejection,
-backward acknowledgement, sequence-gap rejection, corrupt payload-hash rejection,
-and device independence.
+Deterministic tests cover bounded replay, bulk immutable revision hydration, retry
+before acknowledgement, monotonic checkpoint advance, stale compare-and-set
+rejection, backward and future acknowledgement, sequence-gap rejection, corrupt
+payload-hash rejection, and device independence.
 
 The PostgreSQL E2E extends the DLFM-001 canonical transaction path with paged device
 pull, durable checkpoint creation, stale acknowledgement rejection, resume from the

@@ -255,6 +255,18 @@ test("device checkpoints reject stale, backward, and non-contiguous acknowledgem
       {
         scope,
         deviceId: "gb10",
+        lastAppliedCommitSeq: 3,
+        lastSyncAt: "2026-09-01T16:00:00.000Z",
+      },
+      1,
+    ),
+    /cannot exceed the committed change sequence/,
+  );
+  await assert.rejects(
+    harness.store.compareAndSetDeviceCheckpoint(
+      {
+        scope,
+        deviceId: "gb10",
         lastAppliedCommitSeq: 0,
         lastSyncAt: "2026-09-01T16:00:00.000Z",
       },
