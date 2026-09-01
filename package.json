@@ -1,0 +1,32 @@
+{
+  "name": "@arthurverse/digital-life-memory-fabric",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provider-neutral canonical memory and synchronization layer for one Digital Life.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "rm -rf .tmp/test && tsc -p tsconfig.test.json && node .tmp/test/test/run.js",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
+    "typescript": "^5.9.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  }
+}
