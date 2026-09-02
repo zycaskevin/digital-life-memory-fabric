@@ -33,6 +33,7 @@ retrieval without claiming external LLM inference.
 - a production-usable, provider-neutral HTTP delivery port;
 - exact OH-MEM-002 body and correlation headers;
 - abort propagation from the fenced worker;
+- a configurable standalone request deadline with cleanup after settlement;
 - bounded JSON response handling and fail-closed transport errors;
 - cross-repository create, idempotent replay, update, tombstone, inspection,
   transport-outage, and canonical-survival evidence;
@@ -43,6 +44,8 @@ retrieval without claiming external LLM inference.
 1. The HTTP port accepts only absolute `http` or `https` endpoints without URL
    credentials or fragments.
 2. It performs one POST per worker attempt and never owns retry scheduling.
+   Every POST has a bounded transport deadline; an earlier worker cancellation
+   still wins.
 3. Request body equals the committed OH-MEM-002 event, and request/idempotency
    identities are also carried as headers.
 4. Non-2xx, non-JSON, invalid JSON, empty, or oversized responses fail closed.
@@ -119,7 +122,7 @@ explicit canonical scope.
 
 On 2026-09-03 the candidate passed:
 
-- all 30 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
+- all 33 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
 - live create, idempotent replay, update, tombstone, and provider inspection;
 - transport-outage proof that canonical commit survives and no fake Provider
   materialization is created;

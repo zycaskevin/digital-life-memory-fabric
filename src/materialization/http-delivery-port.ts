@@ -10,11 +10,14 @@ import type {
 
 export const DEFAULT_MATERIALIZATION_RESPONSE_LIMIT_BYTES = 1_048_576;
 export const MAX_MATERIALIZATION_RESPONSE_LIMIT_BYTES = 16_777_216;
+export const DEFAULT_MATERIALIZATION_REQUEST_TIMEOUT_MS = 30_000;
+export const MAX_MATERIALIZATION_REQUEST_TIMEOUT_MS = 300_000;
 
 export interface HttpMemoryMaterializationDeliveryPortOptions {
   readonly endpoint: string | URL;
   readonly headers?: Readonly<Record<string, string>>;
   readonly maxResponseBytes?: number;
+  readonly requestTimeoutMs?: number;
   readonly fetchImplementation?: typeof fetch;
 }
 
@@ -31,18 +34,52 @@ export class HttpMemoryMaterializationDeliveryPort
   readonly #endpoint: URL;
   readonly #headers: Readonly<Record<string, string>>;
   readonly #maxResponseBytes: number;
+  readonly #requestTimeoutMs: number;
   readonly #fetch: typeof fetch;
 
   constructor(options: HttpMemoryMaterializationDeliveryPortOptions) {
     this.#endpoint = validateEndpoint(options.endpoint);
     this.#headers = Object.freeze({ ...(options.headers ?? {}) });
     this.#maxResponseBytes = validateResponseLimit(options.maxResponseBytes);
+    this.#requestTimeoutMs = validateRequestTimeout(options.requestTimeoutMs);
     this.#fetch = options.fetchImplementation ?? globalThis.fetch;
   }
 
   async execute(
     event: MemoryFabricMaterializationEvent,
     options?: MaterializationDeliveryOptions,
+  ): Promise<unknown> {
+    const deadline = new AbortController();
+    const timeout = setTimeout(
+      () => deadline.abort(),
+      this.#requestTimeoutMs,
+    );
+    const signal =
+      options?.signal === undefined
+        ? deadline.signal
+        : AbortSignal.any([options.signal, deadline.signal]);
+    try {
+      return await this.#executeRequest(event, signal);
+    } catch (error) {
+      if (error instanceof MaterializationTransportError) throw error;
+      const reason = options?.signal?.aborted
+        ? "request was aborted"
+        : deadline.signal.aborted
+          ? `request timed out after ${this.#requestTimeoutMs}ms`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      throw new MaterializationTransportError(
+        `OmniHarness HTTP delivery failed: ${reason}`,
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async #executeRequest(
+    event: MemoryFabricMaterializationEvent,
+    signal: AbortSignal,
   ): Promise<unknown> {
     const headers = new Headers(this.#headers);
     headers.set("accept", "application/json");
@@ -52,24 +89,12 @@ export class HttpMemoryMaterializationDeliveryPort
     headers.set("x-memory-event-version", event.event_version);
     if (event.trace_id !== undefined) headers.set("x-trace-id", event.trace_id);
 
-    let response: Response;
-    try {
-      response = await this.#fetch(this.#endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(event),
-        ...(options?.signal === undefined ? {} : { signal: options.signal }),
-      });
-    } catch (error) {
-      const reason = options?.signal?.aborted
-        ? "request was aborted"
-        : error instanceof Error
-          ? error.message
-          : String(error);
-      throw new MaterializationTransportError(
-        `OmniHarness HTTP delivery failed: ${reason}`,
-      );
-    }
+    const response = await this.#fetch(this.#endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(event),
+      signal,
+    });
 
     if (!response.ok) {
       await response.body?.cancel();
@@ -79,7 +104,11 @@ export class HttpMemoryMaterializationDeliveryPort
       );
     }
 
-    const mediaType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+    const mediaType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
     if (mediaType !== "application/json") {
       await response.body?.cancel();
       throw new MaterializationTransportError(
@@ -137,6 +166,20 @@ function validateResponseLimit(value: number | undefined): number {
     );
   }
   return limit;
+}
+
+function validateRequestTimeout(value: number | undefined): number {
+  const timeout = value ?? DEFAULT_MATERIALIZATION_REQUEST_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(timeout) ||
+    timeout < 1 ||
+    timeout > MAX_MATERIALIZATION_REQUEST_TIMEOUT_MS
+  ) {
+    throw new ValidationError(
+      `requestTimeoutMs must be a safe integer between 1 and ${MAX_MATERIALIZATION_REQUEST_TIMEOUT_MS}`,
+    );
+  }
+  return timeout;
 }
 
 async function readBoundedBody(response: Response, limit: number): Promise<string> {

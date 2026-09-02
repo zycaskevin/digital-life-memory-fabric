@@ -129,7 +129,8 @@ execution. DLFM-004 does not add a production transport or Provider dependency.
 same OH-MEM-002 contract. It forwards the worker abort signal, carries stable
 request/idempotency headers, rejects endpoint credentials, and fails closed on
 non-success, non-JSON, invalid, empty, or oversized responses. Retry and
-settlement remain in `MaterializationWorker`.
+settlement remain in `MaterializationWorker`; the port also enforces a bounded
+standalone request deadline as transport-level defense in depth.
 
 The opt-in live gate connects real PostgreSQL through this HTTP boundary to the
 OmniHarness v0.2.0 consumer and Hindsight 0.9.2:

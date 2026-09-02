@@ -43,7 +43,7 @@ test("HTTP delivery posts the exact OH-MEM-002 event and returns untrusted JSON"
   const server = createServer(async (request, response) => {
     observedHeaders = request.headers;
     received = JSON.parse(await readRequest(request)) as unknown;
-    response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    response.writeHead(200, { "content-type": "Application/JSON; charset=utf-8" });
     response.end(JSON.stringify(receipt(event)));
   });
   const endpoint = await listen(server);
@@ -189,6 +189,47 @@ test("HTTP delivery validates endpoint and bounded-response configuration", () =
       }),
     ValidationError,
   );
+  assert.throws(
+    () =>
+      new HttpMemoryMaterializationDeliveryPort({
+        endpoint: "http://127.0.0.1/materialize",
+        requestTimeoutMs: 0,
+      }),
+    ValidationError,
+  );
+});
+
+test("HTTP delivery enforces its deadline and preserves caller cancellation", async (t) => {
+  await t.test("standalone deadline", async () => {
+    const port = new HttpMemoryMaterializationDeliveryPort({
+      endpoint: "http://127.0.0.1/materialize",
+      requestTimeoutMs: 10,
+      fetchImplementation: abortableFetch,
+    });
+    await assert.rejects(
+      port.execute(event),
+      (error: unknown) =>
+        error instanceof MaterializationTransportError &&
+        error.message.includes("timed out after 10ms"),
+    );
+  });
+
+  await t.test("caller cancellation", async () => {
+    const controller = new AbortController();
+    const port = new HttpMemoryMaterializationDeliveryPort({
+      endpoint: "http://127.0.0.1/materialize",
+      requestTimeoutMs: 1_000,
+      fetchImplementation: abortableFetch,
+    });
+    const execution = port.execute(event, { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(
+      execution,
+      (error: unknown) =>
+        error instanceof MaterializationTransportError &&
+        error.message.includes("request was aborted"),
+    );
+  });
 });
 
 function receipt(source: MemoryFabricMaterializationEvent) {
@@ -251,3 +292,15 @@ async function withServer(
     await close(server);
   }
 }
+
+const abortableFetch: typeof fetch = async (_input, init) => {
+  const signal = init?.signal;
+  assert.ok(signal);
+  return new Promise<Response>((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+};
