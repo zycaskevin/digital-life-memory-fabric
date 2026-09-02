@@ -7,7 +7,7 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 ## Status
 
 - Canonical contract: v0.1 frozen at tag `v0.1.0`
-- Current milestone: **DLFM-004 — Provider Materialization Worker**
+- Current milestone: **DLFM-005A — Live OmniHarness/Hindsight Materialization E2E**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -122,6 +122,27 @@ without inventing a Provider materialization row.
 `MemoryMaterializationDeliveryPort` is provider-neutral and returns an untrusted
 receipt. OmniHarness still owns Provider registry, selection, health, and adapter
 execution. DLFM-004 does not add a production transport or Provider dependency.
+
+## DLFM-005A live materialization
+
+`HttpMemoryMaterializationDeliveryPort` provides one bounded HTTP execution of the
+same OH-MEM-002 contract. It forwards the worker abort signal, carries stable
+request/idempotency headers, rejects endpoint credentials, and fails closed on
+non-success, non-JSON, invalid, empty, or oversized responses. Retry and
+settlement remain in `MaterializationWorker`.
+
+The opt-in live gate connects real PostgreSQL through this HTTP boundary to the
+OmniHarness v0.2.0 consumer and Hindsight 0.9.2:
+
+```bash
+DLFM_TEST_DATABASE_URL='postgres://...' \
+OMNIHARNESS_HINDSIGHT_DATABASE_URL='postgres://.../isolated_hindsight_test' \
+OMNIHARNESS_DIR='/path/to/OmniHarness' \
+bash scripts/run-live-omniharness-hindsight-local.sh
+```
+
+See [`docs/dlfm-005a-live-materialization.md`](docs/dlfm-005a-live-materialization.md)
+for the exact acceptance and non-claims.
 
 ## Temporal semantics
 
