@@ -3,12 +3,14 @@ import type {
   CanonicalMemoryHead,
   CandidateId,
   CandidateStatus,
+  DeviceCheckpoint,
   MemoryCandidate,
   MemoryChangeEnvelope,
   MemoryConflict,
   MemoryId,
   MemoryOutboxRecord,
   MemoryRevision,
+  MemoryRevisionRef,
   MemoryScope,
 } from "../domain/types.js";
 
@@ -44,6 +46,21 @@ export interface CanonicalMemoryStore {
   getCandidate(candidateId: CandidateId): Promise<MemoryCandidate | undefined>;
   getHead(memoryId: MemoryId): Promise<CanonicalMemoryHead | undefined>;
   getRevision(memoryId: MemoryId, revision: number): Promise<MemoryRevision | undefined>;
-  listChangesAfter(scope: MemoryScope, afterCommitSeq: number): Promise<MemoryChangeEnvelope[]>;
+  getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>>;
+  listChangesAfter(
+    scope: MemoryScope,
+    afterCommitSeq: number,
+    limit?: number,
+  ): Promise<MemoryChangeEnvelope[]>;
+  getDeviceCheckpoint(
+    scope: MemoryScope,
+    deviceId: string,
+  ): Promise<DeviceCheckpoint | undefined>;
+  compareAndSetDeviceCheckpoint(
+    checkpoint: DeviceCheckpoint,
+    expectedLastAppliedCommitSeq: number,
+  ): Promise<boolean>;
   listConflicts(scope: MemoryScope): Promise<MemoryConflict[]>;
 }

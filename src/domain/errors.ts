@@ -1,4 +1,4 @@
-import type { MemoryId } from "./types.js";
+import type { EventId, MemoryId } from "./types.js";
 
 export class MemoryFabricError extends Error {
   constructor(
@@ -47,6 +47,42 @@ export class RevisionConflictError extends MemoryFabricError {
       "REVISION_CONFLICT",
       `Revision conflict for ${memoryId}: expected ${expectedRevision}, current ${currentRevision}`,
     );
+  }
+}
+
+export class ChangeSequenceGapError extends MemoryFabricError {
+  constructor(
+    public readonly expectedCommitSeq: number,
+    public readonly actualCommitSeq: number | undefined,
+  ) {
+    super(
+      "CHANGE_SEQUENCE_GAP",
+      actualCommitSeq === undefined
+        ? `Canonical change stream ended before commit_seq ${expectedCommitSeq}`
+        : `Canonical change stream expected commit_seq ${expectedCommitSeq}, received ${actualCommitSeq}`,
+    );
+  }
+}
+
+export class DeviceCheckpointConflictError extends MemoryFabricError {
+  constructor(
+    public readonly deviceId: string,
+    public readonly expectedLastAppliedCommitSeq: number,
+    public readonly currentLastAppliedCommitSeq: number,
+  ) {
+    super(
+      "DEVICE_CHECKPOINT_CONFLICT",
+      `Device ${deviceId} checkpoint conflict: expected ${expectedLastAppliedCommitSeq}, current ${currentLastAppliedCommitSeq}`,
+    );
+  }
+}
+
+export class SyncRevisionIntegrityError extends MemoryFabricError {
+  constructor(
+    public readonly eventId: EventId,
+    message: string,
+  ) {
+    super("SYNC_REVISION_INTEGRITY_ERROR", `Change ${eventId}: ${message}`);
   }
 }
 

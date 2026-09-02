@@ -6,7 +6,9 @@ import { Pool } from "pg";
 import {
   CanonicalMemoryAuthority,
   CanonicalVerifier,
+  DeviceCheckpointConflictError,
   MemoryCandidateService,
+  MemorySyncService,
   PostgresCanonicalMemoryStore,
   RevisionConflictError,
   type MemoryScope,
@@ -157,6 +159,117 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.deepEqual(
       (await store.listChangesAfter(scope, 0)).map((change) => change.commitSeq),
       [1, 2, 3],
+    );
+
+    const sync = new MemorySyncService(store);
+    const firstPull = await sync.pullForDevice({
+      scope,
+      deviceId: "prime-mac",
+      limit: 2,
+    });
+    assert.equal(firstPull.lastAppliedCommitSeq, 0);
+    assert.deepEqual(
+      firstPull.changes.map((entry) => entry.envelope.commitSeq),
+      [1, 2],
+    );
+    assert.equal(
+      firstPull.changes[0]?.revision.canonicalContent.text,
+      "OmniHarness does not own Agent orchestration.",
+    );
+    assert.deepEqual(firstPull.changes[0]?.revision.evidenceRefs, [
+      { sourceType: "conversation", sourceRef: "conversation:pg:1" },
+    ]);
+    assert.equal(firstPull.hasMore, true);
+    assert.equal(await store.getDeviceCheckpoint(scope, "prime-mac"), undefined);
+
+    const checkpoint = await sync.acknowledgeDeviceChanges({
+      scope,
+      deviceId: "prime-mac",
+      expectedLastAppliedCommitSeq: 0,
+      appliedThroughCommitSeq: firstPull.nextCommitSeq,
+    });
+    assert.equal(checkpoint.lastAppliedCommitSeq, 2);
+
+    const secondPull = await sync.pullForDevice({
+      scope,
+      deviceId: "prime-mac",
+      limit: 2,
+    });
+    assert.deepEqual(
+      secondPull.changes.map((entry) => entry.envelope.commitSeq),
+      [3],
+    );
+
+    await assert.rejects(
+      sync.acknowledgeDeviceChanges({
+        scope,
+        deviceId: "prime-mac",
+        expectedLastAppliedCommitSeq: 0,
+        appliedThroughCommitSeq: 1,
+      }),
+      DeviceCheckpointConflictError,
+    );
+
+    await sync.acknowledgeDeviceChanges({
+      scope,
+      deviceId: "prime-mac",
+      expectedLastAppliedCommitSeq: 2,
+      appliedThroughCommitSeq: secondPull.nextCommitSeq,
+    });
+    assert.equal(
+      (await store.getDeviceCheckpoint(scope, "prime-mac"))
+        ?.lastAppliedCommitSeq,
+      3,
+    );
+
+    const concurrentAcks = await Promise.allSettled([
+      sync.acknowledgeDeviceChanges({
+        scope,
+        deviceId: "openclaw-laptop",
+        expectedLastAppliedCommitSeq: 0,
+        appliedThroughCommitSeq: 1,
+      }),
+      sync.acknowledgeDeviceChanges({
+        scope,
+        deviceId: "openclaw-laptop",
+        expectedLastAppliedCommitSeq: 0,
+        appliedThroughCommitSeq: 1,
+      }),
+    ]);
+    assert.equal(
+      concurrentAcks.filter((result) => result.status === "fulfilled").length,
+      1,
+    );
+    const rejectedAck = concurrentAcks.find(
+      (result) => result.status === "rejected",
+    );
+    assert.ok(rejectedAck?.status === "rejected");
+    assert.ok(rejectedAck.reason instanceof DeviceCheckpointConflictError);
+
+    await assert.rejects(
+      store.compareAndSetDeviceCheckpoint(
+        {
+          scope,
+          deviceId: "openclaw-laptop",
+          lastAppliedCommitSeq: 4,
+          lastSyncAt: new Date().toISOString(),
+        },
+        1,
+      ),
+      /cannot exceed the committed change sequence/,
+    );
+
+    await assert.rejects(
+      store.compareAndSetDeviceCheckpoint(
+        {
+          scope,
+          deviceId: "openclaw-laptop",
+          lastAppliedCommitSeq: 0,
+          lastSyncAt: new Date().toISOString(),
+        },
+        1,
+      ),
+      /cannot move backward/,
     );
   } finally {
     await store.close();

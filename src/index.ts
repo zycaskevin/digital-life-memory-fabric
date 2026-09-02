@@ -6,4 +6,5 @@ export * from "./domain/utils.js";
 export * from "./store/canonical-memory-store.js";
 export * from "./store/in-memory-canonical-memory-store.js";
 export * from "./store/postgres-canonical-memory-store.js";
+export * from "./sync/memory-sync-service.js";
 export * from "./verification/canonical-verifier.js";

@@ -6,6 +6,7 @@ import type {
   CanonicalMemoryHead,
   CandidateId,
   CandidateStatus,
+  DeviceCheckpoint,
   EvidenceRef,
   MemoryAuthor,
   MemoryCandidate,
@@ -17,6 +18,7 @@ import type {
   MemoryOutboxRecord,
   MemoryProvenance,
   MemoryRevision,
+  MemoryRevisionRef,
   MemoryScope,
   MemoryStatus,
 } from "../domain/types.js";
@@ -90,6 +92,14 @@ interface EvidenceRow {
   source_ref: string;
 }
 
+interface RevisionRowWithOrdinal extends RevisionRow {
+  ordinal: string | number;
+}
+
+interface EvidenceRowWithOrdinal extends EvidenceRow {
+  ordinal: string | number;
+}
+
 interface ChangeRow {
   event_id: string;
   tenant_id: string;
@@ -130,6 +140,15 @@ interface ConflictRow {
   expected_revision: number;
   current_revision: number;
   detected_at: Date | string;
+}
+
+interface DeviceCheckpointRow {
+  tenant_id: string;
+  life_did: string;
+  memory_namespace: string;
+  device_id: string;
+  last_applied_commit_seq: string | number;
+  last_sync_at: Date | string;
 }
 
 function iso(value: Date | string): string {
@@ -256,6 +275,59 @@ function conflictFromRow(row: ConflictRow): MemoryConflict {
   };
 }
 
+function deviceCheckpointFromRow(row: DeviceCheckpointRow): DeviceCheckpoint {
+  return {
+    scope: scopeFromRow(row),
+    deviceId: row.device_id,
+    lastAppliedCommitSeq: numberFromDb(row.last_applied_commit_seq),
+    lastSyncAt: iso(row.last_sync_at),
+  };
+}
+
+function validateCheckpointCas(
+  checkpoint: DeviceCheckpoint,
+  expectedLastAppliedCommitSeq: number,
+): void {
+  if (
+    !Number.isSafeInteger(expectedLastAppliedCommitSeq) ||
+    expectedLastAppliedCommitSeq < 0 ||
+    !Number.isSafeInteger(checkpoint.lastAppliedCommitSeq) ||
+    checkpoint.lastAppliedCommitSeq < expectedLastAppliedCommitSeq
+  ) {
+    throw new ValidationError(
+      "Device checkpoint CAS requires non-negative safe integers and cannot move backward",
+    );
+  }
+}
+
+function revisionFromRow(
+  row: RevisionRow,
+  evidenceRefs: EvidenceRef[],
+): MemoryRevision {
+  const value: MemoryRevision = {
+    memoryId: row.memory_id as MemoryId,
+    revision: row.revision,
+    scope: scopeFromRow(row),
+    memoryClass: row.memory_class,
+    memoryKind: row.memory_kind,
+    status: row.status,
+    canonicalContent: contentFromRow(row),
+    contentHash: row.content_hash,
+    author: row.author,
+    provenance: row.provenance,
+    evidenceRefs,
+    committedAt: iso(row.committed_at),
+    commitSeq: numberFromDb(row.commit_seq),
+  };
+  const observedAt = optionalIso(row.observed_at);
+  const validFrom = optionalIso(row.valid_from);
+  const validUntil = optionalIso(row.valid_until);
+  if (observedAt !== undefined) value.observedAt = observedAt;
+  if (validFrom !== undefined) value.validFrom = validFrom;
+  if (validUntil !== undefined) value.validUntil = validUntil;
+  return value;
+}
+
 async function readRevision(
   client: PoolClient,
   memoryId: MemoryId,
@@ -276,31 +348,13 @@ async function readRevision(
     [memoryId, revision],
   );
 
-  const value: MemoryRevision = {
-    memoryId: row.memory_id as MemoryId,
-    revision: row.revision,
-    scope: scopeFromRow(row),
-    memoryClass: row.memory_class,
-    memoryKind: row.memory_kind,
-    status: row.status,
-    canonicalContent: contentFromRow(row),
-    contentHash: row.content_hash,
-    author: row.author,
-    provenance: row.provenance,
-    evidenceRefs: evidenceResult.rows.map((evidence) => ({
+  return revisionFromRow(
+    row,
+    evidenceResult.rows.map((evidence) => ({
       sourceType: evidence.source_type,
       sourceRef: evidence.source_ref,
     })),
-    committedAt: iso(row.committed_at),
-    commitSeq: numberFromDb(row.commit_seq),
-  };
-  const observedAt = optionalIso(row.observed_at);
-  const validFrom = optionalIso(row.valid_from);
-  const validUntil = optionalIso(row.valid_until);
-  if (observedAt !== undefined) value.observedAt = observedAt;
-  if (validFrom !== undefined) value.validFrom = validFrom;
-  if (validUntil !== undefined) value.validUntil = validUntil;
-  return value;
+  );
 }
 
 async function readHead(
@@ -693,18 +747,173 @@ export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
     }
   }
 
+  async getRevisions(
+    references: readonly MemoryRevisionRef[],
+  ): Promise<Array<MemoryRevision | undefined>> {
+    if (references.length === 0) return [];
+    const memoryIds = references.map((reference) => reference.memoryId);
+    const revisionNumbers = references.map((reference) => reference.revision);
+
+    const revisionResult = await this.pool.query<RevisionRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT memory_id, revision, ordinal
+           FROM unnest($1::text[], $2::integer[])
+                WITH ORDINALITY AS input(memory_id, revision, ordinal)
+       )
+       SELECT memory_revisions.*, requested.ordinal
+         FROM requested
+         JOIN memory_revisions
+           ON memory_revisions.memory_id = requested.memory_id
+          AND memory_revisions.revision = requested.revision
+        ORDER BY requested.ordinal`,
+      [memoryIds, revisionNumbers],
+    );
+
+    const evidenceResult = await this.pool.query<EvidenceRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT memory_id, revision, ordinal
+           FROM unnest($1::text[], $2::integer[])
+                WITH ORDINALITY AS input(memory_id, revision, ordinal)
+       )
+       SELECT requested.ordinal, memory_evidence.source_type,
+              memory_evidence.source_ref
+         FROM requested
+         JOIN memory_evidence
+           ON memory_evidence.memory_id = requested.memory_id
+          AND memory_evidence.revision = requested.revision
+        ORDER BY requested.ordinal, memory_evidence.evidence_id`,
+      [memoryIds, revisionNumbers],
+    );
+
+    const evidenceByOrdinal = new Map<number, EvidenceRef[]>();
+    for (const row of evidenceResult.rows) {
+      const ordinal = numberFromDb(row.ordinal);
+      const evidence = evidenceByOrdinal.get(ordinal) ?? [];
+      evidence.push({ sourceType: row.source_type, sourceRef: row.source_ref });
+      evidenceByOrdinal.set(ordinal, evidence);
+    }
+
+    const revisions: Array<MemoryRevision | undefined> = references.map(
+      () => undefined,
+    );
+    for (const row of revisionResult.rows) {
+      const ordinal = numberFromDb(row.ordinal);
+      revisions[ordinal - 1] = revisionFromRow(
+        row,
+        evidenceByOrdinal.get(ordinal) ?? [],
+      );
+    }
+    return revisions;
+  }
+
   async listChangesAfter(
     scope: MemoryScope,
     afterCommitSeq: number,
+    limit?: number,
   ): Promise<MemoryChangeEnvelope[]> {
+    if (
+      !Number.isSafeInteger(afterCommitSeq) ||
+      afterCommitSeq < 0 ||
+      (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
+    ) {
+      throw new ValidationError(
+        "Change feed cursor must be non-negative and limit must be a positive safe integer",
+      );
+    }
+    const limitClause = limit === undefined ? "" : " LIMIT $5";
+    const values: unknown[] = [
+      scope.tenantId,
+      scope.lifeDid,
+      scope.memoryNamespace,
+      afterCommitSeq,
+    ];
+    if (limit !== undefined) values.push(limit);
     const result = await this.pool.query<ChangeRow>(
       `SELECT * FROM memory_changes
         WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
           AND commit_seq > $4
-        ORDER BY commit_seq ASC`,
-      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, afterCommitSeq],
+        ORDER BY commit_seq ASC${limitClause}`,
+      values,
     );
     return result.rows.map(changeFromRow);
+  }
+
+  async getDeviceCheckpoint(
+    scope: MemoryScope,
+    deviceId: string,
+  ): Promise<DeviceCheckpoint | undefined> {
+    const result = await this.pool.query<DeviceCheckpointRow>(
+      `SELECT * FROM device_checkpoints
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+          AND device_id = $4`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, deviceId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : deviceCheckpointFromRow(row);
+  }
+
+  async compareAndSetDeviceCheckpoint(
+    checkpoint: DeviceCheckpoint,
+    expectedLastAppliedCommitSeq: number,
+  ): Promise<boolean> {
+    validateCheckpointCas(checkpoint, expectedLastAppliedCommitSeq);
+    const highWatermarkResult = await this.pool.query<{
+      last_commit_seq: string | number;
+    }>(
+      `SELECT last_commit_seq FROM memory_namespace_sequences
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3`,
+      [
+        checkpoint.scope.tenantId,
+        checkpoint.scope.lifeDid,
+        checkpoint.scope.memoryNamespace,
+      ],
+    );
+    const highWatermarkRow = highWatermarkResult.rows[0];
+    const highestCommitted =
+      highWatermarkRow === undefined
+        ? 0
+        : numberFromDb(highWatermarkRow.last_commit_seq);
+    if (checkpoint.lastAppliedCommitSeq > highestCommitted) {
+      throw new ValidationError(
+        "Device checkpoint cannot exceed the committed change sequence",
+      );
+    }
+    const result = await this.pool.query<{ changed: number }>(
+      `WITH updated AS (
+         UPDATE device_checkpoints
+            SET last_applied_commit_seq = $5, last_sync_at = $6
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+            AND device_id = $4 AND last_applied_commit_seq = $7
+         RETURNING 1 AS changed
+       ), inserted AS (
+         INSERT INTO device_checkpoints (
+           tenant_id, life_did, memory_namespace, device_id,
+           last_applied_commit_seq, last_sync_at
+         )
+         SELECT $1, $2, $3, $4, $5, $6
+          WHERE $7 = 0
+            AND NOT EXISTS (
+              SELECT 1 FROM device_checkpoints
+               WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+                 AND device_id = $4
+            )
+         ON CONFLICT DO NOTHING
+         RETURNING 1 AS changed
+       )
+       SELECT changed FROM updated
+       UNION ALL
+       SELECT changed FROM inserted`,
+      [
+        checkpoint.scope.tenantId,
+        checkpoint.scope.lifeDid,
+        checkpoint.scope.memoryNamespace,
+        checkpoint.deviceId,
+        checkpoint.lastAppliedCommitSeq,
+        checkpoint.lastSyncAt,
+        expectedLastAppliedCommitSeq,
+      ],
+    );
+    return result.rowCount === 1;
   }
 
   async listConflicts(scope: MemoryScope): Promise<MemoryConflict[]> {
