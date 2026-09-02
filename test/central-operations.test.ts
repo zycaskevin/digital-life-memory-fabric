@@ -360,6 +360,49 @@ test("outbox preserves per-memory revision order", async () => {
   assert.deepEqual(second.map((item) => item.record.revision), [2]);
 });
 
+test("in-memory settlement rolls back all writes when a later outcome throws", async () => {
+  const harness = createHarness();
+  await commitEpisodes(harness, 1);
+  const claimed = await harness.operations.claimOutbox({
+    scope,
+    workerId: "worker-a",
+    leaseMs: 10_000,
+  });
+  const work = claimed[0];
+  assert.ok(work);
+
+  const throwingOutcome = {
+    get providerName(): string {
+      throw new Error("simulated provider outcome failure");
+    },
+    status: "CURRENT" as const,
+  };
+  await assert.rejects(
+    harness.store.settleOutboxClaim({
+      scope,
+      outboxId: work.record.outboxId,
+      workerId: work.record.claimedBy,
+      claimToken: work.record.claimToken,
+      settledAt: harness.clock.now(),
+      outcomes: [
+        { providerName: "hindsight", status: "CURRENT" },
+        throwingOutcome,
+      ],
+    }),
+    /simulated provider outcome failure/,
+  );
+
+  assert.deepEqual(
+    (await harness.operations.getNamespaceSummary(scope)).outbox,
+    { pending: 0, processing: 1, done: 0, failed: 0 },
+  );
+  assert.deepEqual(
+    (await harness.operations.readProviderMaterializations({ scope }))
+      .materializations,
+    [],
+  );
+});
+
 test("central operations reject invalid settlement and preserve namespace isolation", async () => {
   const harness = createHarness();
   const otherScope = { ...scope, memoryNamespace: "project:omniharness" };

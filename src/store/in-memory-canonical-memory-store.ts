@@ -215,7 +215,11 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
     this.writeBarrier = previous.then(() => gate);
     await previous;
     try {
-      return clone(work(this.state));
+      const draft = clone(this.state);
+      const result = work(draft);
+      const clonedResult = clone(result);
+      this.state = draft;
+      return clonedResult;
     } finally {
       release();
     }
