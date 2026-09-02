@@ -8,11 +8,14 @@ import {
   CanonicalVerifier,
   CentralOperationsService,
   DeviceCheckpointConflictError,
+  MaterializationWorker,
   MemoryCandidateService,
   MemorySyncService,
   OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
   RevisionConflictError,
+  type MemoryFabricMaterializationEvent,
+  type MemoryMaterializationDeliveryPort,
   type MemoryScope,
 } from "../src/index.js";
 
@@ -452,6 +455,110 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     });
     assert.equal(afterSettlements.materializations.current, 1);
     assert.equal(afterSettlements.materializations.failed, 1);
+
+    const materializationScope: MemoryScope = {
+      tenantId: "tenant_pg",
+      lifeDid: "did:life:nancy",
+      memoryNamespace: "dlfm-004.acceptance",
+    };
+    const materializationCandidate = await candidates.ingest({
+      scope: materializationScope,
+      origin: { lifeDid: materializationScope.lifeDid, runtimeId: "dlfm-004-test" },
+      candidateType: "provider_materialization_acceptance",
+      sourceType: "task_result",
+      sourceId: "dlfm-004:postgres:1",
+      memoryClass: "episode",
+      memoryKind: "provider_delivery_acceptance",
+      proposedContent: { text: "PostgreSQL outbox delivers through OH-MEM-002." },
+      evidenceRefs: [
+        { sourceType: "task_result", sourceRef: "dlfm-004:postgres:1" },
+      ],
+      proposedOperation: "create",
+    });
+    const materializationCommit = await authority.commit({
+      candidateId: materializationCandidate.candidateId,
+      idempotencyKey: "dlfm-004-postgres-1",
+    });
+
+    let failDelivery = false;
+    const delivery: MemoryMaterializationDeliveryPort = {
+      async execute(event: MemoryFabricMaterializationEvent) {
+        if (failDelivery) throw new Error("OmniHarness unavailable");
+        return {
+          event_type: event.event_type,
+          event_version: event.event_version,
+          outbox_id: event.outbox_id,
+          request_id: event.request_id,
+          memory_id: event.memory_id,
+          canonical_revision: event.canonical_revision,
+          commit_seq: event.commit_seq,
+          provider_id: "memory-reference",
+          status: "SUCCESS",
+          retryable: false,
+          canonical_commit_affected: false,
+          provider_receipt: {
+            providerId: "memory-reference",
+            memoryId: event.memory_id,
+            canonicalRevision: event.canonical_revision,
+            status: "SUCCESS",
+            providerObjectId: `reference:${event.memory_id}:r${event.canonical_revision}`,
+          },
+        };
+      },
+    };
+    const materializationOperations = new CentralOperationsService(store);
+    const materializationWorker = new MaterializationWorker(
+      materializationOperations,
+      delivery,
+    );
+    const materialized = await materializationWorker.runOnce({
+      scope: materializationScope,
+      workerId: "postgres-oh-worker",
+      leaseMs: 30_000,
+      deliveryTimeoutMs: 5_000,
+      retryDelayMs: 60_000,
+    });
+    assert.equal(materialized.items[0]?.event.event_id, materializationCommit.change.eventId);
+    assert.equal(materialized.items[0]?.settlement.record.status, "DONE");
+    assert.equal(
+      materialized.items[0]?.settlement.materializations[0]?.providerId,
+      `reference:${materializationCommit.head.memoryId}:r1`,
+    );
+
+    const unavailableCandidate = await candidates.ingest({
+      scope: materializationScope,
+      origin: { lifeDid: materializationScope.lifeDid, runtimeId: "dlfm-004-test" },
+      candidateType: "provider_materialization_failure",
+      sourceType: "task_result",
+      sourceId: "dlfm-004:postgres:2",
+      memoryClass: "episode",
+      memoryKind: "provider_delivery_acceptance",
+      proposedContent: { text: "Unresolved provider failure remains operational." },
+      evidenceRefs: [
+        { sourceType: "task_result", sourceRef: "dlfm-004:postgres:2" },
+      ],
+      proposedOperation: "create",
+    });
+    await authority.commit({
+      candidateId: unavailableCandidate.candidateId,
+      idempotencyKey: "dlfm-004-postgres-2",
+    });
+    failDelivery = true;
+    const unavailable = await materializationWorker.runOnce({
+      scope: materializationScope,
+      workerId: "postgres-oh-worker",
+      leaseMs: 30_000,
+      deliveryTimeoutMs: 5_000,
+      retryDelayMs: 60_000,
+    });
+    assert.equal(unavailable.items[0]?.settlement.record.status, "FAILED");
+    assert.deepEqual(unavailable.items[0]?.settlement.materializations, []);
+    assert.deepEqual(
+      (await materializationOperations.readProviderMaterializations({
+        scope: materializationScope,
+      })).materializations.map((value) => value.providerName),
+      ["memory-reference"],
+    );
   } finally {
     await store.close();
     await adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

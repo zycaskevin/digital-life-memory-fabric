@@ -1,6 +1,7 @@
 import type {
   CanonicalMemoryHead,
   DeviceCheckpoint,
+  MemoryChangeEnvelope,
   MemoryOutboxRecord,
   MemoryScope,
   OutboxId,
@@ -26,6 +27,7 @@ export interface SettleClaimRequest {
   claimToken: string;
   settledAt: string;
   outcomes: ProviderDeliveryOutcome[];
+  lastError?: string;
   nextAttemptAt?: string;
 }
 
@@ -35,6 +37,10 @@ export interface SettledClaim {
 }
 
 export interface CentralOperationsStore extends CanonicalMemoryStore {
+  getChangesByCommitSeqs(
+    scope: MemoryScope,
+    commitSeqs: readonly number[],
+  ): Promise<Array<MemoryChangeEnvelope | undefined>>;
   listCurrentHeadsAfter(
     scope: MemoryScope,
     afterCommitSeq: number,

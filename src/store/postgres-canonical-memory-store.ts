@@ -127,6 +127,10 @@ interface ChangeRow {
   payload_hash: string;
 }
 
+interface ChangeRowWithOrdinal extends ChangeRow {
+  ordinal: string | number;
+}
+
 interface OutboxRow {
   outbox_id: string;
   tenant_id: string;
@@ -912,6 +916,41 @@ export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
     return result.rows.map(changeFromRow);
   }
 
+  async getChangesByCommitSeqs(
+    scope: MemoryScope,
+    commitSeqs: readonly number[],
+  ): Promise<Array<MemoryChangeEnvelope | undefined>> {
+    if (commitSeqs.length === 0) return [];
+    const result = await this.pool.query<ChangeRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT commit_seq, ordinal
+           FROM unnest($4::bigint[])
+                WITH ORDINALITY AS input(commit_seq, ordinal)
+       )
+       SELECT memory_changes.*, requested.ordinal
+         FROM requested
+         JOIN memory_changes
+           ON memory_changes.tenant_id = $1
+          AND memory_changes.life_did = $2
+          AND memory_changes.memory_namespace = $3
+          AND memory_changes.commit_seq = requested.commit_seq
+        ORDER BY requested.ordinal`,
+      [
+        scope.tenantId,
+        scope.lifeDid,
+        scope.memoryNamespace,
+        commitSeqs,
+      ],
+    );
+    const changes: Array<MemoryChangeEnvelope | undefined> = commitSeqs.map(
+      () => undefined,
+    );
+    for (const row of result.rows) {
+      changes[numberFromDb(row.ordinal) - 1] = changeFromRow(row);
+    }
+    return changes;
+  }
+
   async getDeviceCheckpoint(
     scope: MemoryScope,
     deviceId: string,
@@ -1352,13 +1391,14 @@ export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
       }
 
       const status: MemoryOutboxRecord["status"] =
-        failed.length === 0 ? "DONE" : "FAILED";
+        request.lastError === undefined && failed.length === 0 ? "DONE" : "FAILED";
       const lastError =
-        failed.length === 0
+        request.lastError ??
+        (failed.length === 0
           ? null
           : failed
               .map((outcome) => `${outcome.providerName}: ${outcome.lastError}`)
-              .join("; ");
+              .join("; "));
       const updated = await client.query<OutboxRow>(
         `UPDATE memory_outbox
             SET status = $8,

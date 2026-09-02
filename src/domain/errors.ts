@@ -115,3 +115,15 @@ export class OperationsIntegrityError extends MemoryFabricError {
     super("OPERATIONS_INTEGRITY_ERROR", message);
   }
 }
+
+export class MaterializationReceiptIntegrityError extends MemoryFabricError {
+  constructor(
+    public readonly outboxId: OutboxId,
+    message: string,
+  ) {
+    super(
+      "MATERIALIZATION_RECEIPT_INTEGRITY_ERROR",
+      `Outbox ${outboxId}: ${message}`,
+    );
+  }
+}

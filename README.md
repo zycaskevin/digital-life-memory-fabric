@@ -7,7 +7,7 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 ## Status
 
 - Canonical contract: v0.1 frozen at tag `v0.1.0`
-- Current milestone: **DLFM-003 — Central Operations Plane**
+- Current milestone: **DLFM-004 — Provider Materialization Worker**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -27,6 +27,7 @@ Digital Life Memory Fabric owns:
 - ordered change replay and device checkpoint acknowledgement
 - canonical verification
 - provider materialization mappings
+- versioned OmniHarness materialization events and receipt verification
 - device checkpoint schema
 
 It does **not** own provider selection or provider internals. OmniHarness owns provider registry/resolution/health/fallback/adapters. Hindsight, Vault, Mem0, pgvector, local FTS, graphs, embeddings, and reranking state are rebuildable derived/provider state.
@@ -103,6 +104,25 @@ PostgreSQL workers use `FOR UPDATE SKIP LOCKED`, and Provider network calls rema
 outside database transactions. This layer does not provide HTTP/UI, caller
 authentication, Provider selection, deployment, or real Provider delivery.
 
+## DLFM-004 provider materialization worker
+
+`MaterializationWorker` turns a fenced canonical Outbox claim into the versioned
+OmniHarness `OH-MEM-002` wire contract:
+
+```text
+memory.materialization.requested / version 1
+```
+
+The worker preserves the canonical change `event_id`, derives stable request and
+materialization idempotency keys, maps tombstones to `DELETE`, validates every
+receipt correlation field, and atomically settles Provider success or retryable
+failure. Transport failure before Provider selection schedules the Outbox retry
+without inventing a Provider materialization row.
+
+`MemoryMaterializationDeliveryPort` is provider-neutral and returns an untrusted
+receipt. OmniHarness still owns Provider registry, selection, health, and adapter
+execution. DLFM-004 does not add a production transport or Provider dependency.
+
 ## Temporal semantics
 
 The canonical model distinguishes:
@@ -153,7 +173,8 @@ DLFM_TEST_DATABASE_URL='postgres://...' npm test
 
 The test creates an isolated temporary schema, applies both migrations,
 runs the canonical create/update/conflict/tombstone flow plus device pull/checkpoint
-replay and central outbox operations, and drops the schema afterward.
+replay, central outbox operations, and provider-neutral materialization delivery,
+then drops the schema afterward.
 
 ## Core invariant
 

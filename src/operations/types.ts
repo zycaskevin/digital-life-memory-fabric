@@ -1,6 +1,7 @@
 import type {
   CanonicalMemoryHead,
   DeviceCheckpoint,
+  MemoryChangeEnvelope,
   MemoryOutboxRecord,
   MemoryRevision,
   MemoryScope,
@@ -90,6 +91,7 @@ export interface ClaimedOutboxRecord extends MemoryOutboxRecord {
 
 export interface OutboxWorkItem {
   record: ClaimedOutboxRecord;
+  change: MemoryChangeEnvelope;
   revision: MemoryRevision;
 }
 
@@ -131,6 +133,7 @@ export interface SettleOutboxInput {
   workerId: string;
   claimToken: string;
   outcomes: ProviderDeliveryOutcome[];
+  lastError?: string;
   nextAttemptAt?: string;
 }
 

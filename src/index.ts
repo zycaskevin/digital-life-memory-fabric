@@ -3,6 +3,8 @@ export * from "./candidates/memory-candidate-service.js";
 export * from "./domain/errors.js";
 export * from "./domain/types.js";
 export * from "./domain/utils.js";
+export * from "./materialization/materialization-worker.js";
+export * from "./materialization/types.js";
 export * from "./operations/central-operations-service.js";
 export * from "./operations/central-operations-store.js";
 export * from "./operations/types.js";
