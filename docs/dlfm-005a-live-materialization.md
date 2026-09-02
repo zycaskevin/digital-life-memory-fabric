@@ -80,8 +80,10 @@ X-Memory-Event-Version: 1
 X-Trace-Id: <when present>
 ```
 
-Authentication headers may be supplied by configuration. Credentials are not
-accepted inside the endpoint URL and are never included in transport errors.
+Authentication headers may be supplied by configuration only when the endpoint
+uses HTTPS. Any custom header configuration with an HTTP endpoint is rejected.
+Credentials are not accepted inside the endpoint URL and are never included in
+transport errors.
 
 ## Live gate
 
@@ -121,9 +123,9 @@ explicit canonical scope.
 
 ## Local verification record
 
-On 2026-09-03 the candidate passed:
+On 2026-09-03 Asia/Taipei the candidate passed:
 
-- all 34 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
+- all 35 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
 - live create, idempotent replay, update, tombstone, and provider inspection;
 - transport-outage proof that canonical commit survives and no fake Provider
   materialization is created;

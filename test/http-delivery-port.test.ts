@@ -51,7 +51,6 @@ test("HTTP delivery posts the exact OH-MEM-002 event and returns untrusted JSON"
   try {
     const port = new HttpMemoryMaterializationDeliveryPort({
       endpoint,
-      headers: { authorization: "Bearer local-test" },
     });
     const result = await port.execute(event);
     assert.deepEqual(received, event);
@@ -61,7 +60,6 @@ test("HTTP delivery posts the exact OH-MEM-002 event and returns untrusted JSON"
     assert.equal(observedHeaders["x-request-id"], event.request_id);
     assert.equal(observedHeaders["x-memory-event-version"], event.event_version);
     assert.equal(observedHeaders["x-trace-id"], event.trace_id);
-    assert.equal(observedHeaders.authorization, "Bearer local-test");
     assert.deepEqual(result, receipt(event));
   } finally {
     await close(server);
@@ -170,6 +168,21 @@ test("HTTP delivery validates endpoint and bounded-response configuration", () =
   assert.throws(
     () =>
       new HttpMemoryMaterializationDeliveryPort({
+        endpoint: "http://127.0.0.1/materialize",
+        headers: { authorization: "Bearer local-test" },
+      }),
+    ValidationError,
+  );
+  assert.doesNotThrow(
+    () =>
+      new HttpMemoryMaterializationDeliveryPort({
+        endpoint: "https://example.invalid/materialize",
+        headers: { authorization: "Bearer local-test" },
+      }),
+  );
+  assert.throws(
+    () =>
+      new HttpMemoryMaterializationDeliveryPort({
         endpoint: "ftp://127.0.0.1/materialize",
       }),
     ValidationError,
@@ -228,6 +241,20 @@ test("HTTP delivery enforces its deadline and preserves caller cancellation", as
       (error: unknown) =>
         error instanceof MaterializationTransportError &&
         error.message.includes("request was aborted"),
+    );
+  });
+
+  await t.test("stalled response body", async () => {
+    const port = new HttpMemoryMaterializationDeliveryPort({
+      endpoint: "http://127.0.0.1/materialize",
+      requestTimeoutMs: 10,
+      fetchImplementation: responseWithStalledBody,
+    });
+    await assert.rejects(
+      port.execute(event),
+      (error: unknown) =>
+        error instanceof MaterializationTransportError &&
+        error.message.includes("timed out after 10ms"),
     );
   });
 });
@@ -325,5 +352,23 @@ const abortableFetch: typeof fetch = async (_input, init) => {
       return;
     }
     signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+};
+
+const responseWithStalledBody: typeof fetch = async (_input, init) => {
+  const signal = init?.signal;
+  assert.ok(signal);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal.addEventListener(
+        "abort",
+        () => controller.error(signal.reason),
+        { once: true },
+      );
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json" },
   });
 };

@@ -40,6 +40,14 @@ export class HttpMemoryMaterializationDeliveryPort
   constructor(options: HttpMemoryMaterializationDeliveryPortOptions) {
     this.#endpoint = validateEndpoint(options.endpoint);
     this.#headers = Object.freeze({ ...(options.headers ?? {}) });
+    if (
+      this.#endpoint.protocol === "http:" &&
+      Object.keys(this.#headers).length > 0
+    ) {
+      throw new ValidationError(
+        "custom materialization HTTP headers require an https endpoint",
+      );
+    }
     this.#maxResponseBytes = validateResponseLimit(options.maxResponseBytes);
     this.#requestTimeoutMs = validateRequestTimeout(options.requestTimeoutMs);
     this.#fetch = options.fetchImplementation ?? globalThis.fetch;
