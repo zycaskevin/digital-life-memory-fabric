@@ -127,3 +127,12 @@ export class MaterializationReceiptIntegrityError extends MemoryFabricError {
     );
   }
 }
+
+export class MaterializationTransportError extends MemoryFabricError {
+  constructor(
+    message: string,
+    public readonly statusCode?: number,
+  ) {
+    super("MATERIALIZATION_TRANSPORT_ERROR", message);
+  }
+}

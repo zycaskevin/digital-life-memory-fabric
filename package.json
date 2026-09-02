@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "rm -rf .tmp/test && tsc -p tsconfig.test.json && node .tmp/test/test/run.js",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "e2e:omniharness-hindsight": "npm run build && node scripts/live-omniharness-hindsight-e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
