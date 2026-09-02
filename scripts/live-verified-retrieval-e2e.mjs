@@ -1,17 +1,42 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { Pool } from "pg";
+
+const execFileAsync = promisify(execFile);
 
 const databaseUrl = requiredEnvironment("DLFM_TEST_DATABASE_URL");
 const omniHarnessDir = resolve(requiredEnvironment("OMNIHARNESS_DIR"));
 const hindsightUrl = requiredEnvironment("OMNIHARNESS_HINDSIGHT_URL");
 const expectedOmniHarnessVersion =
   process.env.OMNIHARNESS_EXPECTED_VERSION ?? "0.2.0";
+const expectedOmniHarnessCommit =
+  process.env.OMNIHARNESS_EXPECTED_COMMIT ??
+  "c1ed422adabc731a75270d9f572db9eed63b34ec";
 const expectedHindsightVersion =
   process.env.OMNIHARNESS_HINDSIGHT_EXPECTED_VERSION ?? "0.9.2";
+
+const { stdout: omniHarnessHeadOutput } = await execFileAsync(
+  "git",
+  ["-C", omniHarnessDir, "rev-parse", "HEAD"],
+  { encoding: "utf8" },
+);
+const omniHarnessCommit = omniHarnessHeadOutput.trim();
+assert.equal(omniHarnessCommit, expectedOmniHarnessCommit);
+const { stdout: omniHarnessStatus } = await execFileAsync(
+  "git",
+  ["-C", omniHarnessDir, "status", "--porcelain=v1", "--untracked-files=all"],
+  { encoding: "utf8" },
+);
+assert.equal(
+  omniHarnessStatus,
+  "",
+  "OmniHarness worktree must be clean for the live contract gate",
+);
 
 const packageJson = JSON.parse(
   await readFile(resolve(omniHarnessDir, "package.json"), "utf8"),
@@ -25,17 +50,21 @@ const omniHarness = await import(
 
 const schema = `dlfm_retrieval_${randomUUID().replaceAll("-", "")}`;
 const adminPool = new Pool({ connectionString: databaseUrl });
-await adminPool.query(`CREATE SCHEMA "${schema}"`);
-const pool = new Pool({
-  connectionString: databaseUrl,
-  options: `-c search_path=${schema}`,
-});
-const store = new dlfm.PostgresCanonicalMemoryStore(pool);
+let schemaCreated = false;
+let store;
 let provider;
 let scope;
 const providerMemoryIds = [];
 
 try {
+  await adminPool.query(`CREATE SCHEMA "${schema}"`);
+  schemaCreated = true;
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    options: `-c search_path=${schema}`,
+  });
+  store = new dlfm.PostgresCanonicalMemoryStore(pool);
+
   for (const migration of [
     "migrations/0001_canonical_core.sql",
     "migrations/0002_central_operations.sql",
@@ -171,7 +200,7 @@ try {
         contracts: {
           memoryFabricBase: "origin/main@6896c9e",
           omniHarnessVersion: packageJson.version,
-          omniHarnessCommit: "c1ed422adabc731a75270d9f572db9eed63b34ec",
+          omniHarnessCommit,
           hindsightVersion: capabilities.version,
         },
         path: [
@@ -199,18 +228,26 @@ try {
     ),
   );
 } finally {
-  if (provider !== undefined && scope !== undefined) {
-    for (const memoryId of providerMemoryIds) {
-      try {
-        await provider.deleteMaterialization({ memoryId, scope });
-      } catch {
-        // Cleanup is best effort; the bank ID is unique to this disposable run.
+  try {
+    if (provider !== undefined && scope !== undefined) {
+      for (const memoryId of providerMemoryIds) {
+        try {
+          await provider.deleteMaterialization({ memoryId, scope });
+        } catch {
+          // Cleanup is best effort; the bank ID is unique to this disposable run.
+        }
       }
     }
+    if (store !== undefined) await store.close();
+  } finally {
+    try {
+      if (schemaCreated) {
+        await adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      }
+    } finally {
+      await adminPool.end();
+    }
   }
-  await store.close();
-  await adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
-  await adminPool.end();
 }
 
 async function commitCandidate(candidates, authority, input) {

@@ -33,8 +33,8 @@ if [[ "$ACTUAL_OMNIHARNESS_COMMIT" != "$EXPECTED_OMNIHARNESS_COMMIT" ]]; then
   echo "OmniHarness commit mismatch: expected ${EXPECTED_OMNIHARNESS_COMMIT}, got ${ACTUAL_OMNIHARNESS_COMMIT}" >&2
   exit 1
 fi
-if [[ -n "$(git -C "$OMNIHARNESS_DIR" status --porcelain --untracked-files=no)" ]]; then
-  echo "OmniHarness tracked worktree must be clean for the live contract gate." >&2
+if [[ -n "$(git -C "$OMNIHARNESS_DIR" status --porcelain=v1 --untracked-files=all)" ]]; then
+  echo "OmniHarness worktree must be clean for the live contract gate." >&2
   exit 1
 fi
 

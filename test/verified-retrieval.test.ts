@@ -10,6 +10,7 @@ import {
   sha256,
   type CanonicalMemoryHead,
   type Clock,
+  type MemoryClass,
   type MemoryFreshnessRequirement,
   type MemoryId,
   type MemoryRetrievalPort,
@@ -331,6 +332,63 @@ test("retrieval input and transport timeout are bounded", async () => {
       return true;
     },
   );
+});
+
+test("retrieval snapshots validated caller-owned filters and freshness", async () => {
+  const store = new InMemoryCanonicalMemoryStore();
+  let releaseSearch: (() => void) | undefined;
+  const searchStarted = new Promise<void>((resolve) => {
+    releaseSearch = resolve;
+  });
+  let observedRequest: MemorySearchRequest | undefined;
+  let observedOptions: MemoryRetrievalPortOptions | undefined;
+  const port: MemoryRetrievalPort = {
+    async search(request, options) {
+      await searchStarted;
+      observedRequest = request;
+      observedOptions = options;
+      return { providerId: "hindsight-local", candidates: [] };
+    },
+  };
+  const filters: {
+    memoryClass: MemoryClass[];
+    metadata: Record<string, string | number | boolean>;
+  } = {
+    memoryClass: ["semantic_assertion"],
+    metadata: { source: "before" },
+  };
+  const freshness: {
+    requiredCommitSeq: number;
+    maxCommitLag: number;
+    allowRebuilding: boolean;
+  } = {
+    requiredCommitSeq: 42,
+    maxCommitLag: 0,
+    allowRebuilding: false,
+  };
+
+  const pending = service(store, port).retrieve({
+    query: "snapshot",
+    scope,
+    filters,
+    freshness,
+  });
+  filters.memoryClass[0] = "preference";
+  filters.metadata.source = "after";
+  freshness.requiredCommitSeq = 99;
+  freshness.allowRebuilding = true;
+  releaseSearch?.();
+  await pending;
+
+  assert.deepEqual(observedRequest?.filters, {
+    memoryClass: ["semantic_assertion"],
+    metadata: { source: "before" },
+  });
+  assert.deepEqual(observedOptions?.freshness, {
+    requiredCommitSeq: 42,
+    maxCommitLag: 0,
+    allowRebuilding: false,
+  });
 });
 
 test("canonical head movement during hydration suppresses the candidate", async () => {

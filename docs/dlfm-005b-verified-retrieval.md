@@ -141,7 +141,7 @@ It does not prove:
 On 2026-09-03 Asia/Taipei the candidate passed:
 
 - typecheck and production build;
-- all 40 deterministic and PostgreSQL tests with zero skips;
+- all 41 deterministic and PostgreSQL tests with zero skips;
 - live PostgreSQL + OmniHarness v0.2.0 + Hindsight 0.9.2 retrieval;
 - current canonical hydration, stale revision suppression, and tombstone
   suppression while all three records remained provider-search-visible.

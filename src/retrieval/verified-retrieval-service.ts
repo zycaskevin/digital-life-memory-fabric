@@ -58,6 +58,7 @@ export class VerifiedRetrievalService {
 
   async retrieve(input: VerifiedRetrievalInput): Promise<VerifiedRetrievalResult> {
     const request = validateInput(input);
+    const freshness = validateFreshness(input.freshness);
     const effectiveAt = input.effectiveAt ?? this.clock.now();
     validateTimestamp(effectiveAt, "effectiveAt");
     const timeoutMs = input.timeoutMs ?? DEFAULT_VERIFIED_RETRIEVAL_TIMEOUT_MS;
@@ -74,7 +75,7 @@ export class VerifiedRetrievalService {
     const raw = await searchWithTimeout(
       this.retrieval,
       request,
-      input.freshness,
+      freshness,
       timeoutMs,
     );
     const providerResult = validateProviderResult(raw, request.topK);
@@ -165,13 +166,12 @@ function validateInput(input: VerifiedRetrievalInput): MemorySearchRequest {
       `topK must be a safe integer between 0 and ${MAX_VERIFIED_RETRIEVAL_TOP_K}`,
     );
   }
-  validateFilters(input.filters);
-  validateFreshness(input.freshness);
+  const filters = validateFilters(input.filters);
   return {
     query,
     scope: { ...input.scope },
     topK,
-    ...(input.filters === undefined ? {} : { filters: input.filters }),
+    ...(filters === undefined ? {} : { filters }),
   };
 }
 
@@ -187,8 +187,11 @@ function validateScope(scope: MemoryScope): void {
   }
 }
 
-function validateFilters(filters: MemorySearchFilters | undefined): void {
-  if (filters !== undefined && !isPlainObject(filters)) {
+function validateFilters(
+  filters: MemorySearchFilters | undefined,
+): MemorySearchFilters | undefined {
+  if (filters === undefined) return undefined;
+  if (!isPlainObject(filters)) {
     throw new ValidationError("filters must be an object when present");
   }
   if (filters?.memoryClass !== undefined) {
@@ -231,12 +234,25 @@ function validateFilters(filters: MemorySearchFilters | undefined): void {
       }
     }
   }
+  return {
+    ...(filters.memoryClass === undefined
+      ? {}
+      : { memoryClass: [...filters.memoryClass] as MemoryClass[] }),
+    ...(filters.metadata === undefined
+      ? {}
+      : {
+          metadata: { ...filters.metadata } as Record<
+            string,
+            string | number | boolean
+          >,
+        }),
+  };
 }
 
 function validateFreshness(
   freshness: MemoryFreshnessRequirement | undefined,
-): void {
-  if (freshness === undefined) return;
+): MemoryFreshnessRequirement | undefined {
+  if (freshness === undefined) return undefined;
   if (!isPlainObject(freshness)) {
     throw new ValidationError("freshness must be an object when present");
   }
@@ -264,6 +280,7 @@ function validateFreshness(
       "freshness.maxCommitLag must be a non-negative safe integer",
     );
   }
+  return { ...freshness };
 }
 
 function validateTimestamp(value: string, field: string): void {
