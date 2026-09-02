@@ -283,6 +283,21 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
     return clone(limit === undefined ? changes : changes.slice(0, limit));
   }
 
+  async getChangesByCommitSeqs(
+    scope: MemoryScope,
+    commitSeqs: readonly number[],
+  ): Promise<Array<MemoryChangeEnvelope | undefined>> {
+    await this.afterWrites();
+    return commitSeqs.map((commitSeq) => {
+      const value = this.state.changes.find(
+        (change) =>
+          scopeKey(change.scope) === scopeKey(scope) &&
+          change.commitSeq === commitSeq,
+      );
+      return value === undefined ? undefined : clone(value);
+    });
+  }
+
   async getDeviceCheckpoint(
     scope: MemoryScope,
     deviceId: string,
@@ -571,18 +586,23 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
         materializations.push(materialization);
       }
 
-      record.status = failed.length === 0 ? "DONE" : "FAILED";
+      record.status =
+        request.lastError === undefined && failed.length === 0
+          ? "DONE"
+          : "FAILED";
       record.updatedAt = request.settledAt;
       delete record.claimedBy;
       delete record.claimToken;
       delete record.leaseExpiresAt;
-      if (failed.length === 0) {
+      if (request.lastError === undefined && failed.length === 0) {
         delete record.lastError;
         delete record.nextAttemptAt;
       } else {
-        record.lastError = failed
-          .map((outcome) => `${outcome.providerName}: ${outcome.lastError}`)
-          .join("; ");
+        record.lastError =
+          request.lastError ??
+          failed
+            .map((outcome) => `${outcome.providerName}: ${outcome.lastError}`)
+            .join("; ");
         if (request.nextAttemptAt !== undefined) {
           record.nextAttemptAt = request.nextAttemptAt;
         }

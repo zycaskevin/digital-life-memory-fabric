@@ -223,14 +223,21 @@ export class CentralOperationsService {
       leaseExpiresAt,
       limit,
     );
-    const revisions = await this.store.getRevisions(
-      records.map((record) => ({
-        memoryId: record.memoryId,
-        revision: record.revision,
-      })),
-    );
+    const [revisions, changes] = await Promise.all([
+      this.store.getRevisions(
+        records.map((record) => ({
+          memoryId: record.memoryId,
+          revision: record.revision,
+        })),
+      ),
+      this.store.getChangesByCommitSeqs(
+        input.scope,
+        records.map((record) => record.commitSeq),
+      ),
+    ]);
     return records.map((record, index) => {
       const revision = revisions[index];
+      const change = changes[index];
       if (
         revision === undefined ||
         revision.revision !== record.revision ||
@@ -241,7 +248,19 @@ export class CentralOperationsService {
           `Claimed outbox ${record.outboxId} does not resolve to its canonical revision`,
         );
       }
-      return { record, revision };
+      if (
+        change === undefined ||
+        change.commitSeq !== record.commitSeq ||
+        change.memoryId !== record.memoryId ||
+        change.newRevision !== record.revision ||
+        change.operation !== record.operation ||
+        !sameScope(change.scope, input.scope)
+      ) {
+        throw new OperationsIntegrityError(
+          `Claimed outbox ${record.outboxId} does not resolve to its canonical change`,
+        );
+      }
+      return { record, change, revision };
     });
   }
 
@@ -249,10 +268,21 @@ export class CentralOperationsService {
     validateScope(input.scope);
     requireNonEmpty(input.workerId, "workerId");
     requireNonEmpty(input.claimToken, "claimToken");
-    validateOutcomes(input.outcomes);
+    if (input.outcomes.length === 0) {
+      requireNonEmpty(input.lastError ?? "", "lastError");
+    } else {
+      validateOutcomes(input.outcomes);
+      if (input.lastError !== undefined) {
+        throw new ValidationError(
+          "lastError is reserved for delivery failures without a resolved provider",
+        );
+      }
+    }
     const settledAt = this.clock.now();
     const settledAtMs = requireTimestamp(settledAt, "clock.now()");
-    const hasFailure = input.outcomes.some((outcome) => outcome.status !== "CURRENT");
+    const hasFailure =
+      input.outcomes.length === 0 ||
+      input.outcomes.some((outcome) => outcome.status !== "CURRENT");
     if (hasFailure) {
       if (input.nextAttemptAt === undefined) {
         throw new ValidationError("nextAttemptAt is required for a failed settlement");
@@ -272,6 +302,7 @@ export class CentralOperationsService {
       claimToken: input.claimToken,
       settledAt,
       outcomes: input.outcomes,
+      ...(input.lastError === undefined ? {} : { lastError: input.lastError }),
       ...(input.nextAttemptAt === undefined
         ? {}
         : { nextAttemptAt: input.nextAttemptAt }),
