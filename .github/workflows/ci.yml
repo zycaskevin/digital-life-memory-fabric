@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - dlfm-002-change-sync
   workflow_dispatch:
 
 permissions:

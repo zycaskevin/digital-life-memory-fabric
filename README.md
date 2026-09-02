@@ -7,7 +7,7 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 ## Status
 
 - Canonical contract: v0.1 frozen at tag `v0.1.0`
-- Current milestone: **DLFM-002 — Change & Device Sync**
+- Current milestone: **DLFM-003 — Central Operations Plane**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -87,6 +87,22 @@ Checkpoint writes use compare-and-set semantics. A stale device cannot overwrite
 newer checkpoint, checkpoints cannot move backward, and an acknowledgement cannot
 jump across a missing canonical change.
 
+## DLFM-003 central operations
+
+`CentralOperationsService` adds the bounded backend needed to operate one canonical
+namespace:
+
+- current-memory inventory with immutable revision hydration
+- device checkpoint inventory with high-watermark lag
+- provider materialization inventory
+- memory/outbox/device/materialization summary counts
+- concurrent outbox worker claims with lease expiry and fencing tokens
+- atomic successful or failed outbox settlement plus materialization status
+
+PostgreSQL workers use `FOR UPDATE SKIP LOCKED`, and Provider network calls remain
+outside database transactions. This layer does not provide HTTP/UI, caller
+authentication, Provider selection, deployment, or real Provider delivery.
+
 ## Temporal semantics
 
 The canonical model distinguishes:
@@ -105,6 +121,7 @@ Migration:
 
 ```text
 migrations/0001_canonical_core.sql
+migrations/0002_central_operations.sql
 ```
 
 The PostgreSQL adapter uses:
@@ -114,6 +131,8 @@ The PostgreSQL adapter uses:
 - transaction advisory locks for idempotency keys
 - immutable revision inserts
 - atomic change/outbox writes in the same transaction
+- partial indexes plus `SKIP LOCKED` for bounded outbox claims
+- claim-token fencing and atomic materialization settlement
 
 ## Development
 
@@ -132,9 +151,9 @@ The integration test is opt-in so callers can supply an isolated PostgreSQL data
 DLFM_TEST_DATABASE_URL='postgres://...' npm test
 ```
 
-The test creates an isolated temporary schema, applies `0001_canonical_core.sql`,
+The test creates an isolated temporary schema, applies both migrations,
 runs the canonical create/update/conflict/tombstone flow plus device pull/checkpoint
-replay, and drops the schema afterward.
+replay and central outbox operations, and drops the schema afterward.
 
 ## Core invariant
 

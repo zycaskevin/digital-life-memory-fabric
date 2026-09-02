@@ -6,9 +6,11 @@ import { Pool } from "pg";
 import {
   CanonicalMemoryAuthority,
   CanonicalVerifier,
+  CentralOperationsService,
   DeviceCheckpointConflictError,
   MemoryCandidateService,
   MemorySyncService,
+  OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
   RevisionConflictError,
   type MemoryScope,
@@ -30,8 +32,16 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
   const store = new PostgresCanonicalMemoryStore(pool);
 
   try {
-    const migration = await readFile("migrations/0001_canonical_core.sql", "utf8");
-    await pool.query(migration);
+    const canonicalMigration = await readFile(
+      "migrations/0001_canonical_core.sql",
+      "utf8",
+    );
+    const operationsMigration = await readFile(
+      "migrations/0002_central_operations.sql",
+      "utf8",
+    );
+    await pool.query(canonicalMigration);
+    await pool.query(operationsMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -271,6 +281,177 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       ),
       /cannot move backward/,
     );
+
+    for (let index = 1; index <= 2; index += 1) {
+      const operationsCandidate = await candidates.ingest({
+        scope,
+        origin: { lifeDid: scope.lifeDid, runtimeId: "operations-test" },
+        candidateType: "operations_episode",
+        sourceType: "task_result",
+        sourceId: `operations:pg:${index}`,
+        memoryClass: "episode",
+        memoryKind: "operations_acceptance",
+        proposedContent: { text: `PostgreSQL operations event ${index}.` },
+        evidenceRefs: [
+          { sourceType: "task_result", sourceRef: `operations:pg:${index}` },
+        ],
+        proposedOperation: "create",
+      });
+      await authority.commit({
+        candidateId: operationsCandidate.candidateId,
+        idempotencyKey: `operations-pg-${index}`,
+      });
+    }
+
+    const operations = new CentralOperationsService(store);
+    const inventory = await operations.readMemoryInventory({
+      scope,
+      afterCommitSeq: 0,
+    });
+    assert.equal(inventory.entries.length, 3);
+    assert.deepEqual(
+      inventory.entries.map((entry) => entry.revision.commitSeq),
+      [3, 4, 5],
+    );
+    assert.equal(inventory.entries[0]?.head.status, "tombstoned");
+
+    const fleet = await operations.readDeviceFleet({ scope });
+    assert.deepEqual(
+      fleet.devices.map((device) => [device.checkpoint.deviceId, device.lag]),
+      [
+        ["openclaw-laptop", 4],
+        ["prime-mac", 2],
+      ],
+    );
+
+    const beforeClaims = await operations.getNamespaceSummary(scope);
+    assert.deepEqual(beforeClaims.outbox, {
+      pending: 5,
+      processing: 0,
+      done: 0,
+      failed: 0,
+    });
+
+    const [workerA, workerB] = await Promise.all([
+      operations.claimOutbox({
+        scope,
+        workerId: "postgres-worker-a",
+        leaseMs: 30_000,
+        limit: 2,
+      }),
+      operations.claimOutbox({
+        scope,
+        workerId: "postgres-worker-b",
+        leaseMs: 30_000,
+        limit: 2,
+      }),
+    ]);
+    const claimed = [...workerA, ...workerB];
+    assert.equal(claimed.length, 3);
+    assert.equal(new Set(claimed.map((item) => item.record.outboxId)).size, 3);
+
+    const expiring = claimed.find(
+      (item) => item.record.memoryId === tombstoned.head.memoryId,
+    );
+    const independent = claimed.filter(
+      (item) => item.record.memoryId !== tombstoned.head.memoryId,
+    );
+    const successful = independent[0];
+    assert.ok(successful);
+    await assert.rejects(
+      operations.settleOutbox({
+        scope,
+        outboxId: successful.record.outboxId,
+        workerId: successful.record.claimedBy,
+        claimToken: "stale-token",
+        outcomes: [{ providerName: "hindsight", status: "CURRENT" }],
+      }),
+      OutboxClaimConflictError,
+    );
+    const successSettlement = await operations.settleOutbox({
+      scope,
+      outboxId: successful.record.outboxId,
+      workerId: successful.record.claimedBy,
+      claimToken: successful.record.claimToken,
+      outcomes: [
+        {
+          providerName: "hindsight",
+          providerId: "hindsight:memory:1",
+          status: "CURRENT",
+        },
+      ],
+    });
+    assert.equal(successSettlement.record.status, "DONE");
+
+    const failed = independent[1];
+    assert.ok(failed);
+    const nextAttemptAt = new Date(Date.now() + 60_000).toISOString();
+    const failedSettlement = await operations.settleOutbox({
+      scope,
+      outboxId: failed.record.outboxId,
+      workerId: failed.record.claimedBy,
+      claimToken: failed.record.claimToken,
+      outcomes: [
+        {
+          providerName: "vault",
+          status: "FAILED",
+          lastError: "provider timeout",
+        },
+      ],
+      nextAttemptAt,
+    });
+    assert.equal(failedSettlement.record.status, "FAILED");
+    assert.equal(failedSettlement.record.nextAttemptAt, nextAttemptAt);
+
+    assert.ok(expiring);
+    await pool.query(
+      `UPDATE memory_outbox
+          SET lease_expires_at = NOW() - INTERVAL '1 second'
+        WHERE outbox_id = $1`,
+      [expiring.record.outboxId],
+    );
+    const reclaimed = await operations.claimOutbox({
+      scope,
+      workerId: "postgres-worker-c",
+      leaseMs: 30_000,
+    });
+    assert.equal(reclaimed.length, 1);
+    assert.equal(reclaimed[0]?.record.outboxId, expiring.record.outboxId);
+    assert.equal(reclaimed[0]?.record.attempts, 2);
+    await assert.rejects(
+      operations.settleOutbox({
+        scope,
+        outboxId: expiring.record.outboxId,
+        workerId: expiring.record.claimedBy,
+        claimToken: expiring.record.claimToken,
+        outcomes: [{ providerName: "mem0", status: "CURRENT" }],
+      }),
+      OutboxClaimConflictError,
+    );
+
+    const materializations = await operations.readProviderMaterializations({
+      scope,
+    });
+    assert.deepEqual(
+      materializations.materializations.map((item) => [
+        item.providerName,
+        item.status,
+      ]),
+      [
+        ["hindsight", "CURRENT"],
+        ["vault", "FAILED"],
+      ],
+    );
+
+    const afterSettlements = await operations.getNamespaceSummary(scope);
+    assert.deepEqual(afterSettlements.outbox, {
+      pending: 2,
+      processing: 1,
+      done: 1,
+      failed: 1,
+    });
+    assert.equal(afterSettlements.materializations.current, 1);
+    assert.equal(afterSettlements.materializations.failed, 1);
   } finally {
     await store.close();
     await adminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

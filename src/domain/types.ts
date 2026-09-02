@@ -137,6 +137,12 @@ export interface MemoryOutboxRecord {
   status: "PENDING" | "PROCESSING" | "DONE" | "FAILED";
   attempts: number;
   createdAt: string;
+  claimedBy?: string;
+  claimToken?: string;
+  leaseExpiresAt?: string;
+  nextAttemptAt?: string;
+  lastError?: string;
+  updatedAt?: string;
 }
 
 export interface ProviderMaterialization {

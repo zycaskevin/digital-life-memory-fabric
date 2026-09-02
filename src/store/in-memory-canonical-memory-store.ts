@@ -13,10 +13,21 @@ import type {
   MemoryRevision,
   MemoryRevisionRef,
   MemoryScope,
+  ProviderMaterialization,
 } from "../domain/types.js";
 import { scopeKey } from "../domain/utils.js";
 import type {
-  CanonicalMemoryStore,
+  CentralOperationsStore,
+  CurrentHeadCursorRecord,
+  SettleClaimRequest,
+  SettledClaim,
+} from "../operations/central-operations-store.js";
+import type {
+  ClaimedOutboxRecord,
+  NamespaceOperationsSummary,
+  ProviderMaterializationCursor,
+} from "../operations/types.js";
+import type {
   CanonicalMemoryStoreTx,
 } from "./canonical-memory-store.js";
 
@@ -29,6 +40,7 @@ interface InMemoryState {
   outbox: MemoryOutboxRecord[];
   conflicts: MemoryConflict[];
   deviceCheckpoints: Map<string, DeviceCheckpoint>;
+  providerMaterializations: Map<string, ProviderMaterialization>;
   idempotency: Map<string, CanonicalCommitResult>;
 }
 
@@ -42,6 +54,7 @@ function emptyState(): InMemoryState {
     outbox: [],
     conflicts: [],
     deviceCheckpoints: new Map(),
+    providerMaterializations: new Map(),
     idempotency: new Map(),
   };
 }
@@ -56,6 +69,10 @@ function scopedIdempotencyKey(scope: MemoryScope, key: string): string {
 
 function deviceCheckpointKey(scope: MemoryScope, deviceId: string): string {
   return `${scopeKey(scope)}\u001f${deviceId}`;
+}
+
+function providerMaterializationKey(providerName: string, memoryId: MemoryId): string {
+  return `${providerName}\u001f${memoryId}`;
 }
 
 function validateCheckpointCas(
@@ -162,7 +179,7 @@ class InMemoryTx implements CanonicalMemoryStoreTx {
   }
 }
 
-export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
+export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
   private state: InMemoryState = emptyState();
   private writeBarrier: Promise<void> = Promise.resolve();
 
@@ -187,6 +204,25 @@ export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
 
   private async afterWrites(): Promise<void> {
     await this.writeBarrier;
+  }
+
+  private async withExclusiveWrite<T>(work: (state: InMemoryState) => T): Promise<T> {
+    const previous = this.writeBarrier;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.writeBarrier = previous.then(() => gate);
+    await previous;
+    try {
+      const draft = clone(this.state);
+      const result = work(draft);
+      const clonedResult = clone(result);
+      this.state = draft;
+      return clonedResult;
+    } finally {
+      release();
+    }
   }
 
   async getCandidate(candidateId: CandidateId): Promise<MemoryCandidate | undefined> {
@@ -297,5 +333,261 @@ export class InMemoryCanonicalMemoryStore implements CanonicalMemoryStore {
         (conflict) => scopeKey(conflict.scope) === scopeKey(scope),
       ),
     );
+  }
+
+  async listCurrentHeadsAfter(
+    scope: MemoryScope,
+    afterCommitSeq: number,
+    limit: number,
+  ): Promise<CurrentHeadCursorRecord[]> {
+    await this.afterWrites();
+    const records: CurrentHeadCursorRecord[] = [];
+    for (const head of this.state.heads.values()) {
+      if (scopeKey(head.scope) !== scopeKey(scope)) continue;
+      const revision = this.state.revisions.get(
+        revisionKey(head.memoryId, head.currentRevision),
+      );
+      if (revision === undefined || revision.commitSeq <= afterCommitSeq) continue;
+      records.push({ head: clone(head), commitSeq: revision.commitSeq });
+    }
+    records.sort(
+      (left, right) =>
+        left.commitSeq - right.commitSeq ||
+        left.head.memoryId.localeCompare(right.head.memoryId),
+    );
+    return clone(records.slice(0, limit));
+  }
+
+  async getScopeHighWatermark(scope: MemoryScope): Promise<number> {
+    await this.afterWrites();
+    return this.state.commitSeqByScope.get(scopeKey(scope)) ?? 0;
+  }
+
+  async listDeviceCheckpointsAfter(
+    scope: MemoryScope,
+    afterDeviceId: string | undefined,
+    limit: number,
+  ): Promise<DeviceCheckpoint[]> {
+    await this.afterWrites();
+    return clone(
+      [...this.state.deviceCheckpoints.values()]
+        .filter(
+          (checkpoint) =>
+            scopeKey(checkpoint.scope) === scopeKey(scope) &&
+            (afterDeviceId === undefined || checkpoint.deviceId > afterDeviceId),
+        )
+        .sort((left, right) => left.deviceId.localeCompare(right.deviceId))
+        .slice(0, limit),
+    );
+  }
+
+  async listProviderMaterializationsAfter(
+    scope: MemoryScope,
+    after: ProviderMaterializationCursor | undefined,
+    limit: number,
+  ): Promise<ProviderMaterialization[]> {
+    await this.afterWrites();
+    return clone(
+      [...this.state.providerMaterializations.values()]
+        .filter((materialization) => {
+          const head = this.state.heads.get(materialization.memoryId);
+          if (head === undefined || scopeKey(head.scope) !== scopeKey(scope)) {
+            return false;
+          }
+          return (
+            after === undefined ||
+            materialization.providerName > after.providerName ||
+            (materialization.providerName === after.providerName &&
+              materialization.memoryId > after.memoryId)
+          );
+        })
+        .sort(
+          (left, right) =>
+            left.providerName.localeCompare(right.providerName) ||
+            left.memoryId.localeCompare(right.memoryId),
+        )
+        .slice(0, limit),
+    );
+  }
+
+  async getNamespaceOperationsSummary(
+    scope: MemoryScope,
+  ): Promise<NamespaceOperationsSummary> {
+    await this.afterWrites();
+    const key = scopeKey(scope);
+    const highWatermark = this.state.commitSeqByScope.get(key) ?? 0;
+    const heads = [...this.state.heads.values()].filter(
+      (head) => scopeKey(head.scope) === key,
+    );
+    const outbox = this.state.outbox.filter(
+      (record) => scopeKey(record.scope) === key,
+    );
+    const devices = [...this.state.deviceCheckpoints.values()].filter(
+      (checkpoint) => scopeKey(checkpoint.scope) === key,
+    );
+    const memoryIds = new Set(heads.map((head) => head.memoryId));
+    const materializations = [...this.state.providerMaterializations.values()].filter(
+      (materialization) => memoryIds.has(materialization.memoryId),
+    );
+    return {
+      scope: clone(scope),
+      highWatermark,
+      memories: {
+        total: heads.length,
+        active: heads.filter((head) => head.status === "active").length,
+        tombstoned: heads.filter((head) => head.status === "tombstoned").length,
+        superseded: heads.filter((head) => head.status === "superseded").length,
+      },
+      outbox: {
+        pending: outbox.filter((record) => record.status === "PENDING").length,
+        processing: outbox.filter((record) => record.status === "PROCESSING").length,
+        done: outbox.filter((record) => record.status === "DONE").length,
+        failed: outbox.filter((record) => record.status === "FAILED").length,
+      },
+      devices: {
+        total: devices.length,
+        maxLag: devices.reduce(
+          (maximum, checkpoint) =>
+            Math.max(maximum, highWatermark - checkpoint.lastAppliedCommitSeq),
+          0,
+        ),
+      },
+      materializations: {
+        current: materializations.filter((value) => value.status === "CURRENT").length,
+        lagging: materializations.filter((value) => value.status === "LAGGING").length,
+        failed: materializations.filter((value) => value.status === "FAILED").length,
+        unavailable: materializations.filter(
+          (value) => value.status === "UNAVAILABLE",
+        ).length,
+        rebuilding: materializations.filter(
+          (value) => value.status === "REBUILDING",
+        ).length,
+      },
+    };
+  }
+
+  async claimOutboxBatch(
+    scope: MemoryScope,
+    workerId: string,
+    claimToken: string,
+    claimedAt: string,
+    leaseExpiresAt: string,
+    limit: number,
+  ): Promise<ClaimedOutboxRecord[]> {
+    return this.withExclusiveWrite((state) => {
+      const now = Date.parse(claimedAt);
+      const claimable = state.outbox
+        .filter((record) => {
+          if (scopeKey(record.scope) !== scopeKey(scope)) return false;
+          const earlierUnfinished = state.outbox.some(
+            (earlier) =>
+              earlier.memoryId === record.memoryId &&
+              earlier.revision < record.revision &&
+              earlier.status !== "DONE",
+          );
+          if (earlierUnfinished) return false;
+          if (record.status === "PENDING") return true;
+          if (record.status === "FAILED") {
+            return record.nextAttemptAt === undefined || Date.parse(record.nextAttemptAt) <= now;
+          }
+          return (
+            record.status === "PROCESSING" &&
+            record.leaseExpiresAt !== undefined &&
+            Date.parse(record.leaseExpiresAt) <= now
+          );
+        })
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.outboxId.localeCompare(right.outboxId),
+        )
+        .slice(0, limit);
+
+      for (const record of claimable) {
+        record.status = "PROCESSING";
+        record.attempts += 1;
+        record.claimedBy = workerId;
+        record.claimToken = claimToken;
+        record.leaseExpiresAt = leaseExpiresAt;
+        record.updatedAt = claimedAt;
+        delete record.nextAttemptAt;
+        delete record.lastError;
+      }
+      return claimable as ClaimedOutboxRecord[];
+    });
+  }
+
+  async settleOutboxClaim(
+    request: SettleClaimRequest,
+  ): Promise<SettledClaim | undefined> {
+    return this.withExclusiveWrite((state) => {
+      const record = state.outbox.find(
+        (candidate) =>
+          candidate.outboxId === request.outboxId &&
+          scopeKey(candidate.scope) === scopeKey(request.scope),
+      );
+      if (
+        record === undefined ||
+        record.status !== "PROCESSING" ||
+        record.claimedBy !== request.workerId ||
+        record.claimToken !== request.claimToken ||
+        record.leaseExpiresAt === undefined ||
+        Date.parse(record.leaseExpiresAt) <= Date.parse(request.settledAt)
+      ) {
+        return undefined;
+      }
+
+      const failed = request.outcomes.filter((outcome) => outcome.status !== "CURRENT");
+      const materializations: ProviderMaterialization[] = [];
+      for (const outcome of request.outcomes) {
+        const key = providerMaterializationKey(outcome.providerName, record.memoryId);
+        const previous = state.providerMaterializations.get(key);
+        if (
+          previous !== undefined &&
+          previous.canonicalRevision > record.revision
+        ) {
+          throw new ValidationError(
+            `Provider materialization ${outcome.providerName}/${record.memoryId} cannot move backward`,
+          );
+        }
+        const materialization: ProviderMaterialization = {
+          providerName: outcome.providerName,
+          memoryId: record.memoryId,
+          canonicalRevision: record.revision,
+          materializedRevision:
+            outcome.status === "CURRENT"
+              ? record.revision
+              : previous?.materializedRevision ?? 0,
+          status: outcome.status,
+          lastAttempt: request.settledAt,
+          ...(outcome.providerId === undefined
+            ? previous?.providerId === undefined
+              ? {}
+              : { providerId: previous.providerId }
+            : { providerId: outcome.providerId }),
+          ...(outcome.lastError === undefined ? {} : { lastError: outcome.lastError }),
+        };
+        state.providerMaterializations.set(key, materialization);
+        materializations.push(materialization);
+      }
+
+      record.status = failed.length === 0 ? "DONE" : "FAILED";
+      record.updatedAt = request.settledAt;
+      delete record.claimedBy;
+      delete record.claimToken;
+      delete record.leaseExpiresAt;
+      if (failed.length === 0) {
+        delete record.lastError;
+        delete record.nextAttemptAt;
+      } else {
+        record.lastError = failed
+          .map((outcome) => `${outcome.providerName}: ${outcome.lastError}`)
+          .join("; ");
+        if (request.nextAttemptAt !== undefined) {
+          record.nextAttemptAt = request.nextAttemptAt;
+        }
+      }
+      return { record, materializations };
+    });
   }
 }
