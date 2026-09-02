@@ -237,6 +237,16 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
     return value === undefined ? undefined : clone(value);
   }
 
+  async getHeads(
+    memoryIds: readonly MemoryId[],
+  ): Promise<Array<CanonicalMemoryHead | undefined>> {
+    await this.afterWrites();
+    return memoryIds.map((memoryId) => {
+      const value = this.state.heads.get(memoryId);
+      return value === undefined ? undefined : clone(value);
+    });
+  }
+
   async getRevision(
     memoryId: MemoryId,
     revision: number,

@@ -136,3 +136,18 @@ export class MaterializationTransportError extends MemoryFabricError {
     super("MATERIALIZATION_TRANSPORT_ERROR", message);
   }
 }
+
+export class RetrievalResponseIntegrityError extends MemoryFabricError {
+  constructor(message: string) {
+    super(
+      "RETRIEVAL_RESPONSE_INTEGRITY_ERROR",
+      `Provider retrieval response: ${message}`,
+    );
+  }
+}
+
+export class RetrievalExecutionError extends MemoryFabricError {
+  constructor(message: string) {
+    super("RETRIEVAL_EXECUTION_ERROR", message);
+  }
+}

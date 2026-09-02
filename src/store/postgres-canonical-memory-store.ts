@@ -77,6 +77,10 @@ interface HeadRow {
   updated_at: Date | string;
 }
 
+interface HeadRowWithOrdinal extends HeadRow {
+  ordinal: string | number;
+}
+
 interface RevisionRow {
   memory_id: string;
   revision: number;
@@ -811,6 +815,30 @@ export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
     );
     const row = result.rows[0];
     return row === undefined ? undefined : headFromRow(row);
+  }
+
+  async getHeads(
+    memoryIds: readonly MemoryId[],
+  ): Promise<Array<CanonicalMemoryHead | undefined>> {
+    if (memoryIds.length === 0) return [];
+    const result = await this.pool.query<HeadRowWithOrdinal>(
+      `WITH requested AS (
+         SELECT memory_id, ordinal
+           FROM unnest($1::text[]) WITH ORDINALITY AS input(memory_id, ordinal)
+       )
+       SELECT memory_heads.*, requested.ordinal
+         FROM requested
+         JOIN memory_heads USING (memory_id)
+        ORDER BY requested.ordinal`,
+      [memoryIds],
+    );
+    const heads: Array<CanonicalMemoryHead | undefined> = memoryIds.map(
+      () => undefined,
+    );
+    for (const row of result.rows) {
+      heads[numberFromDb(row.ordinal) - 1] = headFromRow(row);
+    }
+    return heads;
   }
 
   async getRevision(
