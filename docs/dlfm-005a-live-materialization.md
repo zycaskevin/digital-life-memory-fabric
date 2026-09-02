@@ -119,7 +119,7 @@ explicit canonical scope.
 
 On 2026-09-03 the candidate passed:
 
-- all 28 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
+- all 30 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
 - live create, idempotent replay, update, tombstone, and provider inspection;
 - transport-outage proof that canonical commit survives and no fake Provider
   materialization is created;
