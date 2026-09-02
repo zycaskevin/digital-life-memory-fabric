@@ -94,6 +94,7 @@ export class HttpMemoryMaterializationDeliveryPort
       headers,
       body: JSON.stringify(event),
       signal,
+      redirect: "error",
     });
 
     if (!response.ok) {

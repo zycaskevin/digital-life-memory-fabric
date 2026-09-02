@@ -232,6 +232,29 @@ test("HTTP delivery enforces its deadline and preserves caller cancellation", as
   });
 });
 
+test("HTTP delivery rejects redirects without retargeting the canonical event", async () => {
+  let redirectedRequests = 0;
+  const server = createServer((request, response) => {
+    if (request.url === "/target") {
+      redirectedRequests += 1;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(receipt(event)));
+      return;
+    }
+    response.writeHead(307, { location: "/target" });
+    response.end();
+  });
+  const endpoint = await listen(server);
+
+  try {
+    const port = new HttpMemoryMaterializationDeliveryPort({ endpoint });
+    await assert.rejects(port.execute(event), MaterializationTransportError);
+    assert.equal(redirectedRequests, 0);
+  } finally {
+    await close(server);
+  }
+});
+
 function receipt(source: MemoryFabricMaterializationEvent) {
   return {
     event_type: source.event_type,

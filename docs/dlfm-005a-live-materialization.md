@@ -49,6 +49,7 @@ retrieval without claiming external LLM inference.
 3. Request body equals the committed OH-MEM-002 event, and request/idempotency
    identities are also carried as headers.
 4. Non-2xx, non-JSON, invalid JSON, empty, or oversized responses fail closed.
+   Redirects also fail closed and never retarget the canonical event POST.
 5. The worker continues to validate the returned receipt as untrusted data.
 6. A real Hindsight document becomes current after canonical create and update.
 7. Replaying the same event returns `ALREADY_CURRENT`.
@@ -122,7 +123,7 @@ explicit canonical scope.
 
 On 2026-09-03 the candidate passed:
 
-- all 33 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
+- all 34 deterministic and PostgreSQL tests with zero skips against PostgreSQL 16;
 - live create, idempotent replay, update, tombstone, and provider inspection;
 - transport-outage proof that canonical commit survives and no fake Provider
   materialization is created;

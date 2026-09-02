@@ -91,6 +91,7 @@ try {
     idempotencyKey: `dlfm-005a-create-${randomUUID()}`,
   });
   const createRun = await worker.runOnce(workerInput);
+  bridge.assertHealthy();
   const createItem = onlyItem(createRun);
   assert.equal(createItem.event.event_id, created.change.eventId);
   assert.equal(createItem.receipt?.provider_id, "hindsight");
@@ -106,6 +107,7 @@ try {
   assert.equal(inspectedCreate.materializedCommitSeq, 1);
 
   const replayReceipt = await delivery.execute(createItem.event);
+  bridge.assertHealthy();
   assert.equal(replayReceipt.status, "ALREADY_CURRENT");
   assert.equal(replayReceipt.canonical_commit_affected, false);
 
@@ -118,7 +120,9 @@ try {
     baseRevision: 1,
     idempotencyKey: `dlfm-005a-update-${randomUUID()}`,
   });
-  const updateItem = onlyItem(await worker.runOnce(workerInput));
+  const updateRun = await worker.runOnce(workerInput);
+  bridge.assertHealthy();
+  const updateItem = onlyItem(updateRun);
   assert.equal(updateItem.receipt?.status, "SUCCESS");
   assert.equal(updateItem.settlement.record.status, "DONE");
   const inspectedUpdate = await provider.inspectMaterialization({
@@ -138,7 +142,9 @@ try {
     baseRevision: 2,
     idempotencyKey: `dlfm-005a-tombstone-${randomUUID()}`,
   });
-  const deleteItem = onlyItem(await worker.runOnce(workerInput));
+  const deleteRun = await worker.runOnce(workerInput);
+  bridge.assertHealthy();
+  const deleteItem = onlyItem(deleteRun);
   assert.equal(deleteItem.event.intent, "DELETE");
   assert.equal(deleteItem.receipt?.status, "SUCCESS");
   assert.equal(
@@ -242,6 +248,7 @@ function onlyItem(run) {
 }
 
 async function startBridge(consumer) {
+  let handlerError;
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== "POST" || request.url !== "/v1/memory/materializations") {
@@ -258,7 +265,8 @@ async function startBridge(consumer) {
       const receipt = await consumer.execute(event);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(receipt));
-    } catch {
+    } catch (error) {
+      handlerError ??= error;
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "bridge execution failed" }));
     }
@@ -271,6 +279,9 @@ async function startBridge(consumer) {
   assert.ok(address && typeof address !== "string");
   return {
     endpoint: `http://127.0.0.1:${address.port}/v1/memory/materializations`,
+    assertHealthy: () => {
+      if (handlerError !== undefined) throw handlerError;
+    },
     close: () => new Promise((resolvePromise, reject) => {
       server.close((error) => (error ? reject(error) : resolvePromise()));
     }),
