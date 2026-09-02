@@ -1,4 +1,4 @@
-import type { EventId, MemoryId } from "./types.js";
+import type { EventId, MemoryId, OutboxId } from "./types.js";
 
 export class MemoryFabricError extends Error {
   constructor(
@@ -98,5 +98,20 @@ export class UnsupportedOperationError extends MemoryFabricError {
       "UNSUPPORTED_OPERATION",
       `Operation ${operation} is reserved by the v0.1 contract but is not enabled in DLFM-001`,
     );
+  }
+}
+
+export class OutboxClaimConflictError extends MemoryFabricError {
+  constructor(public readonly outboxId: OutboxId) {
+    super(
+      "OUTBOX_CLAIM_CONFLICT",
+      `Outbox ${outboxId} is no longer owned by the supplied active claim`,
+    );
+  }
+}
+
+export class OperationsIntegrityError extends MemoryFabricError {
+  constructor(message: string) {
+    super("OPERATIONS_INTEGRITY_ERROR", message);
   }
 }

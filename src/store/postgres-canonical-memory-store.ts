@@ -21,10 +21,21 @@ import type {
   MemoryRevisionRef,
   MemoryScope,
   MemoryStatus,
+  ProviderMaterialization,
 } from "../domain/types.js";
 import { scopeKey } from "../domain/utils.js";
 import type {
-  CanonicalMemoryStore,
+  CentralOperationsStore,
+  CurrentHeadCursorRecord,
+  SettleClaimRequest,
+  SettledClaim,
+} from "../operations/central-operations-store.js";
+import type {
+  ClaimedOutboxRecord,
+  NamespaceOperationsSummary,
+  ProviderMaterializationCursor,
+} from "../operations/types.js";
+import type {
   CanonicalMemoryStoreTx,
 } from "./canonical-memory-store.js";
 
@@ -127,7 +138,43 @@ interface OutboxRow {
   operation: MemoryOperation;
   status: MemoryOutboxRecord["status"];
   attempts: number;
+  claimed_by: string | null;
+  claim_token: string | null;
+  lease_expires_at: Date | string | null;
+  next_attempt_at: Date | string | null;
+  last_error: string | null;
   created_at: Date | string;
+  updated_at: Date | string | null;
+}
+
+interface ProviderMaterializationRow {
+  provider_name: string;
+  memory_id: string;
+  provider_id: string | null;
+  canonical_revision: number;
+  materialized_revision: number;
+  status: ProviderMaterialization["status"];
+  last_error: string | null;
+  last_attempt: Date | string | null;
+}
+
+interface OperationsSummaryRow {
+  high_watermark: string | number;
+  memory_total: string | number;
+  memory_active: string | number;
+  memory_tombstoned: string | number;
+  memory_superseded: string | number;
+  outbox_pending: string | number;
+  outbox_processing: string | number;
+  outbox_done: string | number;
+  outbox_failed: string | number;
+  device_total: string | number;
+  device_max_lag: string | number;
+  materialization_current: string | number;
+  materialization_lagging: string | number;
+  materialization_failed: string | number;
+  materialization_unavailable: string | number;
+  materialization_rebuilding: string | number;
 }
 
 interface ConflictRow {
@@ -250,7 +297,7 @@ function changeFromRow(row: ChangeRow): MemoryChangeEnvelope {
 }
 
 function outboxFromRow(row: OutboxRow): MemoryOutboxRecord {
-  return {
+  const record: MemoryOutboxRecord = {
     outboxId: row.outbox_id as MemoryOutboxRecord["outboxId"],
     scope: scopeFromRow(row),
     commitSeq: numberFromDb(row.commit_seq),
@@ -261,6 +308,33 @@ function outboxFromRow(row: OutboxRow): MemoryOutboxRecord {
     attempts: row.attempts,
     createdAt: iso(row.created_at),
   };
+  if (row.claimed_by !== null) record.claimedBy = row.claimed_by;
+  if (row.claim_token !== null) record.claimToken = row.claim_token;
+  const leaseExpiresAt = optionalIso(row.lease_expires_at);
+  const nextAttemptAt = optionalIso(row.next_attempt_at);
+  const updatedAt = optionalIso(row.updated_at);
+  if (leaseExpiresAt !== undefined) record.leaseExpiresAt = leaseExpiresAt;
+  if (nextAttemptAt !== undefined) record.nextAttemptAt = nextAttemptAt;
+  if (row.last_error !== null) record.lastError = row.last_error;
+  if (updatedAt !== undefined) record.updatedAt = updatedAt;
+  return record;
+}
+
+function materializationFromRow(
+  row: ProviderMaterializationRow,
+): ProviderMaterialization {
+  const value: ProviderMaterialization = {
+    providerName: row.provider_name,
+    memoryId: row.memory_id as MemoryId,
+    canonicalRevision: row.canonical_revision,
+    materializedRevision: row.materialized_revision,
+    status: row.status,
+  };
+  if (row.provider_id !== null) value.providerId = row.provider_id;
+  if (row.last_error !== null) value.lastError = row.last_error;
+  const lastAttempt = optionalIso(row.last_attempt);
+  if (lastAttempt !== undefined) value.lastAttempt = lastAttempt;
+  return value;
 }
 
 function conflictFromRow(row: ConflictRow): MemoryConflict {
@@ -691,7 +765,7 @@ class PostgresTx implements CanonicalMemoryStoreTx {
   }
 }
 
-export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
+export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
   constructor(private readonly pool: Pool) {}
 
   static fromConnectionString(connectionString: string): PostgresCanonicalMemoryStore {
@@ -924,5 +998,405 @@ export class PostgresCanonicalMemoryStore implements CanonicalMemoryStore {
       [scope.tenantId, scope.lifeDid, scope.memoryNamespace],
     );
     return result.rows.map(conflictFromRow);
+  }
+
+  async listCurrentHeadsAfter(
+    scope: MemoryScope,
+    afterCommitSeq: number,
+    limit: number,
+  ): Promise<CurrentHeadCursorRecord[]> {
+    const result = await this.pool.query<HeadRow & { commit_seq: string | number }>(
+      `SELECT memory_heads.*, memory_revisions.commit_seq
+         FROM memory_heads
+         JOIN memory_revisions
+           ON memory_revisions.memory_id = memory_heads.memory_id
+          AND memory_revisions.revision = memory_heads.current_revision
+        WHERE memory_heads.tenant_id = $1
+          AND memory_heads.life_did = $2
+          AND memory_heads.memory_namespace = $3
+          AND memory_revisions.commit_seq > $4
+        ORDER BY memory_revisions.commit_seq ASC, memory_heads.memory_id ASC
+        LIMIT $5`,
+      [
+        scope.tenantId,
+        scope.lifeDid,
+        scope.memoryNamespace,
+        afterCommitSeq,
+        limit,
+      ],
+    );
+    return result.rows.map((row) => ({
+      head: headFromRow(row),
+      commitSeq: numberFromDb(row.commit_seq),
+    }));
+  }
+
+  async getScopeHighWatermark(scope: MemoryScope): Promise<number> {
+    const result = await this.pool.query<{ last_commit_seq: string | number }>(
+      `SELECT last_commit_seq
+         FROM memory_namespace_sequences
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace],
+    );
+    const row = result.rows[0];
+    return row === undefined ? 0 : numberFromDb(row.last_commit_seq);
+  }
+
+  async listDeviceCheckpointsAfter(
+    scope: MemoryScope,
+    afterDeviceId: string | undefined,
+    limit: number,
+  ): Promise<DeviceCheckpoint[]> {
+    const values: unknown[] = [
+      scope.tenantId,
+      scope.lifeDid,
+      scope.memoryNamespace,
+    ];
+    const cursorClause = afterDeviceId === undefined ? "" : " AND device_id > $4";
+    if (afterDeviceId !== undefined) values.push(afterDeviceId);
+    values.push(limit);
+    const limitPosition = values.length;
+    const result = await this.pool.query<DeviceCheckpointRow>(
+      `SELECT * FROM device_checkpoints
+        WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+          ${cursorClause}
+        ORDER BY device_id ASC
+        LIMIT $${limitPosition}`,
+      values,
+    );
+    return result.rows.map(deviceCheckpointFromRow);
+  }
+
+  async listProviderMaterializationsAfter(
+    scope: MemoryScope,
+    after: ProviderMaterializationCursor | undefined,
+    limit: number,
+  ): Promise<ProviderMaterialization[]> {
+    const values: unknown[] = [
+      scope.tenantId,
+      scope.lifeDid,
+      scope.memoryNamespace,
+    ];
+    const cursorClause =
+      after === undefined
+        ? ""
+        : " AND (provider_materializations.provider_name, provider_materializations.memory_id) > ($4, $5)";
+    if (after !== undefined) {
+      values.push(after.providerName, after.memoryId);
+    }
+    values.push(limit);
+    const limitPosition = values.length;
+    const result = await this.pool.query<ProviderMaterializationRow>(
+      `SELECT provider_materializations.*
+         FROM provider_materializations
+         JOIN memory_heads
+           ON memory_heads.memory_id = provider_materializations.memory_id
+        WHERE memory_heads.tenant_id = $1
+          AND memory_heads.life_did = $2
+          AND memory_heads.memory_namespace = $3
+          ${cursorClause}
+        ORDER BY provider_materializations.provider_name ASC,
+                 provider_materializations.memory_id ASC
+        LIMIT $${limitPosition}`,
+      values,
+    );
+    return result.rows.map(materializationFromRow);
+  }
+
+  async getNamespaceOperationsSummary(
+    scope: MemoryScope,
+  ): Promise<NamespaceOperationsSummary> {
+    const result = await this.pool.query<OperationsSummaryRow>(
+      `WITH high AS (
+         SELECT COALESCE((
+           SELECT last_commit_seq
+             FROM memory_namespace_sequences
+            WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+         ), 0)::bigint AS value
+       ), memory_counts AS (
+         SELECT COUNT(*)::bigint AS total,
+                COUNT(*) FILTER (WHERE status = 'active')::bigint AS active,
+                COUNT(*) FILTER (WHERE status = 'tombstoned')::bigint AS tombstoned,
+                COUNT(*) FILTER (WHERE status = 'superseded')::bigint AS superseded
+           FROM memory_heads
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+       ), outbox_counts AS (
+         SELECT COUNT(*) FILTER (WHERE status = 'PENDING')::bigint AS pending,
+                COUNT(*) FILTER (WHERE status = 'PROCESSING')::bigint AS processing,
+                COUNT(*) FILTER (WHERE status = 'DONE')::bigint AS done,
+                COUNT(*) FILTER (WHERE status = 'FAILED')::bigint AS failed
+           FROM memory_outbox
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+       ), device_counts AS (
+         SELECT COUNT(*)::bigint AS total,
+                COALESCE(MAX(GREATEST(high.value - last_applied_commit_seq, 0)), 0)::bigint AS max_lag
+           FROM device_checkpoints CROSS JOIN high
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+       ), materialization_counts AS (
+         SELECT COUNT(*) FILTER (WHERE provider_materializations.status = 'CURRENT')::bigint AS current,
+                COUNT(*) FILTER (WHERE provider_materializations.status = 'LAGGING')::bigint AS lagging,
+                COUNT(*) FILTER (WHERE provider_materializations.status = 'FAILED')::bigint AS failed,
+                COUNT(*) FILTER (WHERE provider_materializations.status = 'UNAVAILABLE')::bigint AS unavailable,
+                COUNT(*) FILTER (WHERE provider_materializations.status = 'REBUILDING')::bigint AS rebuilding
+           FROM provider_materializations
+           JOIN memory_heads ON memory_heads.memory_id = provider_materializations.memory_id
+          WHERE memory_heads.tenant_id = $1
+            AND memory_heads.life_did = $2
+            AND memory_heads.memory_namespace = $3
+       )
+       SELECT high.value AS high_watermark,
+              memory_counts.total AS memory_total,
+              memory_counts.active AS memory_active,
+              memory_counts.tombstoned AS memory_tombstoned,
+              memory_counts.superseded AS memory_superseded,
+              outbox_counts.pending AS outbox_pending,
+              outbox_counts.processing AS outbox_processing,
+              outbox_counts.done AS outbox_done,
+              outbox_counts.failed AS outbox_failed,
+              device_counts.total AS device_total,
+              device_counts.max_lag AS device_max_lag,
+              materialization_counts.current AS materialization_current,
+              materialization_counts.lagging AS materialization_lagging,
+              materialization_counts.failed AS materialization_failed,
+              materialization_counts.unavailable AS materialization_unavailable,
+              materialization_counts.rebuilding AS materialization_rebuilding
+         FROM high, memory_counts, outbox_counts, device_counts, materialization_counts`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new ValidationError("Namespace operations summary returned no row");
+    }
+    return {
+      scope,
+      highWatermark: numberFromDb(row.high_watermark),
+      memories: {
+        total: numberFromDb(row.memory_total),
+        active: numberFromDb(row.memory_active),
+        tombstoned: numberFromDb(row.memory_tombstoned),
+        superseded: numberFromDb(row.memory_superseded),
+      },
+      outbox: {
+        pending: numberFromDb(row.outbox_pending),
+        processing: numberFromDb(row.outbox_processing),
+        done: numberFromDb(row.outbox_done),
+        failed: numberFromDb(row.outbox_failed),
+      },
+      devices: {
+        total: numberFromDb(row.device_total),
+        maxLag: numberFromDb(row.device_max_lag),
+      },
+      materializations: {
+        current: numberFromDb(row.materialization_current),
+        lagging: numberFromDb(row.materialization_lagging),
+        failed: numberFromDb(row.materialization_failed),
+        unavailable: numberFromDb(row.materialization_unavailable),
+        rebuilding: numberFromDb(row.materialization_rebuilding),
+      },
+    };
+  }
+
+  async claimOutboxBatch(
+    scope: MemoryScope,
+    workerId: string,
+    claimToken: string,
+    claimedAt: string,
+    leaseExpiresAt: string,
+    limit: number,
+  ): Promise<ClaimedOutboxRecord[]> {
+    const result = await this.pool.query<OutboxRow>(
+      `WITH claimable AS (
+         SELECT candidate.outbox_id
+           FROM memory_outbox AS candidate
+          WHERE candidate.tenant_id = $1
+            AND candidate.life_did = $2
+            AND candidate.memory_namespace = $3
+            AND (
+              (
+                candidate.status IN ('PENDING', 'FAILED')
+                AND (
+                  candidate.next_attempt_at IS NULL
+                  OR candidate.next_attempt_at <= $4
+                )
+              )
+              OR
+              (
+                candidate.status = 'PROCESSING'
+                AND candidate.lease_expires_at <= $4
+              )
+            )
+            AND NOT EXISTS (
+              SELECT 1
+                FROM memory_outbox AS earlier
+               WHERE earlier.memory_id = candidate.memory_id
+                 AND earlier.revision < candidate.revision
+                 AND earlier.status <> 'DONE'
+            )
+          ORDER BY candidate.created_at ASC, candidate.outbox_id ASC
+          LIMIT $8
+          FOR UPDATE SKIP LOCKED
+       )
+       UPDATE memory_outbox AS outbox
+          SET status = 'PROCESSING',
+              attempts = outbox.attempts + 1,
+              claimed_by = $5,
+              claim_token = $6,
+              lease_expires_at = $7,
+              next_attempt_at = NULL,
+              last_error = NULL,
+              updated_at = $4
+         FROM claimable
+        WHERE outbox.outbox_id = claimable.outbox_id
+       RETURNING outbox.*`,
+      [
+        scope.tenantId,
+        scope.lifeDid,
+        scope.memoryNamespace,
+        claimedAt,
+        workerId,
+        claimToken,
+        leaseExpiresAt,
+        limit,
+      ],
+    );
+    return result.rows.map((row) => {
+      const record = outboxFromRow(row);
+      if (
+        record.status !== "PROCESSING" ||
+        record.claimedBy === undefined ||
+        record.claimToken === undefined ||
+        record.leaseExpiresAt === undefined ||
+        record.updatedAt === undefined
+      ) {
+        throw new ValidationError(`Claimed outbox ${record.outboxId} has no active lease`);
+      }
+      return record as ClaimedOutboxRecord;
+    });
+  }
+
+  async settleOutboxClaim(
+    request: SettleClaimRequest,
+  ): Promise<SettledClaim | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const claimed = await client.query<OutboxRow>(
+        `SELECT * FROM memory_outbox
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+            AND outbox_id = $4
+            AND status = 'PROCESSING'
+            AND claimed_by = $5
+            AND claim_token = $6
+            AND lease_expires_at > $7
+          FOR UPDATE`,
+        [
+          request.scope.tenantId,
+          request.scope.lifeDid,
+          request.scope.memoryNamespace,
+          request.outboxId,
+          request.workerId,
+          request.claimToken,
+          request.settledAt,
+        ],
+      );
+      const claimedRow = claimed.rows[0];
+      if (claimedRow === undefined) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+
+      const failed = request.outcomes.filter((outcome) => outcome.status !== "CURRENT");
+      const materializations: ProviderMaterialization[] = [];
+      for (const outcome of request.outcomes) {
+        const materializedRevision =
+          outcome.status === "CURRENT" ? claimedRow.revision : 0;
+        const materialization = await client.query<ProviderMaterializationRow>(
+          `INSERT INTO provider_materializations (
+             provider_name, memory_id, provider_id, canonical_revision,
+             materialized_revision, status, last_error, last_attempt
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           ON CONFLICT (provider_name, memory_id) DO UPDATE
+             SET provider_id = COALESCE(
+                   EXCLUDED.provider_id,
+                   provider_materializations.provider_id
+                 ),
+                 canonical_revision = EXCLUDED.canonical_revision,
+                 materialized_revision = CASE
+                   WHEN EXCLUDED.status = 'CURRENT'
+                   THEN EXCLUDED.materialized_revision
+                   ELSE provider_materializations.materialized_revision
+                 END,
+                 status = EXCLUDED.status,
+                 last_error = EXCLUDED.last_error,
+                 last_attempt = EXCLUDED.last_attempt
+           WHERE provider_materializations.canonical_revision <= EXCLUDED.canonical_revision
+           RETURNING *`,
+          [
+            outcome.providerName,
+            claimedRow.memory_id,
+            outcome.providerId ?? null,
+            claimedRow.revision,
+            materializedRevision,
+            outcome.status,
+            outcome.lastError ?? null,
+            request.settledAt,
+          ],
+        );
+        const row = materialization.rows[0];
+        if (row === undefined) {
+          throw new ValidationError(
+            `Provider materialization ${outcome.providerName} returned no row`,
+          );
+        }
+        materializations.push(materializationFromRow(row));
+      }
+
+      const status: MemoryOutboxRecord["status"] =
+        failed.length === 0 ? "DONE" : "FAILED";
+      const lastError =
+        failed.length === 0
+          ? null
+          : failed
+              .map((outcome) => `${outcome.providerName}: ${outcome.lastError}`)
+              .join("; ");
+      const updated = await client.query<OutboxRow>(
+        `UPDATE memory_outbox
+            SET status = $8,
+                claimed_by = NULL,
+                claim_token = NULL,
+                lease_expires_at = NULL,
+                next_attempt_at = $9,
+                last_error = $10,
+                updated_at = $7
+          WHERE tenant_id = $1 AND life_did = $2 AND memory_namespace = $3
+            AND outbox_id = $4
+            AND claimed_by = $5
+            AND claim_token = $6
+        RETURNING *`,
+        [
+          request.scope.tenantId,
+          request.scope.lifeDid,
+          request.scope.memoryNamespace,
+          request.outboxId,
+          request.workerId,
+          request.claimToken,
+          request.settledAt,
+          status,
+          request.nextAttemptAt ?? null,
+          lastError,
+        ],
+      );
+      const updatedRow = updated.rows[0];
+      if (updatedRow === undefined) {
+        throw new ValidationError(`Outbox settlement lost claim ${request.outboxId}`);
+      }
+      await client.query("COMMIT");
+      return { record: outboxFromRow(updatedRow), materializations };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
