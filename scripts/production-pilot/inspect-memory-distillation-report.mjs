@@ -24,6 +24,9 @@ function sanitize(message) {
 
 function classify(message) {
   const text = String(message ?? "").toLowerCase();
+  if (text.includes("authentication failed") || text.includes("invalid api key")) {
+    return "HINDSIGHT_AUTH_INVALID";
+  }
   if (text.includes("batch api is enabled") && text.includes("async=false")) {
     return "HINDSIGHT_REQUIRES_ASYNC_RETAIN";
   }

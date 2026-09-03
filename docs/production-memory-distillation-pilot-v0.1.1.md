@@ -159,6 +159,16 @@ Credentials and the selected instance/port are persisted **before** PostgreSQL i
 started, so an interrupted bootstrap can be safely retried without losing the
 cluster password.
 
+## Hindsight tenant authentication
+
+For `local_external`, Hermes may store `HINDSIGHT_API_KEY` in
+`$HERMES_HOME/.env` rather than `hindsight/config.json`. The pilot reads the same
+credential sources and performs a **read-only** `GET /v1/default/banks?limit=1`
+probe before Apply. It tries explicit pilot override, Hermes env key, Hindsight config
+key, then unauthenticated access, deduplicating identical keys. Only a strategy that
+passes the bank API may be used for Apply. Preflight prints the selected auth source
+and a short SHA-256 fingerprint, never the secret itself.
+
 ## Step 1.5 — infrastructure preflight
 
 After the five-session plan passes, run the read-only infrastructure preflight:
@@ -170,7 +180,7 @@ OMNIHARNESS_DIR='/path/to/OmniHarness' \
 npm run pilot:memory-distillation:preflight
 ```
 
-The preflight checks the real Hermes sample, Hindsight mode/health/version, whether
+The preflight checks the real Hermes sample, Hindsight mode/health/auth/version, whether
 DLMF PostgreSQL is configured (environment or private bootstrap file), performs a
 real read-only `SELECT 1` connectivity probe, and reports local PostgreSQL clues. It prints no database password or Hindsight API key and creates no
 schema or memory. A blocked preflight exits with status 2 and emits explicit

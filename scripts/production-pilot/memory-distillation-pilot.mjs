@@ -550,8 +550,97 @@ async function readHermesHindsightConfig() {
   return parsed && typeof parsed === "object" ? parsed : {};
 }
 
-async function resolveHindsightConnection() {
+function readSimpleEnvFile(path) {
+  if (!existsSync(path)) return {};
+  const values = {};
+  for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || !line.includes("=")) continue;
+    const index = line.indexOf("=");
+    const key = line.slice(0, index).trim();
+    let value = line.slice(index + 1).trim();
+    if (value.length >= 2 && value[0] === value.at(-1) && ["'", '"'].includes(value[0])) {
+      value = value.slice(1, -1);
+    }
+    values[key] = value;
+  }
+  return values;
+}
+
+function secretFingerprint(value) {
+  if (!nonEmptyString(value)) return "none";
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12);
+}
+
+function dedupeAuthCandidates(candidates) {
+  const seen = new Set();
+  const result = [];
+  for (const candidate of candidates) {
+    const identity = candidate.apiKey ?? "<none>";
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    result.push(candidate);
+  }
+  return result;
+}
+
+async function probeHindsightTenantAuth(baseUrl, authCandidates) {
+  const attempts = [];
+  for (const candidate of authCandidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const response = await fetch(`${baseUrl}/v1/default/banks?limit=1`, {
+        method: "GET",
+        headers: candidate.apiKey ? { Authorization: `Bearer ${candidate.apiKey}` } : {},
+        signal: controller.signal,
+      });
+      const body = await response.text();
+      if (response.ok) {
+        return {
+          ...candidate,
+          authHealthy: true,
+          fingerprint: secretFingerprint(candidate.apiKey),
+          attempts,
+        };
+      }
+      const lower = body.toLowerCase();
+      const authenticationFailure =
+        response.status === 401 ||
+        response.status === 403 ||
+        lower.includes("authentication failed") ||
+        lower.includes("invalid api key") ||
+        lower.includes("missing authorization");
+      attempts.push({
+        source: candidate.source,
+        status: response.status,
+        authenticationFailure,
+      });
+      if (!authenticationFailure) {
+        throw new Error(`Hindsight bank auth probe failed with HTTP ${response.status}`);
+      }
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error("Hindsight bank auth probe timed out");
+      }
+      if (String(error?.message || error).includes("Hindsight bank auth probe failed")) throw error;
+      attempts.push({ source: candidate.source, status: 0, authenticationFailure: false });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return {
+    apiKey: undefined,
+    source: "none",
+    authHealthy: false,
+    fingerprint: "none",
+    attempts,
+  };
+}
+
+async function resolveHindsightConnection({ probeAuth = true } = {}) {
   const config = await readHermesHindsightConfig();
+  const hermesEnv = readSimpleEnvFile(join(hermesHome, ".env"));
   const mode = String(config.mode || "cloud");
   const defaultUrl = mode === "local" || mode === "local_embedded" || mode === "local_external"
     ? "http://localhost:8888"
@@ -559,9 +648,38 @@ async function resolveHindsightConnection() {
   const baseUrl = String(
     process.env.DLMF_PILOT_HINDSIGHT_URL || config.api_url || config.apiUrl || defaultUrl,
   ).replace(/\/$/, "");
-  const apiKey =
-    process.env.DLMF_PILOT_HINDSIGHT_API_KEY || config.api_key || config.apiKey || undefined;
-  return { baseUrl, apiKey, mode };
+
+  const authCandidates = dedupeAuthCandidates([
+    ...(nonEmptyString(process.env.DLMF_PILOT_HINDSIGHT_API_KEY)
+      ? [{ source: "pilot_override", apiKey: process.env.DLMF_PILOT_HINDSIGHT_API_KEY }]
+      : []),
+    ...(nonEmptyString(hermesEnv.HINDSIGHT_API_KEY)
+      ? [{ source: "hermes_env", apiKey: hermesEnv.HINDSIGHT_API_KEY }]
+      : []),
+    ...(nonEmptyString(config.api_key || config.apiKey)
+      ? [{ source: "hindsight_config", apiKey: config.api_key || config.apiKey }]
+      : []),
+    { source: "no_auth", apiKey: undefined },
+  ]);
+
+  const selected = probeAuth
+    ? await probeHindsightTenantAuth(baseUrl, authCandidates)
+    : {
+        ...authCandidates[0],
+        authHealthy: undefined,
+        fingerprint: secretFingerprint(authCandidates[0]?.apiKey),
+        attempts: [],
+      };
+
+  return {
+    baseUrl,
+    apiKey: selected.apiKey,
+    authSource: selected.source,
+    authHealthy: selected.authHealthy,
+    authFingerprint: selected.fingerprint,
+    authAttempts: selected.attempts,
+    mode,
+  };
 }
 
 async function loadHindsightClientConstructor() {
@@ -635,6 +753,7 @@ async function runPreflight() {
   const databaseUrl = pilotDatabaseUrl();
 
   let hindsightHealth = "unavailable";
+  let hindsightAuth = hindsightConnection.authHealthy === true ? "healthy" : "unavailable";
   let hindsightVersion = "unknown";
   try {
     const HindsightClient = await loadHindsightClientConstructor();
@@ -653,6 +772,7 @@ async function runPreflight() {
   } catch {
     hindsightHealth = "unavailable";
   }
+  if (hindsightConnection.authHealthy !== true) hindsightAuth = "unavailable";
 
   let postgresHealth = nonEmptyString(databaseUrl) ? "unavailable" : "unconfigured";
   if (nonEmptyString(databaseUrl)) {
@@ -683,7 +803,7 @@ async function runPreflight() {
   console.log(`Hermes DB readable: ${existsSync(hermesDb)}`);
   console.log(`Five-session sample: ${selected.length === 5 ? "ready" : "not-ready"}`);
   console.log(
-    `Hindsight: mode=${hindsightConnection.mode} endpoint=${endpointKind} health=${hindsightHealth} version=${hindsightVersion}`,
+    `Hindsight: mode=${hindsightConnection.mode} endpoint=${endpointKind} health=${hindsightHealth} auth=${hindsightAuth} auth_source=${hindsightConnection.authSource} key_fp=${hindsightConnection.authFingerprint} version=${hindsightVersion}`,
   );
   console.log(`DLMF PostgreSQL: configured=${nonEmptyString(databaseUrl)} source=${process.env.DLMF_PILOT_DATABASE_URL ? "environment" : existsSync(pilotEnvFile) ? "private_file" : "none"} health=${postgresHealth}`);
   console.log(
@@ -699,6 +819,7 @@ async function runPreflight() {
     existsSync(hermesDb) &&
     selected.length === 5 &&
     hindsightHealth === "healthy" &&
+    hindsightAuth === "healthy" &&
     postgresHealth === "healthy";
 
   console.log(`PRODUCTION_PILOT_PREFLIGHT=${ready ? "PASS" : "BLOCKED"}`);
@@ -709,6 +830,9 @@ async function runPreflight() {
   }
   if (hindsightHealth !== "healthy") {
     console.log("BLOCKER=HINDSIGHT_NOT_HEALTHY");
+  }
+  if (hindsightAuth !== "healthy") {
+    console.log("BLOCKER=HINDSIGHT_AUTH_NOT_VALID");
   }
   return ready;
 }
@@ -776,6 +900,9 @@ async function runApply(selected, manifest) {
     throw new Error("DLMF pilot PostgreSQL is not configured; run pilot:memory-distillation:bootstrap-postgres or set DLMF_PILOT_DATABASE_URL.");
   }
   const hindsightConnection = await resolveHindsightConnection();
+  if (hindsightConnection.authHealthy !== true) {
+    throw new Error("Hindsight tenant authentication could not be validated by the read-only bank API.");
+  }
   const HindsightClient = await loadHindsightClientConstructor();
   const hindsightClient = new HindsightClient({
     baseUrl: hindsightConnection.baseUrl,
