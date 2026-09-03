@@ -1026,8 +1026,32 @@ async function main() {
       `${item.category}: receipt=${item.receipt.status}/${item.receipt.canonicalizationOutcome} candidates=${item.candidates.length} canonical=${item.canonical.length} pruneEligible=${item.pruneEligibility.eligible}`,
     );
   }
-  console.log(`reflection_candidates=${report.reflection?.produced ?? 0}`);
+  const failedSessions = report.sessions.filter((item) => item.receipt.status !== "complete");
+  const pendingOutcomes = report.sessions.filter(
+    (item) => item.receipt.canonicalizationOutcome === "pending",
+  );
+  const totalCandidates = report.sessions.reduce((sum, item) => sum + item.candidates.length, 0);
+  const totalCanonical = report.sessions.reduce((sum, item) => sum + item.canonical.length, 0);
+  const reflectionCount = report.reflection?.produced ?? 0;
+  const executionFailures = [];
+  if (failedSessions.length > 0) {
+    executionFailures.push(`RECEIPTS_NOT_COMPLETE:${failedSessions.length}`);
+  }
+  if (pendingOutcomes.length > 0) {
+    executionFailures.push(`CANONICALIZATION_PENDING:${pendingOutcomes.length}`);
+  }
+  if (totalCandidates === 0) executionFailures.push("NO_CANDIDATES_PRODUCED");
+  if (totalCanonical === 0) executionFailures.push("NO_CANONICAL_MEMORY_PRODUCED");
+  if (reflectionCount === 0) executionFailures.push("NO_REFLECTIVE_CANDIDATE_PRODUCED");
+
+  console.log(`reflection_candidates=${reflectionCount}`);
   console.log("HERMES_PRUNE_EXECUTED=false");
+  if (executionFailures.length > 0) {
+    for (const failure of executionFailures) console.error(`PILOT_FAILURE=${failure}`);
+    console.error("PRODUCTION_PILOT=FAIL");
+    process.exitCode = 1;
+    return;
+  }
   console.log("PRODUCTION_PILOT=PASS");
 }
 

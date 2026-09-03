@@ -276,3 +276,19 @@ PRODUCTION_PILOT=PASS
 A successful pilot still does not authorize bulk migration of ~11,216 sessions or
 automatic pruning. Bulk migration is a separate bounded and resumable operational
 stage.
+
+## Inspect a failed apply
+
+A failed apply must not be rerun blindly. Inspect the existing private report first:
+
+```bash
+npm run pilot:memory-distillation:inspect -- /path/to/pilot-report.json
+```
+
+The inspector prints only receipt status, bounded/sanitized error diagnostics, error
+fingerprints, reflection count, and Hermes delete count. It does not print raw
+transcript content.
+
+Machine success is fail-closed: any non-complete receipt, pending canonicalization
+outcome, zero aggregate candidates/canonical memories, or zero reflective candidates
+causes `PRODUCTION_PILOT=FAIL` and a non-zero exit code.
