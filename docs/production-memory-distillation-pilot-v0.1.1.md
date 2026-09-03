@@ -128,8 +128,10 @@ local embedded PostgreSQL for DLMF pilot state:
 npm run pilot:memory-distillation:bootstrap-postgres
 ```
 
-The bootstrap uses a separate pg0 instance named `dlmf-pilot-v011`, default local
-port `55432`, database/user `dlmf_pilot`, and a generated password. The password
+The bootstrap uses a separate port-specific pg0 instance such as
+`dlmf-pilot-v011-55433`, starting from local port `55432`, with database/user
+`dlmf_pilot` and a generated password. If the requested port is occupied, it
+automatically selects the next free localhost port. The password
 is never printed. The connection URL is stored in:
 
 ```text
@@ -146,11 +148,16 @@ Expected marker:
 DLMF_PILOT_PG0_BOOTSTRAP=PASS
 ```
 
-If port 55432 is already occupied, rerun with a different local port, for example:
+The bootstrap normally handles local port collisions automatically. An explicit
+starting port is still available when needed:
 
 ```bash
-DLMF_PILOT_PG_PORT=55433 npm run pilot:memory-distillation:bootstrap-postgres
+DLMF_PILOT_PG_PORT=56000 npm run pilot:memory-distillation:bootstrap-postgres
 ```
+
+Credentials and the selected instance/port are persisted **before** PostgreSQL is
+started, so an interrupted bootstrap can be safely retried without losing the
+cluster password.
 
 ## Step 1.5 — infrastructure preflight
 
