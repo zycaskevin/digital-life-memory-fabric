@@ -302,3 +302,17 @@ transcript content.
 Machine success is fail-closed: any non-complete receipt, pending canonicalization
 outcome, zero aggregate candidates/canonical memories, or zero reflective candidates
 causes `PRODUCTION_PILOT=FAIL` and a non-zero exit code.
+
+## Inspect a partially completed run
+
+If Apply reaches canonicalization but fails later (for example during Reflection),
+inspect the preserved PostgreSQL schema without re-running any provider work:
+
+```bash
+npm run pilot:memory-distillation:inspect-run -- pilot_YYYYMMDDhhmmss
+```
+
+This reports per-source receipt status, candidate/canonical counts, prune eligibility,
+and aggregate candidate/head/revision/change counts. It never prints canonical text or
+raw transcripts. Reflection errors are now captured into the private run report; they
+do not erase the completed session evidence.

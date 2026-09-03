@@ -1046,38 +1046,51 @@ async function runApply(selected, manifest) {
     }
 
     const inferenceSample = sessionReports.find((entry) => entry.category === "inferred_insight");
-    let reflection = null;
+    let reflection = { status: "not_run", produced: 0, candidates: [] };
     if (inferenceSample && allCanonicalRevisions.length > 0) {
       const relatedIds = new Set(inferenceSample.receipt.canonicalMemoryIds);
       const related = allCanonicalRevisions.filter((revision) => relatedIds.has(revision.memoryId));
       const reflectionSource = related.length > 0 ? related : allCanonicalRevisions.slice(0, 5);
       const reflective = new ReflectiveMemoryService(canonicalStore, adapter);
-      const derived = await reflective.reflect({
-        scope,
-        origin: { lifeDid, agentId: "nancy", runtimeId: "hermes-gb10", deviceId: "gb10" },
-        context:
-          "Identify one useful pattern or hypothesis from these canonical memories. Treat it as an inference, not an observed fact.",
-        evidence: reflectionSource.map((revision) => ({
-          evidenceRef: {
-            sourceType: "canonical_memory",
-            sourceRef: `${revision.memoryId}@${revision.revision}`,
+      try {
+        const derived = await reflective.reflect({
+          scope,
+          origin: { lifeDid, agentId: "nancy", runtimeId: "hermes-gb10", deviceId: "gb10" },
+          context:
+            "Identify one useful pattern or hypothesis from these canonical memories. Treat it as an inference, not an observed fact.",
+          evidence: reflectionSource.map((revision) => ({
+            evidenceRef: {
+              sourceType: "canonical_memory",
+              sourceRef: `${revision.memoryId}@${revision.revision}`,
+            },
+            text: revision.canonicalContent.text,
+            sourceExperienceRefs: revision.sourceExperienceRefs,
+          })),
+          canonicalMemories: reflectionSource,
+          distillationPolicyVersion: "pilot-reflect-v1",
+        });
+        reflection = {
+          status: "complete",
+          produced: derived.length,
+          candidates: derived.map((candidate) => ({
+            candidateId: candidate.candidateId,
+            text: candidate.proposedContent.text,
+            epistemicStatus: candidate.epistemicStatus,
+            status: candidate.status,
+            canonicalWritePerformed: false,
+          })),
+        };
+      } catch (error) {
+        reflection = {
+          status: "failed",
+          produced: 0,
+          candidates: [],
+          error: {
+            name: error instanceof Error ? error.name : "Error",
+            message: error instanceof Error ? error.message : String(error),
           },
-          text: revision.canonicalContent.text,
-          sourceExperienceRefs: revision.sourceExperienceRefs,
-        })),
-        canonicalMemories: reflectionSource,
-        distillationPolicyVersion: "pilot-reflect-v1",
-      });
-      reflection = {
-        produced: derived.length,
-        candidates: derived.map((candidate) => ({
-          candidateId: candidate.candidateId,
-          text: candidate.proposedContent.text,
-          epistemicStatus: candidate.epistemicStatus,
-          status: candidate.status,
-          canonicalWritePerformed: false,
-        })),
-      };
+        };
+      }
     }
 
     const report = {
@@ -1169,8 +1182,10 @@ async function main() {
   }
   if (totalCandidates === 0) executionFailures.push("NO_CANDIDATES_PRODUCED");
   if (totalCanonical === 0) executionFailures.push("NO_CANONICAL_MEMORY_PRODUCED");
+  if (report.reflection?.status === "failed") executionFailures.push("REFLECTION_FAILED");
   if (reflectionCount === 0) executionFailures.push("NO_REFLECTIVE_CANDIDATE_PRODUCED");
 
+  console.log(`reflection_status=${report.reflection?.status ?? "not_run"}`);
   console.log(`reflection_candidates=${reflectionCount}`);
   console.log("HERMES_PRUNE_EXECUTED=false");
   if (executionFailures.length > 0) {
