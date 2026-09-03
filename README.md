@@ -213,6 +213,20 @@ See:
 - [v0.1.1 canonical amendment](docs/memory-distillation-provider-boundary-v0.1.1.md)
 - [MD-001 through MD-009 acceptance ledger](docs/dlfm-md-001-009-acceptance.md)
 
+## Nancy production pilot runner
+
+A host-side production pilot runner is available for the v0.1.1 amendment:
+
+```bash
+npm run pilot:memory-distillation
+```
+
+Plan mode is read-only against Hermes and selects five completed-session samples.
+`--apply` requires an explicit PostgreSQL URL and writes only to isolated
+`dlmf_pilot_*` schema / `pilot.*` namespace / Hindsight pilot banks. It never
+executes Hermes pruning. See
+[the production pilot runbook](docs/production-memory-distillation-pilot-v0.1.1.md).
+
 ## Temporal semantics
 
 The canonical model distinguishes:

@@ -13,7 +13,8 @@
     "test": "rm -rf .tmp/test && tsc -p tsconfig.test.json && node .tmp/test/test/run.js",
     "check": "npm run typecheck && npm test && npm run build",
     "e2e:omniharness-hindsight": "npm run build && node scripts/live-omniharness-hindsight-e2e.mjs",
-    "e2e:verified-retrieval": "bash scripts/run-live-verified-retrieval-local.sh"
+    "e2e:verified-retrieval": "bash scripts/run-live-verified-retrieval-local.sh",
+    "pilot:memory-distillation": "npm run build && node scripts/production-pilot/memory-distillation-pilot.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
