@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -28,6 +28,9 @@ const runStamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
 const runId = `pilot_${runStamp}`;
 
 const home = process.env.HOME || homedir();
+const pilotEnvFile = resolve(
+  process.env.DLMF_PILOT_ENV_FILE || join(home, ".config", "dlmf", "production-pilot.env"),
+);
 const hermesHome = resolve(process.env.HERMES_HOME || join(home, ".hermes"));
 const hermesDb = resolve(process.env.DLMF_PILOT_HERMES_DB || join(hermesHome, "state.db"));
 const reportRoot = resolve(
@@ -65,6 +68,30 @@ const CATEGORIES = [
   "preference_change",
   "inferred_insight",
 ];
+
+function readPersistedPilotDatabaseUrl() {
+  if (!existsSync(pilotEnvFile)) return undefined;
+  const text = readFileSync(pilotEnvFile, "utf8");
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice("export ".length);
+    const index = line.indexOf("=");
+    if (index < 1) continue;
+    const key = line.slice(0, index).trim();
+    if (key !== "DLMF_PILOT_DATABASE_URL") continue;
+    let value = line.slice(index + 1).trim();
+    if (value.length >= 2 && value[0] === value.at(-1) && ["'", '"'].includes(value[0])) {
+      value = value.slice(1, -1);
+    }
+    return value || undefined;
+  }
+  return undefined;
+}
+
+function pilotDatabaseUrl() {
+  return process.env.DLMF_PILOT_DATABASE_URL || readPersistedPilotDatabaseUrl();
+}
 
 function clampInt(raw, fallback, min, max) {
   const parsed = raw == null ? fallback : Number.parseInt(raw, 10);
@@ -491,7 +518,7 @@ async function runPreflight() {
   assertPilotSafety();
   const selected = readPilotSource(hermesDb);
   const hindsightConnection = await resolveHindsightConnection();
-  const databaseUrl = process.env.DLMF_PILOT_DATABASE_URL;
+  const databaseUrl = pilotDatabaseUrl();
 
   let hindsightHealth = "unavailable";
   let hindsightVersion = "unknown";
@@ -513,6 +540,23 @@ async function runPreflight() {
     hindsightHealth = "unavailable";
   }
 
+  let postgresHealth = nonEmptyString(databaseUrl) ? "unavailable" : "unconfigured";
+  if (nonEmptyString(databaseUrl)) {
+    const probePool = new Pool({
+      connectionString: databaseUrl,
+      max: 1,
+      connectionTimeoutMillis: 5_000,
+    });
+    try {
+      await probePool.query("SELECT 1 AS ready");
+      postgresHealth = "healthy";
+    } catch {
+      postgresHealth = "unavailable";
+    } finally {
+      await probePool.end().catch(() => undefined);
+    }
+  }
+
   const localHints = postgresLocalHints();
   const target = redactedDatabaseTarget(databaseUrl);
   const endpointKind =
@@ -527,7 +571,7 @@ async function runPreflight() {
   console.log(
     `Hindsight: mode=${hindsightConnection.mode} endpoint=${endpointKind} health=${hindsightHealth} version=${hindsightVersion}`,
   );
-  console.log(`DLMF PostgreSQL URL configured: ${nonEmptyString(databaseUrl)}`);
+  console.log(`DLMF PostgreSQL: configured=${nonEmptyString(databaseUrl)} source=${process.env.DLMF_PILOT_DATABASE_URL ? "environment" : existsSync(pilotEnvFile) ? "private_file" : "none"} health=${postgresHealth}`);
   console.log(
     `Local PostgreSQL hints: psql=${localHints.psql ? "yes" : "no"} pg_isready=${localHints.pgIsReady ? "yes" : "no"} socket5432=${localHints.defaultSocketVisible}`,
   );
@@ -541,11 +585,13 @@ async function runPreflight() {
     existsSync(hermesDb) &&
     selected.length === 5 &&
     hindsightHealth === "healthy" &&
-    nonEmptyString(databaseUrl);
+    postgresHealth === "healthy";
 
   console.log(`PRODUCTION_PILOT_PREFLIGHT=${ready ? "PASS" : "BLOCKED"}`);
   if (!nonEmptyString(databaseUrl)) {
     console.log("BLOCKER=DLMF_PILOT_DATABASE_URL_NOT_CONFIGURED");
+  } else if (postgresHealth !== "healthy") {
+    console.log("BLOCKER=DLMF_PILOT_DATABASE_NOT_REACHABLE");
   }
   if (hindsightHealth !== "healthy") {
     console.log("BLOCKER=HINDSIGHT_NOT_HEALTHY");
@@ -611,9 +657,9 @@ async function projectCanonicalRevision(client, revision) {
 
 async function runApply(selected, manifest) {
   assertPilotSafety();
-  const databaseUrl = process.env.DLMF_PILOT_DATABASE_URL;
+  const databaseUrl = pilotDatabaseUrl();
   if (!nonEmptyString(databaseUrl)) {
-    throw new Error("DLMF_PILOT_DATABASE_URL is required with --apply.");
+    throw new Error("DLMF pilot PostgreSQL is not configured; run pilot:memory-distillation:bootstrap-postgres or set DLMF_PILOT_DATABASE_URL.");
   }
   const hindsightConnection = await resolveHindsightConnection();
   const HindsightClient = await loadHindsightClientConstructor();

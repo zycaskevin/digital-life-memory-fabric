@@ -119,6 +119,39 @@ Review that all five categories are reasonable before apply. `selection=fallback
 means the heuristic could not find a strong semantic match and the session should
 be manually reviewed before continuing.
 
+## Step 1.25 — bootstrap isolated DLMF PostgreSQL
+
+If preflight reports `DLMF_PILOT_DATABASE_URL_NOT_CONFIGURED`, create an isolated
+local embedded PostgreSQL for DLMF pilot state:
+
+```bash
+npm run pilot:memory-distillation:bootstrap-postgres
+```
+
+The bootstrap uses a separate pg0 instance named `dlmf-pilot-v011`, default local
+port `55432`, database/user `dlmf_pilot`, and a generated password. The password
+is never printed. The connection URL is stored in:
+
+```text
+~/.config/dlmf/production-pilot.env
+```
+
+with mode `0600`. The pilot runner automatically reads this private file when
+`DLMF_PILOT_DATABASE_URL` is not supplied explicitly. This is a different
+PostgreSQL instance from Hindsight's provider storage.
+
+Expected marker:
+
+```ini
+DLMF_PILOT_PG0_BOOTSTRAP=PASS
+```
+
+If port 55432 is already occupied, rerun with a different local port, for example:
+
+```bash
+DLMF_PILOT_PG_PORT=55433 npm run pilot:memory-distillation:bootstrap-postgres
+```
+
 ## Step 1.5 — infrastructure preflight
 
 After the five-session plan passes, run the read-only infrastructure preflight:
@@ -131,8 +164,8 @@ npm run pilot:memory-distillation:preflight
 ```
 
 The preflight checks the real Hermes sample, Hindsight mode/health/version, whether
-`DLMF_PILOT_DATABASE_URL` is configured, and whether local PostgreSQL client/socket
-clues are present. It prints no database password or Hindsight API key and creates no
+DLMF PostgreSQL is configured (environment or private bootstrap file), performs a
+real read-only `SELECT 1` connectivity probe, and reports local PostgreSQL clues. It prints no database password or Hindsight API key and creates no
 schema or memory. A blocked preflight exits with status 2 and emits explicit
 `BLOCKER=...` markers.
 
