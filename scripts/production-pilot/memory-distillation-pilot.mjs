@@ -1046,8 +1046,14 @@ async function runApply(selected, manifest) {
     }
 
     const inferenceSample = sessionReports.find((entry) => entry.category === "inferred_insight");
-    let reflection = { status: "not_run", produced: 0, candidates: [] };
-    if (inferenceSample && allCanonicalRevisions.length > 0) {
+    const allSessionsComplete = sessionReports.length === CATEGORIES.length && sessionReports.every((entry) => entry.receipt.status === "complete");
+    let reflection = {
+      status: allSessionsComplete ? "not_run" : "skipped",
+      produced: 0,
+      candidates: [],
+      ...(allSessionsComplete ? {} : { reason: "session_failures_present" }),
+    };
+    if (allSessionsComplete && inferenceSample && inferenceSample.receipt.canonicalMemoryIds.length > 0) {
       const relatedIds = new Set(inferenceSample.receipt.canonicalMemoryIds);
       const related = allCanonicalRevisions.filter((revision) => relatedIds.has(revision.memoryId));
       const reflectionSource = related.length > 0 ? related : allCanonicalRevisions.slice(0, 5);

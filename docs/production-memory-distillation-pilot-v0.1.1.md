@@ -316,3 +316,9 @@ This reports per-source receipt status, candidate/canonical counts, prune eligib
 and aggregate candidate/head/revision/change counts. It never prints canonical text or
 raw transcripts. Reflection errors are now captured into the private run report; they
 do not erase the completed session evidence.
+
+When any of the five session receipts is not `complete`, Reflection is skipped with
+`reason=session_failures_present`. The pilot never reflects over a partial or
+non-representative sample. The run inspector prints bounded/sanitized receipt error
+messages and classifies common Hindsight failures (auth, context limit, payload size,
+timeout, async requirement, reflect tool-call capability).

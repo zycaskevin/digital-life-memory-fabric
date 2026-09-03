@@ -31,6 +31,40 @@ function parseEnvFile(path) {
   return values;
 }
 
+function sanitizeMessage(message) {
+  let text = String(message ?? "");
+  text = text.replace(/(postgres(?:ql)?:\/\/)[^@\s/]+@/gi, "$1<redacted>@");
+  text = text.replace(/(https?:\/\/)[^/@\s:]+:[^/@\s]+@/gi, "$1<redacted>@");
+  text = text.replace(/(api[_-]?key|token|password|authorization)(["'=:\s]+)[^\s,;}\"]+/gi, "$1$2<redacted>");
+  return text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+}
+
+function classifyProviderError(message) {
+  const text = String(message ?? "").toLowerCase();
+  if (text.includes("authentication failed") || text.includes("invalid api key")) {
+    return "HINDSIGHT_AUTH_INVALID";
+  }
+  if (
+    text.includes("context length") ||
+    text.includes("context window") ||
+    text.includes("too many tokens") ||
+    text.includes("maximum context")
+  ) {
+    return "HINDSIGHT_CONTEXT_LIMIT";
+  }
+  if (text.includes("request entity too large") || text.includes("payload too large") || text.includes("413")) {
+    return "HINDSIGHT_PAYLOAD_TOO_LARGE";
+  }
+  if (text.includes("timed out") || text.includes("timeout")) return "HINDSIGHT_PROVIDER_TIMEOUT";
+  if (text.includes("batch api is enabled") && text.includes("async=false")) {
+    return "HINDSIGHT_REQUIRES_ASYNC_RETAIN";
+  }
+  if (text.includes("tool-calling model") || text.includes("no usable tool call")) {
+    return "HINDSIGHT_REFLECT_TOOL_CALL_UNSUPPORTED";
+  }
+  return "UNCLASSIFIED_PROVIDER_FAILURE";
+}
+
 const persisted = parseEnvFile(envFile);
 const databaseUrl = process.env.DLMF_PILOT_DATABASE_URL || persisted.DLMF_PILOT_DATABASE_URL;
 if (!databaseUrl) {
@@ -62,7 +96,7 @@ try {
       SELECT source_id, status, canonicalization_outcome,
              cardinality(candidate_ids) AS candidate_count,
              cardinality(canonical_memory_ids) AS canonical_count,
-             prune_eligible, retention_state, attempts,
+             prune_eligible, retention_state, attempts, errors, warnings,
              jsonb_array_length(errors) AS error_count,
              jsonb_array_length(warnings) AS warning_count
         FROM memory_distillation_receipts
@@ -89,6 +123,12 @@ try {
       console.log(
         `source=${row.source_id} status=${row.status}/${row.canonicalization_outcome} candidates=${row.candidate_count} canonical=${row.canonical_count} pruneEligible=${row.prune_eligible} retention=${row.retention_state} errors=${row.error_count} warnings=${row.warning_count} attempts=${row.attempts}`,
       );
+      for (const error of row.errors ?? []) {
+        console.log(
+          `  stage=${error.stage ?? "unknown"} code=${error.code ?? "unknown"} class=${classifyProviderError(error.message)}`,
+        );
+        console.log(`  message=${sanitizeMessage(error.message)}`);
+      }
     }
     const t = totals.rows[0] ?? {};
     console.log(
