@@ -42,6 +42,9 @@ const archiveRoot = resolve(
 const manifestPath = resolve(
   process.env.DLMF_PILOT_MANIFEST || join(reportRoot, `${runId}-manifest.json`),
 );
+const planManifestPath = process.env.DLMF_PILOT_PLAN_MANIFEST
+  ? resolve(process.env.DLMF_PILOT_PLAN_MANIFEST)
+  : undefined;
 const reportPath = resolve(
   process.env.DLMF_PILOT_REPORT || join(reportRoot, `${runId}-report.json`),
 );
@@ -355,6 +358,117 @@ function readPilotSource(dbPath) {
     }
     db.exec("COMMIT");
     return choosePilotSessions(sessions);
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+function loadPlanManifest(path) {
+  if (!path) {
+    throw new Error("DLMF_PILOT_PLAN_MANIFEST is required with --apply.");
+  }
+  if (!existsSync(path)) {
+    throw new Error(`Production pilot plan manifest not found: ${path}`);
+  }
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.sessions)) {
+    throw new Error("Production pilot plan manifest is malformed.");
+  }
+  if (parsed.source?.databasePath !== hermesDb) {
+    throw new Error("Production pilot plan manifest was created from a different Hermes database path.");
+  }
+  if (parsed.sessions.length !== CATEGORIES.length) {
+    throw new Error("Production pilot plan manifest must contain exactly five sessions.");
+  }
+  const categories = new Set(parsed.sessions.map((entry) => entry.category));
+  const sessionIds = new Set(parsed.sessions.map((entry) => entry.sessionId));
+  if (
+    categories.size !== CATEGORIES.length ||
+    !CATEGORIES.every((category) => categories.has(category)) ||
+    sessionIds.size !== CATEGORIES.length
+  ) {
+    throw new Error("Production pilot plan manifest must contain five distinct canonical categories/session IDs.");
+  }
+  for (const entry of parsed.sessions) {
+    if (!nonEmptyString(entry.sessionId) || !nonEmptyString(entry.transcriptChecksum)) {
+      throw new Error("Production pilot plan manifest is missing session IDs or transcript checksums.");
+    }
+  }
+  return parsed;
+}
+
+function readPinnedPilotSource(dbPath, planManifest) {
+  if (!existsSync(dbPath)) throw new Error(`Hermes state.db not found: ${dbPath}`);
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    db.exec("BEGIN");
+    const sessionStmt = db.prepare(
+      `SELECT id, source, profile_name, title, message_count, started_at, ended_at,
+              last_activity_at, end_reason, archived, expiry_finalized, hidden
+         FROM sessions
+        WHERE id=?`,
+    );
+    const messageStmt = db.prepare(
+      `SELECT id, role, content, timestamp
+         FROM messages
+        WHERE session_id=?
+          AND role IN ('user','assistant')
+          AND content IS NOT NULL
+        ORDER BY id ASC`,
+    );
+    const cutoffMs = Date.now() - 48 * 60 * 60 * 1000;
+    const selected = [];
+
+    for (const planned of planManifest.sessions) {
+      const row = sessionStmt.get(planned.sessionId);
+      if (!row) throw new Error(`Pinned Hermes session disappeared: ${planned.sessionId}`);
+      if (Number(row.hidden) === 1) {
+        throw new Error(`Pinned Hermes session became hidden: ${planned.sessionId}`);
+      }
+      if (!sessionIsCompleted(row, cutoffMs)) {
+        throw new Error(`Pinned Hermes session is no longer eligible as completed/quiescent: ${planned.sessionId}`);
+      }
+      const messages = messageStmt
+        .all(row.id)
+        .map((message) => ({
+          id: Number(message.id),
+          role: String(message.role),
+          content: String(message.content ?? ""),
+          timestamp: message.timestamp == null ? undefined : message.timestamp,
+        }))
+        .filter((message) => normalizeMessageContent(message.content).length > 0);
+      if (messages.length < 2) {
+        throw new Error(`Pinned Hermes session no longer has enough messages: ${planned.sessionId}`);
+      }
+      const transcript = renderTranscript(messages);
+      if (!transcript || transcript.length > maxTranscriptChars) {
+        throw new Error(`Pinned Hermes transcript is empty or exceeds pilot bounds: ${planned.sessionId}`);
+      }
+      const transcriptChecksum = sha256Text(transcript);
+      if (transcriptChecksum !== planned.transcriptChecksum) {
+        throw new Error(`Pinned Hermes transcript changed after plan: ${planned.sessionId}`);
+      }
+      selected.push({
+        category: planned.category,
+        selection: planned.selection ?? "plan_pinned",
+        score: Number(planned.score ?? 0),
+        session: {
+          ...row,
+          id: String(row.id),
+          title: row.title == null ? "" : String(row.title),
+          messages,
+          transcript,
+          transcriptChecksum,
+        },
+      });
+    }
+    db.exec("COMMIT");
+    return selected;
   } catch (error) {
     try {
       db.exec("ROLLBACK");
@@ -873,8 +987,16 @@ async function main() {
     return;
   }
 
-  const selected = readPilotSource(hermesDb);
+  const planManifest = APPLY ? loadPlanManifest(planManifestPath) : undefined;
+  const selected = APPLY
+    ? readPinnedPilotSource(hermesDb, planManifest)
+    : readPilotSource(hermesDb);
   const manifest = manifestFor(selected);
+  if (APPLY) {
+    manifest.planManifest = planManifestPath;
+    manifest.planRunId = planManifest.runId;
+    manifest.planPinned = true;
+  }
   await writePrivateJson(manifestPath, manifest);
 
   console.log(`DLMF Production Pilot ${PLAN_ONLY ? "PLAN" : "APPLY"}`);
@@ -884,6 +1006,11 @@ async function main() {
     console.log(
       `${item.category}: session=${item.sessionId} messages=${item.extractedMessageCount} chars=${item.transcriptChars} selection=${item.selection}`,
     );
+  }
+
+  if (APPLY) {
+    console.log(`PLAN_PINNED=${planManifestPath}`);
+    console.log(`PLAN_RUN_ID=${planManifest.runId}`);
   }
 
   if (PLAN_ONLY) {

@@ -184,6 +184,10 @@ PRODUCTION_PILOT_PREFLIGHT=PASS
 
 ## Step 2 — apply to isolated pilot stores
 
+Apply must be pinned to the exact Plan manifest that was reviewed. The runner reloads
+only those five Hermes session IDs and recomputes each transcript SHA-256. If any
+transcript changed after Plan, Apply fails before any Hindsight/PostgreSQL write.
+
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
 runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0003
 inside that schema. It does not use `public`.
@@ -194,7 +198,7 @@ DLMF canonical package dependencies.
 ```bash
 HERMES_HOME="$HOME/.hermes" \
 DLMF_PILOT_HERMES_DB="$HOME/.hermes/state.db" \
-DLMF_PILOT_DATABASE_URL='postgres://...' \
+DLMF_PILOT_PLAN_MANIFEST="$HOME/.local/state/dlmf/production-pilot/<reviewed-plan>-manifest.json" \
 OMNIHARNESS_DIR='/path/to/OmniHarness' \
 npm run pilot:memory-distillation -- --apply
 ```
@@ -240,6 +244,7 @@ The detailed report is written with file mode `0600` under:
 
 It contains, for each sample:
 
+- reviewed Plan manifest/run ID and pinned transcript checksum;
 - raw transcript checksum/archive reference;
 - distillation receipt/outcome;
 - candidate text/type/epistemic status;
@@ -256,6 +261,8 @@ The pilot is accepted only if all of the following are manually reviewed:
 
 ```ini
 FIVE_REAL_SESSIONS_SELECTED=PASS
+PLAN_MANIFEST_PINNED=PASS
+TRANSCRIPT_CHECKSUMS_UNCHANGED=PASS
 RAW_ARCHIVE_VERIFIED=PASS
 HINDSIGHT_DISTILLATION_REAL=PASS
 CANDIDATE_QUALITY_REVIEW=PASS
