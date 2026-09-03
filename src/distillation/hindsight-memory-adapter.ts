@@ -41,6 +41,22 @@ export interface HindsightRecallResponse {
   trace?: Record<string, unknown> | null;
 }
 
+export interface HindsightMemoryUnit extends HindsightRecallResult {
+  bank_id?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  consolidation_state?: string | null;
+  source_memory_ids?: string[];
+  invalidated_by?: string | null;
+}
+
+export interface HindsightListMemoriesResponse {
+  items: HindsightMemoryUnit[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface HindsightReflectFact {
   id?: string | null;
   text: string;
@@ -76,6 +92,16 @@ export interface HindsightClientPort {
       async?: boolean;
     },
   ): Promise<HindsightRetainResponse>;
+  listMemories(
+    bankId: string,
+    options?: {
+      limit?: number;
+      offset?: number;
+      type?: HindsightFactType;
+      state?: "valid" | "invalidated";
+      documentId?: string;
+    },
+  ): Promise<HindsightListMemoriesResponse>;
   recall(
     bankId: string,
     query: string,
@@ -129,6 +155,9 @@ const memoryClasses = new Set<MemoryClass>([
   "preference",
   "relationship_fact",
 ]);
+
+const DISTILLATION_MEMORY_PAGE_SIZE = 1000;
+const DISTILLATION_MEMORY_MAX_UNITS = 10_000;
 
 const epistemicStatuses = new Set<EpistemicStatus>([
   "observed",
@@ -215,6 +244,45 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     return { distillation, projection };
   }
 
+  private async listDocumentMemories(
+    bankId: string,
+    documentId: string,
+  ): Promise<HindsightMemoryUnit[]> {
+    const items: HindsightMemoryUnit[] = [];
+    let offset = 0;
+    while (true) {
+      const page = await this.options.client.listMemories(bankId, {
+        limit: DISTILLATION_MEMORY_PAGE_SIZE,
+        offset,
+        state: "valid",
+        documentId,
+      });
+      if (!Number.isSafeInteger(page.total) || page.total < 0) {
+        throw new Error("Hindsight listMemories returned an invalid total");
+      }
+      if (page.total > DISTILLATION_MEMORY_MAX_UNITS) {
+        throw new Error(
+          `Hindsight document produced too many memory units: ${page.total} > ${DISTILLATION_MEMORY_MAX_UNITS}`,
+        );
+      }
+      if (!Array.isArray(page.items)) {
+        throw new Error("Hindsight listMemories returned invalid items");
+      }
+      for (const item of page.items) {
+        if (item.document_id !== documentId) {
+          throw new Error("Hindsight document-scoped memory listing returned a mismatched document_id");
+        }
+        items.push(item);
+      }
+      if (items.length >= page.total || page.items.length === 0) break;
+      offset += page.items.length;
+      if (offset > DISTILLATION_MEMORY_MAX_UNITS) {
+        throw new Error("Hindsight document memory pagination exceeded the bounded limit");
+      }
+    }
+    return items;
+  }
+
   async distill(request: DistillationRequest): Promise<DistillationResult> {
     const { distillation } = this.bankIds(request.experience.scope);
     const providerRunId = `hs_distill_${randomUUID().replaceAll("-", "")}`;
@@ -249,16 +317,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       throw new Error("Hindsight retain did not durably accept the source experience");
     }
 
-    const recalled = await this.options.client.recall(
-      distillation,
-      request.experience.content,
-      {
-        budget: this.options.recallBudget ?? "mid",
-        includeEntities: true,
-        trace: true,
-        queryTimestamp: request.requestedAt,
-      },
-    );
+    const documentMemories = await this.listDocumentMemories(distillation, documentId);
 
     const sourceExperienceRefs: SourceExperienceRef[] = [
       {
@@ -278,8 +337,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
 
     // Strict document filtering prevents unrelated memories already present in the
     // distillation bank from becoming candidates for this source experience.
-    const candidates = recalled.results
-      .filter((result) => result.document_id === documentId)
+    const candidates = documentMemories
       .filter((result) => result.text.trim().length > 0)
       .map((result) => {
         const mapped = mappedType(result);
@@ -323,9 +381,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       adapterVersion: this.adapterVersion,
       ...(this.providerVersion === undefined ? {} : { providerVersion: this.providerVersion }),
       candidates,
-      warnings: recalled.results.some((result) => result.document_id == null)
-        ? ["ignored_hindsight_results_without_document_id"]
-        : [],
+      warnings: [],
     };
   }
 

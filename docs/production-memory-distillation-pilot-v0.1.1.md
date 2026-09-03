@@ -322,3 +322,22 @@ When any of the five session receipts is not `complete`, Reflection is skipped w
 non-representative sample. The run inspector prints bounded/sanitized receipt error
 messages and classifies common Hindsight failures (auth, context limit, payload size,
 timeout, async requirement, reflect tool-call capability).
+
+## Long-session distillation
+
+Hindsight Recall accepts a bounded natural-language query (the production 0.9.2
+instance rejected queries above 500 tokens). Production transcripts can be tens of
+thousands of tokens, so DLMF must never use transcript content itself as the recall
+query after retain.
+
+The production adapter instead performs:
+
+```text
+retain(full archived transcript, documentId=<source>)
+  -> listMemories(documentId=<source>, state=valid, paginated)
+  -> provider-neutral candidate drafts
+```
+
+Runtime `recall()` remains a separate path for short natural-language retrieval from
+the canonical projection plane. Document enumeration is bounded to 10,000 memory units
+per source; exceeding that bound fails closed and blocks prune eligibility.

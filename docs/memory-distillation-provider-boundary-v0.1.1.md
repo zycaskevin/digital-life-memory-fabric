@@ -113,11 +113,18 @@ The adapter fails closed if the two bank IDs are equal.
 ### `distill()`
 
 1. Retains the archived source experience into the **distillation plane**.
-2. Recalls extraction results from that plane.
-3. Accepts only results whose Hindsight `document_id` matches the current source
-   experience.
-4. Maps them into provider-neutral candidate drafts.
+2. Enumerates the resulting Hindsight memory units with a **document-scoped**
+   `listMemories(documentId=...)` call. Distillation never sends the raw transcript
+   as a natural-language recall query.
+3. Requires every returned unit to carry the exact current Hindsight `document_id`;
+   a mismatch fails closed.
+4. Paginates the document enumeration with explicit bounds before mapping provider
+   units into candidate drafts.
 5. Preserves Hindsight IDs as evidence/provider references, never canonical IDs.
+
+This distinction is intentional: Hindsight `recall()` is a natural-language retrieval
+API with a bounded query length and is reserved for runtime evidence retrieval from the
+canonical projection plane. Distillation uses document identity, not semantic search.
 
 ### `recall()`
 

@@ -55,17 +55,21 @@ EPISTEMIC_MODEL=PASS
 `HindsightMemoryAdapter` maps:
 
 ```text
-retain + source-scoped recall -> distill
-recall                        -> MemoryEvidence
-reflect                       -> DerivedMemoryCandidate draft
+retain + document-scoped listMemories -> distill
+recall                                -> MemoryEvidence
+reflect                               -> DerivedMemoryCandidate draft
 ```
 
 The adapter preserves Hindsight identifiers as evidence/provider references and
 keeps the distillation and canonical projection banks distinct.
 
-Mocked Hindsight contract tests are included. The adapter's `HindsightClientPort`
-is the real-provider seam; no Hindsight credentials or service are required by
-the default unit suite.
+Mocked Hindsight contract tests are included, including a regression proving that a
+long transcript is never used as a recall query and a pagination test for document
+enumeration. A wire-level smoke test with the real Hindsight TypeScript client verifies
+that the production path is `POST /memories` followed by
+`GET /memories/list?...&document_id=...`, with no `/recall` request. The adapter's
+`HindsightClientPort` remains the real-provider seam; no Hindsight credentials or
+service are required by the default unit suite.
 
 ```ini
 HINDSIGHT_ADAPTER=PASS

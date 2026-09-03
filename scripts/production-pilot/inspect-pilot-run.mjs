@@ -41,6 +41,9 @@ function sanitizeMessage(message) {
 
 function classifyProviderError(message) {
   const text = String(message ?? "").toLowerCase();
+  if (text.includes("query too long") && text.includes("maximum of 500")) {
+    return "HINDSIGHT_RECALL_QUERY_LIMIT";
+  }
   if (text.includes("authentication failed") || text.includes("invalid api key")) {
     return "HINDSIGHT_AUTH_INVALID";
   }

@@ -18,6 +18,7 @@ import {
   ValidationError,
   type HindsightClientPort,
   type HindsightRecallResponse,
+  type HindsightListMemoriesResponse,
   type HindsightReflectResponse,
   type HindsightRetainResponse,
   type MemoryDistillationProvider,
@@ -38,6 +39,10 @@ class FakeHindsightClient implements HindsightClientPort {
     content: string;
     options: Parameters<HindsightClientPort["retain"]>[2];
   }> = [];
+  readonly listMemoriesCalls: Array<{
+    bankId: string;
+    options: Parameters<HindsightClientPort["listMemories"]>[1];
+  }> = [];
   readonly recallCalls: Array<{
     bankId: string;
     query: string;
@@ -50,6 +55,7 @@ class FakeHindsightClient implements HindsightClientPort {
   }> = [];
 
   recallResponse: HindsightRecallResponse = { results: [] };
+  listMemoriesResponse: HindsightListMemoriesResponse = { items: [], total: 0, limit: 1000, offset: 0 };
   reflectResponse: HindsightReflectResponse = { text: "" };
   retainResponse: HindsightRetainResponse | undefined;
   retainFailure?: Error;
@@ -62,6 +68,25 @@ class FakeHindsightClient implements HindsightClientPort {
     this.retainCalls.push({ bankId, content, options });
     if (this.retainFailure !== undefined) throw this.retainFailure;
     return this.retainResponse ?? { success: true, bank_id: bankId, items_count: 1, async: false };
+  }
+
+  async listMemories(
+    bankId: string,
+    options?: Parameters<HindsightClientPort["listMemories"]>[1],
+  ) {
+    this.listMemoriesCalls.push({ bankId, options });
+    const documentId = options?.documentId;
+    const all = this.listMemoriesResponse.items.filter((item) =>
+      documentId === undefined ? true : item.document_id === documentId,
+    );
+    const offset = options?.offset ?? 0;
+    const limit = options?.limit ?? 100;
+    return {
+      items: all.slice(offset, offset + limit),
+      total: all.length,
+      limit,
+      offset,
+    };
   }
 
   async recall(
@@ -123,10 +148,11 @@ function setSinglePreferenceResult(
   sourceId: string,
   providerId = "hs_fact_1",
 ): void {
-  client.recallResponse = {
-    results: [
+  client.listMemoriesResponse = {
+    items: [
       {
         id: providerId,
+        bank_id: "nancy:distillation",
         text: "Arthur prefers small-step technical debugging.",
         type: "observation",
         document_id: `hermes_session:${sourceId}`,
@@ -140,6 +166,9 @@ function setSinglePreferenceResult(
         },
       },
     ],
+    total: 1,
+    limit: 1000,
+    offset: 0,
   };
 }
 
@@ -219,6 +248,102 @@ test("MD-004: Hindsight adapter enforces distinct distillation and canonical pro
     ValidationError,
   );
   assert.equal(client.recallCalls.length, 0);
+});
+
+test("MD-004 regression: long transcript distillation never uses recall query", async () => {
+  await withArchive(async (archive) => {
+    const client = new FakeHindsightClient();
+    const sourceId = "session-long-document";
+    const documentId = `hermes_session:${sourceId}`;
+    const longTranscript = Array.from({ length: 3000 }, (_, i) => `turn-${i} preference and project detail`).join(" ");
+    client.listMemoriesResponse = {
+      items: [
+        {
+          id: "hs-long-1",
+          bank_id: "nancy:distillation",
+          text: "Arthur prefers bounded document-scoped distillation.",
+          type: "world",
+          document_id: documentId,
+          metadata: { dlmf_epistemic_status: "synthesized" },
+        },
+      ],
+      total: 1,
+      limit: 1000,
+      offset: 0,
+    };
+    const archived = await archive.archive({
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: longTranscript,
+      contentType: "text/plain",
+    });
+    const result = await createAdapter(client).distill({
+      experience: {
+        scope,
+        sourceType: archived.sourceType,
+        sourceId: archived.sourceId,
+        content: archived.content,
+        contentType: archived.contentType,
+        archiveRef: archived.archiveRef,
+        checksum: archived.checksum,
+      },
+      distillationPolicyVersion: "distill-v1",
+      requestedAt: "2026-09-03T02:01:00.000Z",
+    });
+
+    assert.equal(result.candidates.length, 1);
+    assert.equal(client.recallCalls.length, 0, "distillation must never send the transcript to recall");
+    assert.equal(client.listMemoriesCalls.length, 1);
+    assert.equal(client.listMemoriesCalls[0]?.options?.documentId, documentId);
+    assert.equal(client.listMemoriesCalls[0]?.options?.state, "valid");
+  });
+});
+
+test("MD-004 document enumeration paginates without recall", async () => {
+  await withArchive(async (archive) => {
+    const client = new FakeHindsightClient();
+    const sourceId = "session-pagination";
+    const documentId = `hermes_session:${sourceId}`;
+    client.listMemoriesResponse = {
+      items: Array.from({ length: 1001 }, (_, index) => ({
+        id: `hs-page-${index}`,
+        bank_id: "nancy:distillation",
+        text: `memory unit ${index}`,
+        type: "world",
+        document_id: documentId,
+      })),
+      total: 1001,
+      limit: 1000,
+      offset: 0,
+    };
+    const archived = await archive.archive({
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: "bounded source",
+      contentType: "text/plain",
+    });
+    const result = await createAdapter(client).distill({
+      experience: {
+        scope,
+        sourceType: archived.sourceType,
+        sourceId: archived.sourceId,
+        content: archived.content,
+        contentType: archived.contentType,
+        archiveRef: archived.archiveRef,
+        checksum: archived.checksum,
+      },
+      distillationPolicyVersion: "distill-v1",
+      requestedAt: "2026-09-03T02:01:00.000Z",
+    });
+
+    assert.equal(result.candidates.length, 1001);
+    assert.equal(client.listMemoriesCalls.length, 2);
+    assert.equal(client.listMemoriesCalls[0]?.options?.offset, 0);
+    assert.equal(client.listMemoriesCalls[1]?.options?.offset, 1000);
+    assert.equal(client.recallCalls.length, 0);
+  });
 });
 
 test("MD-004 hardening: asynchronous Hindsight retain cannot produce a completed distillation", async () => {
