@@ -78,6 +78,27 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function hermesTimestampToMillis(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const trimmed = value.trim();
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric > 10_000_000_000 ? numeric : numeric * 1000;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  }
+  return Number.NaN;
+}
+
+function hermesTimestampToIso(value) {
+  const millis = hermesTimestampToMillis(value);
+  return Number.isFinite(millis) ? new Date(millis).toISOString() : undefined;
+}
+
 function safeJsonParse(value) {
   if (!nonEmptyString(value)) return undefined;
   try {
@@ -113,7 +134,8 @@ function renderTranscript(messages) {
   return messages
     .map((message) => {
       const label = message.role === "user" ? "User" : "Assistant";
-      const timestamp = nonEmptyString(message.timestamp) ? ` [${message.timestamp}]` : "";
+      const timestampIso = hermesTimestampToIso(message.timestamp);
+      const timestamp = timestampIso ? ` [${timestampIso}]` : "";
       return `${label}${timestamp}:\n${normalizeMessageContent(message.content)}`;
     })
     .filter((value) => !value.endsWith(":\n"))
@@ -242,9 +264,8 @@ function choosePilotSessions(sessions) {
 
 function sessionIsCompleted(row, cutoffMs) {
   if (Number(row.archived) === 1 || Number(row.expiry_finalized) === 1) return true;
-  if (nonEmptyString(row.ended_at)) return true;
-  const activity = row.last_activity_at || row.started_at;
-  const activityMs = nonEmptyString(activity) ? Date.parse(activity) : Number.NaN;
+  if (Number.isFinite(hermesTimestampToMillis(row.ended_at))) return true;
+  const activityMs = hermesTimestampToMillis(row.last_activity_at ?? row.started_at);
   return Number.isFinite(activityMs) && activityMs <= cutoffMs;
 }
 
@@ -288,7 +309,7 @@ function readPilotSource(dbPath) {
           id: Number(message.id),
           role: String(message.role),
           content: String(message.content ?? ""),
-          timestamp: message.timestamp == null ? undefined : String(message.timestamp),
+          timestamp: message.timestamp == null ? undefined : message.timestamp,
         }))
         .filter((message) => normalizeMessageContent(message.content).length > 0);
       if (messages.length < 2) continue;
@@ -356,9 +377,9 @@ function manifestFor(selected) {
       extractedMessageCount: session.messages.length,
       transcriptChars: session.transcript.length,
       transcriptChecksum: session.transcriptChecksum,
-      startedAt: session.started_at,
-      endedAt: session.ended_at,
-      lastActivityAt: session.last_activity_at,
+      startedAt: hermesTimestampToIso(session.started_at),
+      endedAt: hermesTimestampToIso(session.ended_at),
+      lastActivityAt: hermesTimestampToIso(session.last_activity_at),
       endReason: session.end_reason,
     })),
   };
@@ -548,8 +569,12 @@ async function runApply(selected, manifest) {
         sourceId: session.id,
         content: session.transcript,
         contentType: "text/plain; profile=hermes-transcript",
-        ...(session.started_at ? { createdAt: String(session.started_at) } : {}),
-        ...(session.started_at ? { observedAt: String(session.started_at) } : {}),
+        ...(hermesTimestampToIso(session.started_at)
+          ? { createdAt: hermesTimestampToIso(session.started_at) }
+          : {}),
+        ...(hermesTimestampToIso(session.started_at)
+          ? { observedAt: hermesTimestampToIso(session.started_at) }
+          : {}),
         metadata: {
           pilotCategory: category,
           source: session.source || "",
