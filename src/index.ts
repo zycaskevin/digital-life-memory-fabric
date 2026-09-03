@@ -9,6 +9,8 @@ export * from "./materialization/types.js";
 export * from "./operations/central-operations-service.js";
 export * from "./operations/central-operations-store.js";
 export * from "./operations/types.js";
+export * from "./retrieval/types.js";
+export * from "./retrieval/verified-retrieval-service.js";
 export * from "./store/canonical-memory-store.js";
 export * from "./store/in-memory-canonical-memory-store.js";
 export * from "./store/postgres-canonical-memory-store.js";

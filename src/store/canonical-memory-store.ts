@@ -45,6 +45,9 @@ export interface CanonicalMemoryStore {
   transaction<T>(work: (tx: CanonicalMemoryStoreTx) => Promise<T>): Promise<T>;
   getCandidate(candidateId: CandidateId): Promise<MemoryCandidate | undefined>;
   getHead(memoryId: MemoryId): Promise<CanonicalMemoryHead | undefined>;
+  getHeads(
+    memoryIds: readonly MemoryId[],
+  ): Promise<Array<CanonicalMemoryHead | undefined>>;
   getRevision(memoryId: MemoryId, revision: number): Promise<MemoryRevision | undefined>;
   getRevisions(
     references: readonly MemoryRevisionRef[],

@@ -14,8 +14,10 @@ import {
   OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
   RevisionConflictError,
+  VerifiedRetrievalService,
   type MemoryFabricMaterializationEvent,
   type MemoryMaterializationDeliveryPort,
+  type MemoryRetrievalPort,
   type MemoryScope,
 } from "../src/index.js";
 
@@ -113,6 +115,36 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(updated.revision.revision, 2);
     assert.equal(updated.change.commitSeq, 2);
 
+    const retrievalPort: MemoryRetrievalPort = {
+      search: async () => ({
+        providerId: "memory-reference",
+        candidates: [
+          {
+            memoryId: updated.head.memoryId,
+            canonicalRevision: 2,
+            providerId: "memory-reference",
+            providerScore: 0.99,
+          },
+        ],
+        latestMaterializedCommitSeq: 2,
+      }),
+    };
+    const verifiedRetrieval = new VerifiedRetrievalService(
+      verifier,
+      retrievalPort,
+    );
+    const retrieved = await verifiedRetrieval.retrieve({
+      query: "provider abstraction",
+      scope,
+      topK: 5,
+    });
+    assert.equal(retrieved.items.length, 1);
+    assert.equal(retrieved.items[0]?.canonicalRevision, 2);
+    assert.equal(
+      retrieved.items[0]?.revision.canonicalContent.text,
+      "OmniHarness is provider abstraction only and does not own Agent orchestration.",
+    );
+
     const staleCandidate = await candidates.ingest({
       scope,
       origin: { lifeDid: scope.lifeDid, runtimeId: "offline-mac", deviceId: "mac" },
@@ -167,6 +199,15 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.deepEqual(await verifier.verify(created.head.memoryId, scope), {
       decision: "SUPPRESS",
       reason: "TOMBSTONED",
+    });
+    const suppressedRetrieval = await verifiedRetrieval.retrieve({
+      query: "provider abstraction",
+      scope,
+      topK: 5,
+    });
+    assert.equal(suppressedRetrieval.items.length, 0);
+    assert.deepEqual(suppressedRetrieval.verification.suppressionCounts, {
+      TOMBSTONED: 1,
     });
 
     assert.deepEqual(

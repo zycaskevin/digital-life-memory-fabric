@@ -7,6 +7,7 @@ set -euo pipefail
 
 EXPECTED_VERSION="${OMNIHARNESS_HINDSIGHT_EXPECTED_VERSION:-0.9.2}"
 EXPECTED_OMNIHARNESS_COMMIT="${OMNIHARNESS_EXPECTED_COMMIT:-c1ed422adabc731a75270d9f572db9eed63b34ec}"
+LIVE_E2E_SCRIPT="${DLFM_LIVE_E2E_SCRIPT:-scripts/live-omniharness-hindsight-e2e.mjs}"
 PORT="${OMNIHARNESS_HINDSIGHT_PORT:-$((20000 + RANDOM % 20000))}"
 VENV_DIR="${OMNIHARNESS_HINDSIGHT_VENV:-.tmp/hindsight-api-${EXPECTED_VERSION}-venv}"
 HF_CACHE="${OMNIHARNESS_HINDSIGHT_HF_HOME:-.tmp/hindsight-hf-cache}"
@@ -32,8 +33,8 @@ if [[ "$ACTUAL_OMNIHARNESS_COMMIT" != "$EXPECTED_OMNIHARNESS_COMMIT" ]]; then
   echo "OmniHarness commit mismatch: expected ${EXPECTED_OMNIHARNESS_COMMIT}, got ${ACTUAL_OMNIHARNESS_COMMIT}" >&2
   exit 1
 fi
-if [[ -n "$(git -C "$OMNIHARNESS_DIR" status --porcelain --untracked-files=no)" ]]; then
-  echo "OmniHarness tracked worktree must be clean for the live contract gate." >&2
+if [[ -n "$(git -C "$OMNIHARNESS_DIR" status --porcelain=v1 --untracked-files=all)" ]]; then
+  echo "OmniHarness worktree must be clean for the live contract gate." >&2
   exit 1
 fi
 
@@ -93,4 +94,4 @@ for attempt in $(seq 1 90); do
 done
 
 OMNIHARNESS_HINDSIGHT_URL="http://127.0.0.1:${PORT}" \
-node scripts/live-omniharness-hindsight-e2e.mjs
+node "$LIVE_E2E_SCRIPT"

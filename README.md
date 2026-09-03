@@ -7,7 +7,7 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 ## Status
 
 - Canonical contract: v0.1 frozen at tag `v0.1.0`
-- Current milestone: **DLFM-005A — Live OmniHarness/Hindsight Materialization E2E**
+- Current milestone: **DLFM-005B — Verified Retrieval**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -28,6 +28,7 @@ Digital Life Memory Fabric owns:
 - canonical verification
 - provider materialization mappings
 - versioned OmniHarness materialization events and receipt verification
+- provider-neutral retrieval and canonical hydration
 - device checkpoint schema
 
 It does **not** own provider selection or provider internals. OmniHarness owns provider registry/resolution/health/fallback/adapters. Hindsight, Vault, Mem0, pgvector, local FTS, graphs, embeddings, and reranking state are rebuildable derived/provider state.
@@ -145,6 +146,33 @@ bash scripts/run-live-omniharness-hindsight-local.sh
 
 See [`docs/dlfm-005a-live-materialization.md`](docs/dlfm-005a-live-materialization.md)
 for the exact acceptance and non-claims.
+
+## DLFM-005B verified retrieval
+
+`VerifiedRetrievalService` executes provider-neutral search through an injected
+`MemoryRetrievalPort`, validates the provider response as untrusted evidence,
+deduplicates canonical IDs, and hydrates only the current canonical revision.
+Provider order and score are retained as retrieval evidence but never replace
+canonical content.
+
+Verification fails closed for scope mismatch, stale provider revision,
+tombstone, supersession, missing or corrupt revisions, temporal invalidity, and
+canonical head movement during hydration. Reads use bounded input/response size,
+a bounded execution deadline, batch PostgreSQL head/revision hydration, and a
+final optimistic head consistency check.
+
+The opt-in live gate proves real Hindsight candidates flow through OmniHarness
+`memory.search` and cannot bypass canonical state:
+
+```bash
+DLFM_TEST_DATABASE_URL='postgres://...' \
+OMNIHARNESS_HINDSIGHT_DATABASE_URL='postgres://.../isolated_hindsight_test' \
+OMNIHARNESS_DIR='/path/to/OmniHarness-v0.2.0' \
+npm run e2e:verified-retrieval
+```
+
+See [`docs/dlfm-005b-verified-retrieval.md`](docs/dlfm-005b-verified-retrieval.md)
+for the exact acceptance, temporal semantics, and non-claims.
 
 ## Temporal semantics
 
