@@ -8,6 +8,7 @@ import {
   SystemClock,
   type Clock,
   type IdFactory,
+  sha256,
 } from "../domain/utils.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 
@@ -21,6 +22,32 @@ function validateTimestamp(value: string | undefined, field: string): void {
   if (value !== undefined && Number.isNaN(Date.parse(value))) {
     throw new ValidationError(`${field} must be a valid ISO-8601 timestamp`);
   }
+}
+
+export function candidateSemanticFingerprint(
+  input: Pick<CandidateInput,
+    | "scope"
+    | "candidateType"
+    | "memoryClass"
+    | "memoryKind"
+    | "proposedContent"
+    | "observedAt"
+    | "validFrom"
+    | "validUntil"
+  >,
+  epistemicStatus: NonNullable<CandidateInput["epistemicStatus"]>,
+): string {
+  return sha256({
+    scope: input.scope,
+    candidateType: input.candidateType,
+    memoryClass: input.memoryClass,
+    memoryKind: input.memoryKind,
+    proposedText: input.proposedContent.text,
+    epistemicStatus,
+    observedAt: input.observedAt ?? null,
+    validFrom: input.validFrom ?? null,
+    validUntil: input.validUntil ?? null,
+  });
 }
 
 function validateInput(input: CandidateInput): void {
@@ -46,6 +73,14 @@ function validateInput(input: CandidateInput): void {
     (input.confidence < 0 || input.confidence > 1)
   ) {
     throw new ValidationError("confidence must be between 0 and 1");
+  }
+
+  if (input.producer !== undefined) {
+    requireNonEmpty(input.producer.id, "producer.id");
+  }
+  for (const [index, ref] of (input.sourceExperienceRefs ?? []).entries()) {
+    requireNonEmpty(ref.sourceType, `sourceExperienceRefs[${index}].sourceType`);
+    requireNonEmpty(ref.sourceId, `sourceExperienceRefs[${index}].sourceId`);
   }
 
   validateTimestamp(input.observedAt, "observedAt");
@@ -87,8 +122,25 @@ export class MemoryCandidateService {
   async ingest(input: CandidateInput): Promise<MemoryCandidate> {
     validateInput(input);
 
+    const epistemicStatus = input.epistemicStatus ?? "uncertain";
+    const producer = input.producer ?? {
+      kind: "runtime" as const,
+      id: "dlmf-candidate-ingress",
+    };
+    const sourceExperienceRefs =
+      input.sourceExperienceRefs ??
+      (input.sourceId === undefined
+        ? []
+        : [{ sourceType: input.sourceType, sourceId: input.sourceId }]);
+    const candidateFingerprint =
+      input.candidateFingerprint ?? candidateSemanticFingerprint(input, epistemicStatus);
+
     const candidate: MemoryCandidate = {
       ...input,
+      epistemicStatus,
+      producer,
+      sourceExperienceRefs,
+      candidateFingerprint,
       candidateId: this.ids.candidateId(),
       status: "PENDING",
       createdAt: this.clock.now(),

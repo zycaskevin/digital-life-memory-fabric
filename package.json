@@ -1,6 +1,6 @@
 {
   "name": "@arthurverse/digital-life-memory-fabric",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Provider-neutral canonical memory and synchronization layer for one Digital Life.",
   "type": "module",

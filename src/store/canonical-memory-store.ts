@@ -49,6 +49,10 @@ export interface CanonicalMemoryStore {
     memoryIds: readonly MemoryId[],
   ): Promise<Array<CanonicalMemoryHead | undefined>>;
   getRevision(memoryId: MemoryId, revision: number): Promise<MemoryRevision | undefined>;
+  findCurrentRevisionBySemanticFingerprint(
+    scope: MemoryScope,
+    semanticFingerprint: string,
+  ): Promise<MemoryRevision | undefined>;
   getRevisions(
     references: readonly MemoryRevisionRef[],
   ): Promise<Array<MemoryRevision | undefined>>;

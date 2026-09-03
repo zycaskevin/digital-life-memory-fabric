@@ -4,6 +4,29 @@ export type EventId = `evt_${string}`;
 export type OutboxId = `out_${string}`;
 export type ConflictId = `conf_${string}`;
 
+export type EpistemicStatus =
+  | "observed"
+  | "user_asserted"
+  | "system_observed"
+  | "inferred"
+  | "synthesized"
+  | "uncertain";
+
+export interface MemoryProducer {
+  kind: "user" | "system" | "provider" | "runtime" | "import";
+  id: string;
+  providerName?: string;
+  adapterVersion?: string;
+  providerVersion?: string;
+}
+
+export interface SourceExperienceRef {
+  sourceType: string;
+  sourceId: string;
+  archiveRef?: string;
+  checksum?: string;
+}
+
 export interface MemoryScope {
   tenantId: string;
   lifeDid: string;
@@ -49,6 +72,9 @@ export interface MemoryProvenance {
   sourceType: string;
   sourceId?: string;
   candidateId: CandidateId;
+  candidateFingerprint: string;
+  producer: MemoryProducer;
+  sourceExperienceRefs: SourceExperienceRef[];
 }
 
 export interface CanonicalContent {
@@ -67,7 +93,13 @@ export interface MemoryCandidate {
   memoryKind: string;
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
+  epistemicStatus: EpistemicStatus;
   confidence?: number;
+  producer: MemoryProducer;
+  sourceExperienceRefs: SourceExperienceRef[];
+  candidateFingerprint: string;
+  distillationPolicyVersion?: string;
+  providerRunId?: string;
   proposedOperation: MemoryOperation;
   baseMemoryId?: MemoryId;
   baseRevision?: number;
@@ -101,6 +133,10 @@ export interface MemoryRevision {
   author: MemoryAuthor;
   provenance: MemoryProvenance;
   evidenceRefs: EvidenceRef[];
+  epistemicStatus: EpistemicStatus;
+  producer: MemoryProducer;
+  sourceExperienceRefs: SourceExperienceRef[];
+  semanticFingerprint: string;
   committedAt: string;
   commitSeq: number;
   observedAt?: string;
@@ -227,7 +263,13 @@ export interface CandidateInput {
   memoryKind: string;
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
+  epistemicStatus?: EpistemicStatus;
   confidence?: number;
+  producer?: MemoryProducer;
+  sourceExperienceRefs?: SourceExperienceRef[];
+  candidateFingerprint?: string;
+  distillationPolicyVersion?: string;
+  providerRunId?: string;
   proposedOperation: MemoryOperation;
   baseMemoryId?: MemoryId;
   baseRevision?: number;

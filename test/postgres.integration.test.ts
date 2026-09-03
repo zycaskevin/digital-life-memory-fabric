@@ -13,6 +13,7 @@ import {
   MemorySyncService,
   OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
+  PostgresDistillationReceiptStore,
   RevisionConflictError,
   VerifiedRetrievalService,
   type MemoryFabricMaterializationEvent,
@@ -45,8 +46,13 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0002_central_operations.sql",
       "utf8",
     );
+    const distillationMigration = await readFile(
+      "migrations/0003_memory_distillation.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
+    await pool.query(distillationMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -56,6 +62,47 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       lifeDid: "did:life:nancy",
       memoryNamespace: "life.core",
     };
+
+    const distillationReceipts = new PostgresDistillationReceiptStore(pool);
+    await distillationReceipts.put({
+      receiptId: "dist_pg_receipt_1",
+      scope,
+      sourceType: "hermes_session",
+      sourceId: "pg-session-1",
+      idempotencyKey: "pg-distill-idempotency-1",
+      ingestedAt: "2026-09-03T02:00:00.000Z",
+      archivedAt: "2026-09-03T02:00:01.000Z",
+      distilledAt: "2026-09-03T02:00:02.000Z",
+      canonicalizedAt: "2026-09-03T02:00:03.000Z",
+      rawArchiveRef: "filesystem://pg/session-1",
+      rawArchiveChecksum: "sha256:pg-session-1",
+      provider: "hindsight",
+      providerRunId: "hs_pg_1",
+      distillationPolicyVersion: "distill-v1",
+      canonicalizationPolicyVersion: "canonicalize-v1",
+      retentionPolicyVersion: "retention-v1",
+      adapterVersion: "hindsight-adapter-v0.1.1",
+      providerVersion: "test",
+      candidateIds: [],
+      canonicalMemoryIds: [],
+      status: "complete",
+      errors: [],
+      warnings: [],
+      canonicalizationOutcome: "no_memory_worthy_content",
+      retentionState: "preserved",
+      pruneEligible: false,
+      attempts: 1,
+      createdAt: "2026-09-03T02:00:00.000Z",
+      updatedAt: "2026-09-03T02:00:03.000Z",
+    });
+    const loadedReceipt = await distillationReceipts.getLatestBySource(
+      scope,
+      "hermes_session",
+      "pg-session-1",
+    );
+    assert.equal(loadedReceipt?.status, "complete");
+    assert.equal(loadedReceipt?.canonicalizationOutcome, "no_memory_worthy_content");
+    assert.deepEqual(loadedReceipt?.canonicalMemoryIds, []);
 
     const createCandidate = await candidates.ingest({
       scope,

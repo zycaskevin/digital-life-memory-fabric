@@ -14,6 +14,15 @@ import {
 } from "../domain/utils.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 
+const validEpistemicStatuses = new Set([
+  "observed",
+  "user_asserted",
+  "system_observed",
+  "inferred",
+  "synthesized",
+  "uncertain",
+]);
+
 export type VerificationSuppressionReason =
   | "NOT_FOUND"
   | "SCOPE_MISMATCH"
@@ -204,6 +213,15 @@ function verifyRevision(
     revision.memoryClass !== head.memoryClass ||
     revision.memoryKind !== head.memoryKind ||
     revision.contentHash !== sha256(revision.canonicalContent) ||
+    !validEpistemicStatuses.has(revision.epistemicStatus) ||
+    typeof revision.semanticFingerprint !== "string" ||
+    revision.semanticFingerprint.trim().length === 0 ||
+    typeof revision.producer?.id !== "string" ||
+    revision.producer.id.trim().length === 0 ||
+    revision.provenance.candidateFingerprint !== revision.semanticFingerprint ||
+    stableStringify(revision.provenance.producer) !== stableStringify(revision.producer) ||
+    stableStringify(revision.provenance.sourceExperienceRefs) !==
+      stableStringify(revision.sourceExperienceRefs) ||
     (validFromTime !== undefined && Number.isNaN(validFromTime)) ||
     (validUntilTime !== undefined && Number.isNaN(validUntilTime)) ||
     (validFromTime !== undefined &&

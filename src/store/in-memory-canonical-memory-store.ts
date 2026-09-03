@@ -256,6 +256,23 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
     return value === undefined ? undefined : clone(value);
   }
 
+  async findCurrentRevisionBySemanticFingerprint(
+    scope: MemoryScope,
+    semanticFingerprint: string,
+  ): Promise<MemoryRevision | undefined> {
+    await this.afterWrites();
+    for (const head of this.state.heads.values()) {
+      if (scopeKey(head.scope) !== scopeKey(scope)) continue;
+      const revision = this.state.revisions.get(
+        revisionKey(head.memoryId, head.currentRevision),
+      );
+      if (revision?.semanticFingerprint === semanticFingerprint) {
+        return clone(revision);
+      }
+    }
+    return undefined;
+  }
+
   async getRevisions(
     references: readonly MemoryRevisionRef[],
   ): Promise<Array<MemoryRevision | undefined>> {

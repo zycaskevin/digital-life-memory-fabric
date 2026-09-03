@@ -7,6 +7,7 @@ import type {
   CandidateId,
   CandidateStatus,
   DeviceCheckpoint,
+  EpistemicStatus,
   EvidenceRef,
   MemoryAuthor,
   MemoryCandidate,
@@ -16,12 +17,14 @@ import type {
   MemoryId,
   MemoryOperation,
   MemoryOutboxRecord,
+  MemoryProducer,
   MemoryProvenance,
   MemoryRevision,
   MemoryRevisionRef,
   MemoryScope,
   MemoryStatus,
   ProviderMaterialization,
+  SourceExperienceRef,
 } from "../domain/types.js";
 import { scopeKey } from "../domain/utils.js";
 import type {
@@ -53,7 +56,13 @@ interface CandidateRow {
   proposed_text: string;
   proposed_payload: Record<string, unknown> | null;
   evidence_refs: EvidenceRef[];
+  epistemic_status: EpistemicStatus;
   confidence: string | number | null;
+  producer: MemoryProducer;
+  source_experience_refs: SourceExperienceRef[];
+  candidate_fingerprint: string;
+  distillation_policy_version: string | null;
+  provider_run_id: string | null;
   proposed_operation: MemoryOperation;
   base_memory_id: string | null;
   base_revision: number | null;
@@ -95,6 +104,10 @@ interface RevisionRow {
   content_hash: string;
   author: MemoryAuthor;
   provenance: MemoryProvenance;
+  epistemic_status: EpistemicStatus;
+  producer: MemoryProducer;
+  source_experience_refs: SourceExperienceRef[];
+  semantic_fingerprint: string;
   observed_at: Date | string | null;
   committed_at: Date | string;
   commit_seq: string | number;
@@ -257,6 +270,10 @@ function candidateFromRow(row: CandidateRow): MemoryCandidate {
     memoryKind: row.memory_kind,
     proposedContent,
     evidenceRefs: row.evidence_refs,
+    epistemicStatus: row.epistemic_status,
+    producer: row.producer,
+    sourceExperienceRefs: row.source_experience_refs,
+    candidateFingerprint: row.candidate_fingerprint,
     proposedOperation: row.proposed_operation,
     status: row.status,
     createdAt: iso(row.created_at),
@@ -264,6 +281,8 @@ function candidateFromRow(row: CandidateRow): MemoryCandidate {
 
   if (row.source_id !== null) candidate.sourceId = row.source_id;
   if (row.confidence !== null) candidate.confidence = Number(row.confidence);
+  if (row.distillation_policy_version !== null) candidate.distillationPolicyVersion = row.distillation_policy_version;
+  if (row.provider_run_id !== null) candidate.providerRunId = row.provider_run_id;
   if (row.base_memory_id !== null) candidate.baseMemoryId = row.base_memory_id as MemoryId;
   if (row.base_revision !== null) candidate.baseRevision = row.base_revision;
   const observedAt = optionalIso(row.observed_at);
@@ -398,6 +417,10 @@ function revisionFromRow(
     author: row.author,
     provenance: row.provenance,
     evidenceRefs,
+    epistemicStatus: row.epistemic_status,
+    producer: row.producer,
+    sourceExperienceRefs: row.source_experience_refs,
+    semanticFingerprint: row.semantic_fingerprint,
     committedAt: iso(row.committed_at),
     commitSeq: numberFromDb(row.commit_seq),
   };
@@ -469,11 +492,13 @@ class PostgresTx implements CanonicalMemoryStoreTx {
       `INSERT INTO memory_candidates (
          candidate_id, tenant_id, life_did, memory_namespace, origin,
          candidate_type, source_type, source_id, memory_class, memory_kind,
-         proposed_text, proposed_payload, evidence_refs, confidence,
+         proposed_text, proposed_payload, evidence_refs, epistemic_status, confidence,
+         producer, source_experience_refs, candidate_fingerprint,
+         distillation_policy_version, provider_run_id,
          proposed_operation, base_memory_id, base_revision, status, created_at,
          observed_at, valid_from, valid_until
        ) VALUES (
-         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,$19,$20,$21,$22
+         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28
        )`,
       [
         candidate.candidateId,
@@ -491,7 +516,13 @@ class PostgresTx implements CanonicalMemoryStoreTx {
           ? null
           : JSON.stringify(candidate.proposedContent.payload),
         JSON.stringify(candidate.evidenceRefs),
+        candidate.epistemicStatus,
         candidate.confidence ?? null,
+        JSON.stringify(candidate.producer),
+        JSON.stringify(candidate.sourceExperienceRefs),
+        candidate.candidateFingerprint,
+        candidate.distillationPolicyVersion ?? null,
+        candidate.providerRunId ?? null,
         candidate.proposedOperation,
         candidate.baseMemoryId ?? null,
         candidate.baseRevision ?? null,
@@ -587,10 +618,11 @@ class PostgresTx implements CanonicalMemoryStoreTx {
       `INSERT INTO memory_revisions (
          memory_id, revision, tenant_id, life_did, memory_namespace,
          memory_class, memory_kind, status, canonical_text, canonical_payload,
-         content_hash, author, provenance, observed_at, valid_from, valid_until,
-         committed_at, commit_seq
+         content_hash, author, provenance, epistemic_status, producer,
+         source_experience_refs, semantic_fingerprint,
+         observed_at, valid_from, valid_until, committed_at, commit_seq
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21,$22
        )`,
       [
         revision.memoryId,
@@ -608,6 +640,10 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         revision.contentHash,
         JSON.stringify(revision.author),
         JSON.stringify(revision.provenance),
+        revision.epistemicStatus,
+        JSON.stringify(revision.producer),
+        JSON.stringify(revision.sourceExperienceRefs),
+        revision.semanticFingerprint,
         revision.observedAt ?? null,
         revision.validFrom ?? null,
         revision.validUntil ?? null,
@@ -848,6 +884,31 @@ export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
     const client = await this.pool.connect();
     try {
       return await readRevision(client, memoryId, revision);
+    } finally {
+      client.release();
+    }
+  }
+
+  async findCurrentRevisionBySemanticFingerprint(
+    scope: MemoryScope,
+    semanticFingerprint: string,
+  ): Promise<MemoryRevision | undefined> {
+    const result = await this.pool.query<{ memory_id: string; revision: number }>(
+      `SELECT h.memory_id, h.current_revision AS revision
+         FROM memory_heads h
+         JOIN memory_revisions r
+           ON r.memory_id = h.memory_id AND r.revision = h.current_revision
+        WHERE h.tenant_id = $1 AND h.life_did = $2 AND h.memory_namespace = $3
+          AND r.semantic_fingerprint = $4
+        ORDER BY h.updated_at DESC
+        LIMIT 1`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, semanticFingerprint],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    const client = await this.pool.connect();
+    try {
+      return await readRevision(client, row.memory_id as MemoryId, row.revision);
     } finally {
       client.release();
     }

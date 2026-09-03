@@ -6,8 +6,9 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 ## Status
 
-- Canonical contract: v0.1 frozen at tag `v0.1.0`
-- Current milestone: **DLFM-005B — Verified Retrieval**
+- Canonical baseline: v0.1 frozen at tag `v0.1.0`
+- Active canonical amendment: **v0.1.1 — Memory Distillation & Provider Boundary**
+- Current milestone: **DLMF-MD-001 through DLMF-MD-009 COMPLETE**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
@@ -15,11 +16,15 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 Digital Life Memory Fabric owns:
 
-- `MemoryCandidate`
+- `MemoryCandidate` with explicit epistemic status and provider-independent semantic fingerprint
 - provider-independent `memory_id`
 - Canonical Memory Authority
 - canonical content and immutable revisions
-- evidence and provenance
+- evidence, raw-experience provenance, and producer provenance
+- provider-neutral `MemoryDistillationProvider` contract
+- durable `DistillationReceipt` lifecycle
+- raw archive identity/checksum lifecycle through `RawExperienceArchiveProvider`
+- explainable prune-eligibility decisions (never Hermes deletion)
 - optimistic revision checks
 - tombstones
 - namespace-scoped `commit_seq`
@@ -31,7 +36,7 @@ Digital Life Memory Fabric owns:
 - provider-neutral retrieval and canonical hydration
 - device checkpoint schema
 
-It does **not** own provider selection or provider internals. OmniHarness owns provider registry/resolution/health/fallback/adapters. Hindsight, Vault, Mem0, pgvector, local FTS, graphs, embeddings, and reranking state are rebuildable derived/provider state.
+It does **not** own provider selection, provider internals, or Hermes SQLite maintenance. OmniHarness may own provider registry/resolution/health/fallback. Hindsight is the first Memory Intelligence / Distillation Provider, never canonical authority. Hindsight, Vault, Mem0, pgvector, local FTS, graphs, embeddings, and reranking state remain rebuildable derived/provider state.
 
 ## DLFM-001 canonical vertical slice
 
@@ -174,6 +179,40 @@ npm run e2e:verified-retrieval
 See [`docs/dlfm-005b-verified-retrieval.md`](docs/dlfm-005b-verified-retrieval.md)
 for the exact acceptance, temporal semantics, and non-claims.
 
+## v0.1.1 memory distillation amendment
+
+The transcript-to-memory lifecycle is now explicit:
+
+```text
+Hermes transcript
+  -> RawExperienceArchiveProvider
+  -> MemoryDistillationProvider (Hindsight first)
+  -> MemoryCandidate
+  -> DLMF governance
+  -> CanonicalMemory
+  -> DistillationReceipt COMPLETE
+  -> PruneEligibilityDecision
+  -> external Hermes maintenance owner
+```
+
+Hindsight uses separate **distillation** and **canonical projection** planes. Provider
+output has no canonical IDs and cannot call canonical commit directly. Reflective
+output becomes a `derived_insight_candidate` with inferred/synthesized/uncertain
+epistemic status and remains `PENDING` until separately governed.
+
+A completed distillation may legitimately contain zero canonical memories. Archive
+durability plus an explicit governed `no_memory_worthy_content`, `rejected`, or
+`superseded` result can still satisfy retention policy. DLMF returns an explainable
+prune decision but contains no Hermes deletion implementation.
+
+Governed tombstones preserve the semantic fingerprint, preventing later raw-archive
+re-distillation from silently resurrecting forgotten canonical semantics.
+
+See:
+
+- [v0.1.1 canonical amendment](docs/memory-distillation-provider-boundary-v0.1.1.md)
+- [MD-001 through MD-009 acceptance ledger](docs/dlfm-md-001-009-acceptance.md)
+
 ## Temporal semantics
 
 The canonical model distinguishes:
@@ -193,6 +232,7 @@ Migration:
 ```text
 migrations/0001_canonical_core.sql
 migrations/0002_central_operations.sql
+migrations/0003_memory_distillation.sql
 ```
 
 The PostgreSQL adapter uses:
@@ -222,9 +262,9 @@ The integration test is opt-in so callers can supply an isolated PostgreSQL data
 DLFM_TEST_DATABASE_URL='postgres://...' npm test
 ```
 
-The test creates an isolated temporary schema, applies both migrations,
-runs the canonical create/update/conflict/tombstone flow plus device pull/checkpoint
-replay, central outbox operations, and provider-neutral materialization delivery,
+The test creates an isolated temporary schema, applies all migrations,
+runs the canonical create/update/conflict/tombstone flow plus durable distillation-receipt
+round-trip, device pull/checkpoint replay, central outbox operations, and provider-neutral materialization delivery,
 then drops the schema afterward.
 
 ## Core invariant

@@ -46,6 +46,9 @@ function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
     return {
       sourceType: candidate.sourceType,
       candidateId: candidate.candidateId,
+      candidateFingerprint: candidate.candidateFingerprint,
+      producer: candidate.producer,
+      sourceExperienceRefs: candidate.sourceExperienceRefs,
     };
   }
 
@@ -53,6 +56,9 @@ function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
     sourceType: candidate.sourceType,
     sourceId: candidate.sourceId,
     candidateId: candidate.candidateId,
+    candidateFingerprint: candidate.candidateFingerprint,
+    producer: candidate.producer,
+    sourceExperienceRefs: candidate.sourceExperienceRefs,
   };
 }
 
@@ -132,6 +138,10 @@ export class CanonicalMemoryAuthority {
     let validUntil: string | undefined;
     let memoryClass = candidate.memoryClass;
     let memoryKind = candidate.memoryKind;
+    let epistemicStatus = candidate.epistemicStatus;
+    let producer = candidate.producer;
+    let sourceExperienceRefs = candidate.sourceExperienceRefs;
+    let semanticFingerprint = candidate.candidateFingerprint;
 
     if (candidate.proposedOperation === "create") {
       memoryId = this.ids.memoryId();
@@ -225,6 +235,10 @@ export class CanonicalMemoryAuthority {
           observedAt = currentRevision.observedAt;
           validFrom = currentRevision.validFrom;
           validUntil = currentRevision.validUntil;
+          epistemicStatus = currentRevision.epistemicStatus;
+          producer = currentRevision.producer;
+          sourceExperienceRefs = currentRevision.sourceExperienceRefs;
+          semanticFingerprint = currentRevision.semanticFingerprint;
           break;
         case "restore":
           if (currentHead.status !== "tombstoned") {
@@ -237,6 +251,10 @@ export class CanonicalMemoryAuthority {
           observedAt = currentRevision.observedAt;
           validFrom = currentRevision.validFrom;
           validUntil = currentRevision.validUntil;
+          epistemicStatus = currentRevision.epistemicStatus;
+          producer = currentRevision.producer;
+          sourceExperienceRefs = currentRevision.sourceExperienceRefs;
+          semanticFingerprint = currentRevision.semanticFingerprint;
           break;
         default:
           throw new UnsupportedOperationError(candidate.proposedOperation);
@@ -257,6 +275,10 @@ export class CanonicalMemoryAuthority {
       author: candidate.origin,
       provenance: provenanceFor(candidate),
       evidenceRefs: candidate.evidenceRefs,
+      epistemicStatus,
+      producer,
+      sourceExperienceRefs,
+      semanticFingerprint,
       committedAt,
       commitSeq,
     };
@@ -281,6 +303,8 @@ export class CanonicalMemoryAuthority {
       status,
       canonicalContent,
       contentHash,
+      epistemicStatus,
+      semanticFingerprint,
     });
 
     const change = {

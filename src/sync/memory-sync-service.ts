@@ -95,6 +95,8 @@ async function hydrateChanges(
           status: revision.status,
           canonicalContent: revision.canonicalContent,
           contentHash: revision.contentHash,
+          epistemicStatus: revision.epistemicStatus,
+          semanticFingerprint: revision.semanticFingerprint,
         })
     ) {
       throw new SyncRevisionIntegrityError(
