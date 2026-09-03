@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,7 +21,8 @@ import {
 
 const args = new Set(process.argv.slice(2));
 const APPLY = args.has("--apply");
-const PLAN_ONLY = !APPLY;
+const PREFLIGHT = args.has("--preflight");
+const PLAN_ONLY = !APPLY && !PREFLIGHT;
 const now = new Date();
 const runStamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
 const runId = `pilot_${runStamp}`;
@@ -446,6 +448,111 @@ async function loadHindsightClientConstructor() {
   return module.HindsightClient;
 }
 
+function commandVersion(command, versionArgs = ["--version"]) {
+  const result = spawnSync(command, versionArgs, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0) return undefined;
+  return String(result.stdout || result.stderr || "").trim().split("\n")[0] || "available";
+}
+
+function postgresLocalHints() {
+  return {
+    psql: commandVersion("psql"),
+    pgIsReady: commandVersion("pg_isready", ["--version"]),
+    defaultSocketVisible:
+      existsSync("/var/run/postgresql/.s.PGSQL.5432") ||
+      existsSync("/run/postgresql/.s.PGSQL.5432"),
+  };
+}
+
+function redactedDatabaseTarget(databaseUrl) {
+  if (!nonEmptyString(databaseUrl)) return undefined;
+  try {
+    const url = new URL(databaseUrl);
+    return {
+      host: url.hostname,
+      port: url.port || "default",
+      database: url.pathname.replace(/^\//, "") || "default",
+      credentialsPresent: Boolean(url.username || url.password),
+    };
+  } catch {
+    return {
+      host: "unparsed",
+      port: "unknown",
+      database: "unknown",
+      credentialsPresent: true,
+    };
+  }
+}
+
+async function runPreflight() {
+  assertPilotSafety();
+  const selected = readPilotSource(hermesDb);
+  const hindsightConnection = await resolveHindsightConnection();
+  const databaseUrl = process.env.DLMF_PILOT_DATABASE_URL;
+
+  let hindsightHealth = "unavailable";
+  let hindsightVersion = "unknown";
+  try {
+    const HindsightClient = await loadHindsightClientConstructor();
+    const client = new HindsightClient({
+      baseUrl: hindsightConnection.baseUrl,
+      userAgent: "dlmf-production-pilot-preflight/0.1.1",
+      ...(hindsightConnection.apiKey ? { apiKey: hindsightConnection.apiKey } : {}),
+    });
+    const version = await probeHindsight(
+      client,
+      hindsightConnection.baseUrl,
+      hindsightConnection.apiKey,
+    );
+    hindsightHealth = "healthy";
+    hindsightVersion = String(version.api_version || version.version || "unknown");
+  } catch {
+    hindsightHealth = "unavailable";
+  }
+
+  const localHints = postgresLocalHints();
+  const target = redactedDatabaseTarget(databaseUrl);
+  const endpointKind =
+    hindsightConnection.baseUrl.startsWith("http://localhost") ||
+    hindsightConnection.baseUrl.startsWith("http://127.0.0.1")
+      ? "local"
+      : "remote";
+
+  console.log("DLMF Production Pilot PREFLIGHT");
+  console.log(`Hermes DB readable: ${existsSync(hermesDb)}`);
+  console.log(`Five-session sample: ${selected.length === 5 ? "ready" : "not-ready"}`);
+  console.log(
+    `Hindsight: mode=${hindsightConnection.mode} endpoint=${endpointKind} health=${hindsightHealth} version=${hindsightVersion}`,
+  );
+  console.log(`DLMF PostgreSQL URL configured: ${nonEmptyString(databaseUrl)}`);
+  console.log(
+    `Local PostgreSQL hints: psql=${localHints.psql ? "yes" : "no"} pg_isready=${localHints.pgIsReady ? "yes" : "no"} socket5432=${localHints.defaultSocketVisible}`,
+  );
+  if (target) {
+    console.log(
+      `DLMF PostgreSQL target: ${target.host}:${target.port}/${target.database} credentials=${target.credentialsPresent ? "present" : "absent"}`,
+    );
+  }
+
+  const ready =
+    existsSync(hermesDb) &&
+    selected.length === 5 &&
+    hindsightHealth === "healthy" &&
+    nonEmptyString(databaseUrl);
+
+  console.log(`PRODUCTION_PILOT_PREFLIGHT=${ready ? "PASS" : "BLOCKED"}`);
+  if (!nonEmptyString(databaseUrl)) {
+    console.log("BLOCKER=DLMF_PILOT_DATABASE_URL_NOT_CONFIGURED");
+  }
+  if (hindsightHealth !== "healthy") {
+    console.log("BLOCKER=HINDSIGHT_NOT_HEALTHY");
+  }
+  return ready;
+}
+
 async function probeHindsight(client, baseUrl, apiKey) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
@@ -714,6 +821,12 @@ async function runApply(selected, manifest) {
 }
 
 async function main() {
+  if (PREFLIGHT) {
+    const ready = await runPreflight();
+    if (!ready) process.exitCode = 2;
+    return;
+  }
+
   const selected = readPilotSource(hermesDb);
   const manifest = manifestFor(selected);
   await writePrivateJson(manifestPath, manifest);

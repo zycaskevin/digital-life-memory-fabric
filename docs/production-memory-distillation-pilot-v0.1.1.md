@@ -119,6 +119,29 @@ Review that all five categories are reasonable before apply. `selection=fallback
 means the heuristic could not find a strong semantic match and the session should
 be manually reviewed before continuing.
 
+## Step 1.5 — infrastructure preflight
+
+After the five-session plan passes, run the read-only infrastructure preflight:
+
+```bash
+HERMES_HOME="$HOME/.hermes" \
+DLMF_PILOT_HERMES_DB="$HOME/.hermes/state.db" \
+OMNIHARNESS_DIR='/path/to/OmniHarness' \
+npm run pilot:memory-distillation:preflight
+```
+
+The preflight checks the real Hermes sample, Hindsight mode/health/version, whether
+`DLMF_PILOT_DATABASE_URL` is configured, and whether local PostgreSQL client/socket
+clues are present. It prints no database password or Hindsight API key and creates no
+schema or memory. A blocked preflight exits with status 2 and emits explicit
+`BLOCKER=...` markers.
+
+Expected before apply:
+
+```ini
+PRODUCTION_PILOT_PREFLIGHT=PASS
+```
+
 ## Step 2 — apply to isolated pilot stores
 
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
