@@ -14,6 +14,7 @@ import {
   OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
   PostgresDistillationReceiptStore,
+  PostgresMemoryCurationRecordStore,
   RevisionConflictError,
   VerifiedRetrievalService,
   type MemoryFabricMaterializationEvent,
@@ -50,9 +51,14 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0003_memory_distillation.sql",
       "utf8",
     );
+    const admissionMigration = await readFile(
+      "migrations/0004_canonical_admission.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
+    await pool.query(admissionMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -73,6 +79,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       ingestedAt: "2026-09-03T02:00:00.000Z",
       archivedAt: "2026-09-03T02:00:01.000Z",
       distilledAt: "2026-09-03T02:00:02.000Z",
+      curatedAt: "2026-09-03T02:00:02.500Z",
       canonicalizedAt: "2026-09-03T02:00:03.000Z",
       rawArchiveRef: "filesystem://pg/session-1",
       rawArchiveChecksum: "sha256:pg-session-1",
@@ -80,9 +87,22 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       providerRunId: "hs_pg_1",
       distillationPolicyVersion: "distill-v1",
       canonicalizationPolicyVersion: "canonicalize-v1",
+      admissionPolicyVersion: "admission-v1",
       retentionPolicyVersion: "retention-v1",
       adapterVersion: "hindsight-adapter-v0.1.1",
       providerVersion: "test",
+      curationProvider: "test-curator",
+      curationProviderVersion: "1",
+      providerUnitCount: 1,
+      curationDecisionCount: 1,
+      curationOutcomes: {
+        supporting_evidence_only: 1,
+        rejected: 0,
+        pending_review: 0,
+        canonical_candidate: 0,
+      },
+      curationCoverageComplete: true,
+      admissionComplete: true,
       candidateIds: [],
       canonicalMemoryIds: [],
       status: "complete",
@@ -103,6 +123,37 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(loadedReceipt?.status, "complete");
     assert.equal(loadedReceipt?.canonicalizationOutcome, "no_memory_worthy_content");
     assert.deepEqual(loadedReceipt?.canonicalMemoryIds, []);
+    assert.equal(loadedReceipt?.admissionComplete, true);
+    assert.equal(loadedReceipt?.curationCoverageComplete, true);
+
+    const curationRecords = new PostgresMemoryCurationRecordStore(pool);
+    await curationRecords.put({
+      recordId: "cur_pg_receipt_1",
+      receiptId: "dist_pg_receipt_1",
+      scope,
+      sourceType: "hermes_session",
+      sourceId: "pg-session-1",
+      providerName: "hindsight",
+      providerRunId: "hs_pg_1",
+      providerUnitRef: "hs_pg_unit_1",
+      providerUnitText: "Temporary supporting context.",
+      providerUnitFingerprint: "sha256:pg-unit-1",
+      providerEpistemicStatus: "system_observed",
+      curationProvider: "test-curator",
+      curationProviderVersion: "1",
+      admissionPolicyVersion: "admission-v1",
+      outcome: "supporting_evidence_only",
+      attributedEpistemicStatus: "system_observed",
+      durability: "transient",
+      memoryWorthy: false,
+      semanticDisposition: "novel",
+      reasonCodes: ["postgres_roundtrip"],
+      createdAt: "2026-09-03T02:00:02.500Z",
+    });
+    const loadedCuration = await curationRecords.listByReceipt("dist_pg_receipt_1");
+    assert.equal(loadedCuration.length, 1);
+    assert.equal(loadedCuration[0]?.outcome, "supporting_evidence_only");
+    assert.equal(loadedCuration[0]?.admissionPolicyVersion, "admission-v1");
 
     const createCandidate = await candidates.ingest({
       scope,

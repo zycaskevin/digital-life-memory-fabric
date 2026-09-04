@@ -95,17 +95,45 @@ try {
     console.error(`PILOT_RUN_NOT_FOUND=${runId}`);
     process.exitCode = 2;
   } else {
-    const receipts = await pool.query(`
-      SELECT source_id, status, canonicalization_outcome,
-             cardinality(candidate_ids) AS candidate_count,
-             cardinality(canonical_memory_ids) AS canonical_count,
-             prune_eligible, retention_state, attempts, errors, warnings,
-             jsonb_array_length(errors) AS error_count,
-             jsonb_array_length(warnings) AS warning_count
-        FROM memory_distillation_receipts
-       WHERE memory_namespace='pilot.memory-distillation.v0.1.1'
-       ORDER BY created_at, source_id
-    `);
+    const receiptColumns = new Set(
+      (await pool.query(`
+        SELECT column_name
+          FROM information_schema.columns
+         WHERE table_schema=$1 AND table_name='memory_distillation_receipts'
+      `, [schema])).rows.map((row) => row.column_name),
+    );
+    const md010 = receiptColumns.has("provider_unit_count");
+    const receipts = await pool.query(
+      md010
+        ? `SELECT source_id, status, canonicalization_outcome,
+                  provider_unit_count,
+                  curation_decision_count,
+                  curation_outcomes,
+                  curation_coverage_complete,
+                  admission_complete,
+                  cardinality(candidate_ids) AS candidate_count,
+                  cardinality(canonical_memory_ids) AS canonical_count,
+                  prune_eligible, retention_state, attempts, errors, warnings,
+                  jsonb_array_length(errors) AS error_count,
+                  jsonb_array_length(warnings) AS warning_count
+             FROM memory_distillation_receipts
+            WHERE memory_namespace='pilot.memory-distillation.v0.1.1'
+            ORDER BY created_at, source_id`
+        : `SELECT source_id, status, canonicalization_outcome,
+                  cardinality(candidate_ids) AS provider_unit_count,
+                  NULL::integer AS curation_decision_count,
+                  NULL::jsonb AS curation_outcomes,
+                  NULL::boolean AS curation_coverage_complete,
+                  NULL::boolean AS admission_complete,
+                  cardinality(candidate_ids) AS candidate_count,
+                  cardinality(canonical_memory_ids) AS canonical_count,
+                  prune_eligible, retention_state, attempts, errors, warnings,
+                  jsonb_array_length(errors) AS error_count,
+                  jsonb_array_length(warnings) AS warning_count
+             FROM memory_distillation_receipts
+            WHERE memory_namespace='pilot.memory-distillation.v0.1.1'
+            ORDER BY created_at, source_id`,
+    );
     const totals = await pool.query(`
       SELECT
         (SELECT count(*)::int FROM memory_candidates) AS candidates,
@@ -117,14 +145,26 @@ try {
     const pendingReflective = await pool.query(`
       SELECT count(*)::int AS count
         FROM memory_candidates
-       WHERE candidate_type='derived_insight_candidate' AND status='pending'
+       WHERE candidate_type='derived_insight_candidate' AND status='PENDING'
     `);
+    const curationTotals = md010
+      ? await pool.query(`
+          SELECT count(*)::int AS total,
+                 count(*) FILTER (WHERE outcome='supporting_evidence_only')::int AS supporting_evidence_only,
+                 count(*) FILTER (WHERE outcome='rejected')::int AS rejected,
+                 count(*) FILTER (WHERE outcome='pending_review')::int AS pending_review,
+                 count(*) FILTER (WHERE outcome='canonical_candidate')::int AS canonical_candidate
+            FROM memory_curation_records
+        `)
+      : { rows: [{ total: 0, supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0 }] };
 
     console.log(`PILOT_RUN=${runId}`);
     console.log(`SCHEMA=${schema}`);
+    console.log(`MD010_ADMISSION_SCHEMA=${md010 ? "yes" : "legacy"}`);
     for (const row of receipts.rows) {
+      const pendingReview = row.curation_outcomes?.pending_review ?? "legacy";
       console.log(
-        `source=${row.source_id} status=${row.status}/${row.canonicalization_outcome} candidates=${row.candidate_count} canonical=${row.canonical_count} pruneEligible=${row.prune_eligible} retention=${row.retention_state} errors=${row.error_count} warnings=${row.warning_count} attempts=${row.attempts}`,
+        `source=${row.source_id} status=${row.status}/${row.canonicalization_outcome} providerUnits=${row.provider_unit_count} curatedCandidates=${row.candidate_count} canonical=${row.canonical_count} pendingReview=${pendingReview} admissionComplete=${row.admission_complete ?? "legacy"} curationCoverage=${row.curation_coverage_complete ?? "legacy"} pruneEligible=${row.prune_eligible} retention=${row.retention_state} errors=${row.error_count} warnings=${row.warning_count} attempts=${row.attempts}`,
       );
       for (const error of row.errors ?? []) {
         console.log(
@@ -134,9 +174,20 @@ try {
       }
     }
     const t = totals.rows[0] ?? {};
-    console.log(
-      `TOTALS receipts=${t.receipts ?? 0} candidates=${t.candidates ?? 0} heads=${t.heads ?? 0} revisions=${t.revisions ?? 0} changes=${t.changes ?? 0} reflective_pending=${pendingReflective.rows[0]?.count ?? 0}`,
+    const c = curationTotals.rows[0] ?? {};
+    const providerUnits = receipts.rows.reduce(
+      (sum, row) => sum + Number(row.provider_unit_count ?? 0),
+      0,
     );
+    console.log(
+      `TOTALS receipts=${t.receipts ?? 0} providerUnits=${providerUnits} curatedCandidates=${t.candidates ?? 0} canonical=${t.heads ?? 0} revisions=${t.revisions ?? 0} changes=${t.changes ?? 0} reflective_pending=${pendingReflective.rows[0]?.count ?? 0}`,
+    );
+    if (md010) {
+      console.log(
+        `CURATION total=${c.total ?? 0} supportingEvidenceOnly=${c.supporting_evidence_only ?? 0} rejected=${c.rejected ?? 0} pendingReview=${c.pending_review ?? 0} canonicalCandidate=${c.canonical_candidate ?? 0}`,
+      );
+    }
+    console.log("AUTO_HERMES_PRUNE=FROZEN");
     console.log("HERMES_PRUNE_EXECUTED=false");
     console.log("PILOT_RUN_INSPECT=PASS");
   }

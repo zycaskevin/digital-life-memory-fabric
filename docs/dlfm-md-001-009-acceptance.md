@@ -4,6 +4,8 @@
 **Baseline:** DLMF v0.1  
 **Amendment:** Memory Distillation & Provider Boundary v0.1.1
 
+> **Historical ledger:** These PASS markers remain evidence for MD-001 through MD-009. MD-010 (2026-09-04) supersedes the old direct provider-output admission and prune-completeness semantics. See `docs/dlmf-md-010-canonical-admission-curation-gate.md`.
+
 ## DLMF-MD-001 — Canonical Boundary Amendment
 
 Implemented:
@@ -195,5 +197,7 @@ DLMF_MEMORY_DISTILLATION_AMENDMENT=PASS
 ## Production constraint
 
 This acceptance does **not** authorize automatic pruning or bulk migration of
-Nancy's existing Hermes database. The next production step is a small, manually
-reviewed session pilot before any bounded migration stage.
+Nancy's existing Hermes database. The first five-session Production Pilot has since
+proven long-session ingestion but exposed canonical-admission precision as the next
+blocker. After MD-010, the same pinned five-session dataset must be rerun and manually
+reviewed before any bounded migration stage. `AUTO_HERMES_PRUNE` remains frozen.

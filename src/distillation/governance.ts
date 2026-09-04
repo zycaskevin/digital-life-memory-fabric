@@ -19,6 +19,9 @@ export class EvidenceBoundMemoryGovernance implements MemoryCandidateGovernance 
     if (candidate.epistemicStatus === "inferred") {
       return { action: "reject", reason: "inferred_requires_explicit_review" };
     }
+    if (candidate.epistemicStatus === "synthesized") {
+      return { action: "reject", reason: "synthesized_requires_explicit_review" };
+    }
     if (candidate.epistemicStatus === "uncertain") {
       return { action: "reject", reason: "uncertain_requires_explicit_review" };
     }

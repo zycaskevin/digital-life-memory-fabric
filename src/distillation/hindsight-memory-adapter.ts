@@ -337,7 +337,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
 
     // Strict document filtering prevents unrelated memories already present in the
     // distillation bank from becoming candidates for this source experience.
-    const candidates = documentMemories
+    const providerUnits = documentMemories
       .filter((result) => result.text.trim().length > 0)
       .map((result) => {
         const mapped = mappedType(result);
@@ -371,7 +371,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
               ? {}
               : { observedAt: request.experience.observedAt }
             : { observedAt: result.occurred_start }),
-          providerCandidateRef: result.id,
+          providerUnitRef: result.id,
         };
       });
 
@@ -380,7 +380,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       providerRunId,
       adapterVersion: this.adapterVersion,
       ...(this.providerVersion === undefined ? {} : { providerVersion: this.providerVersion }),
-      candidates,
+      providerUnits,
       warnings: [],
     };
   }

@@ -11,6 +11,7 @@ import type {
   MemoryScope,
   SourceExperienceRef,
 } from "../domain/types.js";
+import type { CurationOutcomeCounts } from "../curation/types.js";
 
 export type MemoryCandidateType =
   | "fact_candidate"
@@ -46,7 +47,9 @@ export interface DistillationRequest {
   requestedAt: string;
 }
 
-export interface DistilledCandidateDraft {
+/** Provider extraction output. This is never a DLMF MemoryCandidate. */
+export interface ProviderMemoryUnit {
+  providerUnitRef: string;
   candidateType: MemoryCandidateType;
   memoryClass: MemoryClass;
   memoryKind: string;
@@ -59,12 +62,24 @@ export interface DistilledCandidateDraft {
   observedAt?: string;
   validFrom?: string;
   validUntil?: string;
-  providerCandidateRef?: string;
 }
 
-export interface DerivedMemoryCandidateDraft extends DistilledCandidateDraft {
+/** @deprecated Provider extraction yields ProviderMemoryUnit, not a DLMF MemoryCandidate. */
+export type DistilledCandidateDraft = ProviderMemoryUnit;
+
+export interface DerivedMemoryCandidateDraft {
   candidateType: "derived_insight_candidate";
+  memoryClass: MemoryClass;
+  memoryKind: string;
+  proposedContent: CanonicalContent;
+  evidenceRefs: EvidenceRef[];
   epistemicStatus: "inferred" | "synthesized" | "uncertain";
+  confidence?: number;
+  producer: MemoryProducer;
+  sourceExperienceRefs: SourceExperienceRef[];
+  observedAt?: string;
+  validFrom?: string;
+  validUntil?: string;
 }
 
 export interface DistillationResult {
@@ -72,7 +87,7 @@ export interface DistillationResult {
   providerRunId: string;
   adapterVersion: string;
   providerVersion?: string;
-  candidates: DistilledCandidateDraft[];
+  providerUnits: ProviderMemoryUnit[];
   warnings: string[];
 }
 
@@ -125,7 +140,9 @@ export type DistillationReceiptStatus =
   | "ingested"
   | "archived"
   | "distilled"
+  | "curated"
   | "canonicalized"
+  | "awaiting_review"
   | "complete"
   | "failed";
 
@@ -134,12 +151,20 @@ export type CanonicalizationOutcome =
   | "committed"
   | "no_memory_worthy_content"
   | "rejected"
-  | "superseded";
+  | "superseded"
+  | "pending_review";
 
 export type RetentionState = "hot" | "preserved" | "prune_eligible";
 
 export interface DistillationErrorRecord {
-  stage: "ingestion" | "archive" | "provider" | "canonicalization" | "retention";
+  stage:
+    | "ingestion"
+    | "archive"
+    | "provider"
+    | "curation"
+    | "admission"
+    | "canonicalization"
+    | "retention";
   code: string;
   message: string;
   occurredAt: string;
@@ -154,6 +179,7 @@ export interface DistillationReceipt {
   ingestedAt?: string;
   archivedAt?: string;
   distilledAt?: string;
+  curatedAt?: string;
   canonicalizedAt?: string;
   rawArchiveRef?: string;
   rawArchiveChecksum?: string;
@@ -161,9 +187,17 @@ export interface DistillationReceipt {
   providerRunId?: string;
   distillationPolicyVersion: string;
   canonicalizationPolicyVersion: string;
+  admissionPolicyVersion: string;
   retentionPolicyVersion: string;
   adapterVersion: string;
   providerVersion?: string;
+  curationProvider: string;
+  curationProviderVersion?: string;
+  providerUnitCount: number;
+  curationDecisionCount: number;
+  curationOutcomes: CurationOutcomeCounts;
+  curationCoverageComplete: boolean;
+  admissionComplete: boolean;
   candidateIds: CandidateId[];
   canonicalMemoryIds: MemoryId[];
   status: DistillationReceiptStatus;
@@ -189,6 +223,7 @@ export interface TranscriptDistillationInput {
   metadata?: Record<string, unknown>;
   distillationPolicyVersion: string;
   canonicalizationPolicyVersion: string;
+  admissionPolicyVersion: string;
   retentionPolicyVersion: string;
 }
 
@@ -208,6 +243,9 @@ export interface PruneEligibilityDecision {
   receiptId?: DistillationReceiptId;
   archiveVerified: boolean;
   retentionPolicyVersion?: string;
+  admissionPolicyVersion?: string;
   canonicalizationOutcome?: CanonicalizationOutcome;
+  curationCoverageComplete?: boolean;
+  admissionComplete?: boolean;
   blockingReasons: string[];
 }

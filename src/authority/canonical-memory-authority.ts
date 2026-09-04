@@ -37,11 +37,19 @@ export interface CanonicalCommitRequest {
   idempotencyKey: string;
 }
 
+/** Trusted DLMF seam used by canonical authority to verify MD-010 audit evidence. */
+export interface CanonicalAdmissionVerifier {
+  verifyCanonicalAdmission(candidate: MemoryCandidate): Promise<boolean>;
+}
+
 type CommitOutcome =
   | { kind: "committed"; result: CanonicalCommitResult }
   | { kind: "conflict"; conflict: MemoryConflict };
 
 function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
+  const admission = candidate.canonicalAdmission === undefined
+    ? {}
+    : { canonicalAdmission: candidate.canonicalAdmission };
   if (candidate.sourceId === undefined) {
     return {
       sourceType: candidate.sourceType,
@@ -49,6 +57,7 @@ function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
       candidateFingerprint: candidate.candidateFingerprint,
       producer: candidate.producer,
       sourceExperienceRefs: candidate.sourceExperienceRefs,
+      ...admission,
     };
   }
 
@@ -59,6 +68,7 @@ function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
     candidateFingerprint: candidate.candidateFingerprint,
     producer: candidate.producer,
     sourceExperienceRefs: candidate.sourceExperienceRefs,
+    ...admission,
   };
 }
 
@@ -68,11 +78,90 @@ function requirePending(candidate: MemoryCandidate): void {
   }
 }
 
+function providerAdmissionStateFingerprint(candidate: MemoryCandidate): string | undefined {
+  if (candidate.producer.kind !== "provider") return undefined;
+
+  const proof = candidate.canonicalAdmission;
+  if (proof === undefined) {
+    throw new ValidationError(
+      `Provider candidate ${candidate.candidateId} requires canonical admission proof`,
+    );
+  }
+  if (
+    proof.outcome !== "canonical_candidate" ||
+    proof.admissionPolicyVersion.trim().length === 0 ||
+    proof.curationProvider.trim().length === 0 ||
+    !proof.curationRecordId.startsWith("cur_")
+  ) {
+    throw new ValidationError(
+      `Provider candidate ${candidate.candidateId} has invalid canonical admission proof`,
+    );
+  }
+  if (
+    candidate.epistemicStatus === "inferred" ||
+    candidate.epistemicStatus === "synthesized" ||
+    candidate.epistemicStatus === "uncertain"
+  ) {
+    throw new ValidationError(
+      `Provider candidate ${candidate.candidateId} with epistemicStatus=${candidate.epistemicStatus} requires explicit review and cannot auto-commit`,
+    );
+  }
+  return sha256({
+    candidateId: candidate.candidateId,
+    scope: candidate.scope,
+    sourceType: candidate.sourceType,
+    sourceId: candidate.sourceId ?? null,
+    candidateType: candidate.candidateType,
+    memoryClass: candidate.memoryClass,
+    memoryKind: candidate.memoryKind,
+    proposedContent: candidate.proposedContent,
+    epistemicStatus: candidate.epistemicStatus,
+    producer: candidate.producer,
+    sourceExperienceRefs: candidate.sourceExperienceRefs,
+    candidateFingerprint: candidate.candidateFingerprint,
+    distillationPolicyVersion: candidate.distillationPolicyVersion ?? null,
+    providerRunId: candidate.providerRunId ?? null,
+    canonicalAdmission: proof,
+  });
+}
+
+async function requireProviderAdmission(
+  candidate: MemoryCandidate,
+  verifier: CanonicalAdmissionVerifier | undefined,
+): Promise<string | undefined> {
+  const fingerprint = providerAdmissionStateFingerprint(candidate);
+  if (fingerprint === undefined) return undefined;
+  if (verifier === undefined) {
+    throw new ValidationError(
+      `Provider candidate ${candidate.candidateId} requires configured canonical admission verifier`,
+    );
+  }
+  if (!(await verifier.verifyCanonicalAdmission(candidate))) {
+    throw new ValidationError(
+      `Provider candidate ${candidate.candidateId} canonical admission proof is not backed by an admitted curation record`,
+    );
+  }
+  return fingerprint;
+}
+
+function requireVerifiedProviderAdmissionState(
+  candidate: MemoryCandidate,
+  verifiedFingerprint: string | undefined,
+): void {
+  const currentFingerprint = providerAdmissionStateFingerprint(candidate);
+  if (currentFingerprint !== verifiedFingerprint) {
+    throw new ValidationError(
+      `Candidate ${candidate.candidateId} changed after canonical admission verification`,
+    );
+  }
+}
+
 export class CanonicalMemoryAuthority {
   constructor(
     private readonly store: CanonicalMemoryStore,
     private readonly ids: IdFactory = new RandomIdFactory(),
     private readonly clock: Clock = new SystemClock(),
+    private readonly admissionVerifier?: CanonicalAdmissionVerifier,
   ) {}
 
   async commit(request: CanonicalCommitRequest): Promise<CanonicalCommitResult> {
@@ -80,8 +169,17 @@ export class CanonicalMemoryAuthority {
       throw new ValidationError("idempotencyKey must not be empty");
     }
 
+    const admissionCandidate = await this.store.getCandidate(request.candidateId);
+    if (admissionCandidate === undefined) {
+      throw new CandidateNotFoundError(request.candidateId);
+    }
+    const verifiedAdmissionFingerprint = await requireProviderAdmission(
+      admissionCandidate,
+      this.admissionVerifier,
+    );
+
     const outcome = await this.store.transaction((tx) =>
-      this.commitInTransaction(tx, request),
+      this.commitInTransaction(tx, request, verifiedAdmissionFingerprint),
     );
 
     if (outcome.kind === "conflict") {
@@ -98,6 +196,7 @@ export class CanonicalMemoryAuthority {
   private async commitInTransaction(
     tx: CanonicalMemoryStoreTx,
     request: CanonicalCommitRequest,
+    verifiedAdmissionFingerprint: string | undefined,
   ): Promise<CommitOutcome> {
     const candidate = await tx.getCandidate(request.candidateId);
     if (candidate === undefined) {
@@ -118,6 +217,7 @@ export class CanonicalMemoryAuthority {
     }
 
     requirePending(candidate);
+    requireVerifiedProviderAdmissionState(candidate, verifiedAdmissionFingerprint);
 
     if (
       candidate.proposedOperation === "supersede" ||

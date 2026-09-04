@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from "pg";
 import { ValidationError } from "../domain/errors.js";
 import type {
+  CanonicalAdmissionProof,
   CanonicalCommitResult,
   CanonicalContent,
   CanonicalMemoryHead,
@@ -63,6 +64,7 @@ interface CandidateRow {
   candidate_fingerprint: string;
   distillation_policy_version: string | null;
   provider_run_id: string | null;
+  canonical_admission: CanonicalAdmissionProof | null;
   proposed_operation: MemoryOperation;
   base_memory_id: string | null;
   base_revision: number | null;
@@ -283,6 +285,7 @@ function candidateFromRow(row: CandidateRow): MemoryCandidate {
   if (row.confidence !== null) candidate.confidence = Number(row.confidence);
   if (row.distillation_policy_version !== null) candidate.distillationPolicyVersion = row.distillation_policy_version;
   if (row.provider_run_id !== null) candidate.providerRunId = row.provider_run_id;
+  if (row.canonical_admission !== null) candidate.canonicalAdmission = row.canonical_admission;
   if (row.base_memory_id !== null) candidate.baseMemoryId = row.base_memory_id as MemoryId;
   if (row.base_revision !== null) candidate.baseRevision = row.base_revision;
   const observedAt = optionalIso(row.observed_at);
@@ -494,11 +497,11 @@ class PostgresTx implements CanonicalMemoryStoreTx {
          candidate_type, source_type, source_id, memory_class, memory_kind,
          proposed_text, proposed_payload, evidence_refs, epistemic_status, confidence,
          producer, source_experience_refs, candidate_fingerprint,
-         distillation_policy_version, provider_run_id,
+         distillation_policy_version, provider_run_id, canonical_admission,
          proposed_operation, base_memory_id, base_revision, status, created_at,
          observed_at, valid_from, valid_until
        ) VALUES (
-         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28
+         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20,$21::jsonb,$22,$23,$24,$25,$26,$27,$28,$29
        )`,
       [
         candidate.candidateId,
@@ -523,6 +526,9 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         candidate.candidateFingerprint,
         candidate.distillationPolicyVersion ?? null,
         candidate.providerRunId ?? null,
+        candidate.canonicalAdmission === undefined
+          ? null
+          : JSON.stringify(candidate.canonicalAdmission),
         candidate.proposedOperation,
         candidate.baseMemoryId ?? null,
         candidate.baseRevision ?? null,

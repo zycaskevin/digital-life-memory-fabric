@@ -68,6 +68,20 @@ export interface EvidenceRef {
   sourceRef: string;
 }
 
+/**
+ * DLMF admission reference for a provider-produced candidate that passed the
+ * MD-010 gate. The fields are not self-authenticating: CanonicalMemoryAuthority
+ * verifies this reference against the DLMF-owned admitted curation record before
+ * any provider-produced candidate may commit.
+ */
+export interface CanonicalAdmissionProof {
+  admissionPolicyVersion: string;
+  curationProvider: string;
+  curationProviderVersion?: string;
+  curationRecordId: `cur_${string}`;
+  outcome: "canonical_candidate";
+}
+
 export interface MemoryProvenance {
   sourceType: string;
   sourceId?: string;
@@ -75,6 +89,7 @@ export interface MemoryProvenance {
   candidateFingerprint: string;
   producer: MemoryProducer;
   sourceExperienceRefs: SourceExperienceRef[];
+  canonicalAdmission?: CanonicalAdmissionProof;
 }
 
 export interface CanonicalContent {
@@ -100,6 +115,7 @@ export interface MemoryCandidate {
   candidateFingerprint: string;
   distillationPolicyVersion?: string;
   providerRunId?: string;
+  canonicalAdmission?: CanonicalAdmissionProof;
   proposedOperation: MemoryOperation;
   baseMemoryId?: MemoryId;
   baseRevision?: number;
@@ -270,6 +286,7 @@ export interface CandidateInput {
   candidateFingerprint?: string;
   distillationPolicyVersion?: string;
   providerRunId?: string;
+  canonicalAdmission?: CanonicalAdmissionProof;
   proposedOperation: MemoryOperation;
   baseMemoryId?: MemoryId;
   baseRevision?: number;

@@ -11,20 +11,50 @@ export interface RetentionPolicyDecision {
 
 export interface DistillationRetentionPolicy {
   readonly version: string;
+  readonly admissionPolicyVersion: string;
   evaluate(receipt: DistillationReceipt): Promise<RetentionPolicyDecision>;
 }
 
+function curationOutcomeTotal(receipt: DistillationReceipt): number {
+  return (
+    receipt.curationOutcomes.supporting_evidence_only +
+    receipt.curationOutcomes.rejected +
+    receipt.curationOutcomes.pending_review +
+    receipt.curationOutcomes.canonical_candidate
+  );
+}
+
 export class PreservationCompleteRetentionPolicy implements DistillationRetentionPolicy {
-  constructor(readonly version: string) {}
+  constructor(
+    readonly version: string,
+    readonly admissionPolicyVersion: string,
+  ) {}
 
   async evaluate(receipt: DistillationReceipt): Promise<RetentionPolicyDecision> {
     const blockingReasons: string[] = [];
     if (receipt.status !== "complete") blockingReasons.push("receipt_not_complete");
-    if (receipt.canonicalizationOutcome === "pending") {
-      blockingReasons.push("canonicalization_not_decided");
+    if (
+      receipt.canonicalizationOutcome === "pending" ||
+      receipt.canonicalizationOutcome === "pending_review"
+    ) {
+      blockingReasons.push("canonicalization_not_final");
     }
     if (receipt.rawArchiveRef === undefined || receipt.rawArchiveChecksum === undefined) {
       blockingReasons.push("raw_archive_not_recorded");
+    }
+    if (receipt.admissionPolicyVersion !== this.admissionPolicyVersion) {
+      blockingReasons.push("admission_policy_version_mismatch");
+    }
+    if (!receipt.curationCoverageComplete) blockingReasons.push("curation_coverage_incomplete");
+    if (!receipt.admissionComplete) blockingReasons.push("canonical_admission_incomplete");
+    if (receipt.curationDecisionCount !== receipt.providerUnitCount) {
+      blockingReasons.push("curation_decision_count_mismatch");
+    }
+    if (curationOutcomeTotal(receipt) !== receipt.providerUnitCount) {
+      blockingReasons.push("curation_outcome_count_mismatch");
+    }
+    if (receipt.curationOutcomes.pending_review > 0) {
+      blockingReasons.push("pending_review_present");
     }
     return { satisfied: blockingReasons.length === 0, blockingReasons };
   }
@@ -59,15 +89,15 @@ export class PruneEligibilityService {
     if (receipt.retentionPolicyVersion !== this.retentionPolicy.version) {
       blockingReasons.push("retention_policy_version_mismatch");
     }
+    if (receipt.admissionPolicyVersion !== this.retentionPolicy.admissionPolicyVersion) {
+      blockingReasons.push("admission_policy_version_mismatch");
+    }
     const policy = await this.retentionPolicy.evaluate(receipt);
     blockingReasons.push(...policy.blockingReasons);
 
     let archiveVerified = false;
     if (receipt.rawArchiveRef !== undefined && receipt.rawArchiveChecksum !== undefined) {
-      archiveVerified = await this.archive.verify(
-        receipt.rawArchiveRef,
-        receipt.rawArchiveChecksum,
-      );
+      archiveVerified = await this.archive.verify(receipt.rawArchiveRef, receipt.rawArchiveChecksum);
     }
     if (!archiveVerified) blockingReasons.push("raw_archive_verification_failed");
 
@@ -78,15 +108,14 @@ export class PruneEligibilityService {
       receiptId: receipt.receiptId,
       archiveVerified,
       retentionPolicyVersion: receipt.retentionPolicyVersion,
+      admissionPolicyVersion: receipt.admissionPolicyVersion,
       canonicalizationOutcome: receipt.canonicalizationOutcome,
+      curationCoverageComplete: receipt.curationCoverageComplete,
+      admissionComplete: receipt.admissionComplete,
       blockingReasons: [...new Set(blockingReasons)],
     };
   }
 
-  /**
-   * Persist the governed eligibility decision on the durable receipt. This
-   * never deletes operational data; a Hermes maintenance adapter owns deletion.
-   */
   async refresh(
     scope: MemoryScope,
     sourceType: string,
@@ -98,7 +127,7 @@ export class PruneEligibilityService {
       await this.receipts.put({
         ...receipt,
         pruneEligible: decision.eligible,
-        retentionState: decision.eligible ? "prune_eligible" : receipt.retentionState,
+        retentionState: decision.eligible ? "prune_eligible" : "preserved",
         updatedAt: this.clock.now(),
       });
     }

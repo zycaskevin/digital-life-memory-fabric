@@ -7,9 +7,11 @@
 **Baseline:** Digital Life Memory Fabric v0.1 — Canonical Memory Model  
 **Scope:** DLMF only  
 **First provider:** Hindsight  
-**Implementation:** DLMF-MD-001 through DLMF-MD-009
+**Implementation:** DLMF-MD-001 through DLMF-MD-010
 
 ---
+
+> **MD-010 admission amendment — 2026-09-04:** Hindsight distillation output is now explicitly `ProviderMemoryUnit`, not a DLMF `MemoryCandidate`. Every provider unit must pass a replaceable curation-proposal seam and DLMF-owned deterministic canonical admission policy before candidate creation. Derived/uncertain epistemic states cannot auto-canonicalize, and prune eligibility requires complete admission. See `docs/dlmf-md-010-canonical-admission-curation-gate.md`.
 
 ## 1. Executive decision
 
@@ -37,9 +39,20 @@ MemoryDistillationProvider
   Hindsight: distill / recall / reflect
           |
           v
-MemoryCandidate
+ProviderMemoryUnit
           |
           v
+MemoryCurationProvider
+  proposal only
+          |
+          v
+DLMF CanonicalAdmissionPolicy
+          |
+          +---- supporting_evidence_only / rejected / pending_review
+          |
+          +---- canonical_candidate -> MemoryCandidate
+                                      |
+                                      v
 DLMF governance / canonical authority
           |
           +----> CanonicalMemory
@@ -64,10 +77,15 @@ DLMF contains no Hermes SQLite delete/prune implementation.
 | Hermes | active/recent transcript and runtime session state | lifetime canonical memory |
 | Raw archive | durable raw transcript/event bytes | semantic truth |
 | Hindsight | extraction, provider recall, reflection | canonical IDs or canonical truth |
-| DLMF | candidate identity, epistemic status, evidence, provenance, governance, canonical commit, forgetting, retention eligibility | Hermes DB maintenance |
+| Curation provider | worthiness/durability/epistemic/semantic proposals | canonical admission or commit authority |
+| DLMF | deterministic admission, candidate identity, epistemic attribution, evidence, provenance, governance, canonical commit, forgetting, retention eligibility | Hermes DB maintenance |
 
-`Raw Experience`, provider memory, `MemoryCandidate`, and `CanonicalMemory` are
-separate artifacts.
+`Raw Experience`, `ProviderMemoryUnit`, curation proposal, admitted `MemoryCandidate`,
+and `CanonicalMemory` are separate artifacts. Provider-produced candidates that reach
+canonical authority must carry a DLMF-issued `canonicalAdmission` reference tying them to
+the admission policy, curation provider, and curation audit record. The reference is not
+self-authenticating: canonical authority verifies it against the DLMF-owned admitted
+curation record before commit.
 
 ---
 
@@ -88,9 +106,11 @@ interface MemoryDistillationProvider {
 }
 ```
 
-Provider results contain candidate drafts. They deliberately contain no
-`candidateId`, `memoryId`, canonical revision, or canonical commit function.
-Only DLMF creates those identifiers and commits canonical state.
+Distillation results contain `ProviderMemoryUnit` values. They deliberately contain no
+`candidateId`, `memoryId`, canonical revision, or canonical commit function. A provider
+unit is extraction evidence, not a DLMF candidate. MD-010 requires curation and
+deterministic admission before DLMF may create a `MemoryCandidate`; only DLMF creates
+canonical identifiers and commits canonical state.
 
 ---
 
@@ -227,10 +247,20 @@ receipt: archived
 MemoryDistillationProvider.distill()
       |
       v
-receipt: distilled
+ProviderMemoryUnit[] / receipt: distilled
       |
       v
-MemoryCandidateService.ingest()
+MemoryCurationProvider.curate()  (proposal only)
+      |
+      v
+receipt: curated
+      |
+      v
+DLMF CanonicalAdmissionPolicy
+      |
+      +---- supporting_evidence_only / rejected / pending_review
+      |
+      +---- canonical_candidate -> MemoryCandidateService.ingest()
       |
       v
 governance
@@ -242,8 +272,9 @@ governance
       v
 receipt: canonicalized
       |
-      v
-receipt: complete
+      +---- awaiting_review (any unresolved unit)
+      |
+      +---- complete (full admission coverage, zero pending_review)
 ```
 
 The transcript service never calls a Hermes deletion API.
@@ -257,7 +288,7 @@ Receipt persistence is provider-neutral. Implementations:
 - `InMemoryDistillationReceiptStore` for deterministic tests/development;
 - `PostgresDistillationReceiptStore` for durable canonical operations.
 
-The PostgreSQL schema is in `migrations/0003_memory_distillation.sql`.
+The base receipt schema is in `migrations/0003_memory_distillation.sql`; MD-010 admission/audit fields and `memory_curation_records` are added by `migrations/0004_canonical_admission.sql`.
 
 Important receipt states:
 
@@ -266,7 +297,9 @@ pending
 ingested
 archived
 distilled
+curated
 canonicalized
+awaiting_review
 complete
 failed
 ```
@@ -279,6 +312,7 @@ committed
 no_memory_worthy_content
 rejected
 superseded
+pending_review
 ```
 
 ### Zero-memory success
@@ -298,7 +332,10 @@ The distillation idempotency key includes:
 scope
 source experience ID
 distillation policy version
+canonicalization policy version
 provider name
+curation provider name/version
+admission policy version
 ```
 
 A completed receipt makes an identical retry a no-op.
@@ -313,8 +350,9 @@ prune eligibility = false
 retry is allowed
 ```
 
-Malformed provider output is validated before provider candidates are admitted
-into canonical governance.
+Malformed provider output and incomplete/malformed curation coverage are validated
+before any provider unit can become a DLMF candidate. Derived/uncertain epistemic units
+fail closed to review instead of entering canonical governance automatically.
 
 Partial canonicalization remains resumable because canonical semantic
 fingerprints suppress duplicate re-commit.
@@ -397,22 +435,30 @@ eligible
 receiptId
 archiveVerified
 retentionPolicyVersion
+admissionPolicyVersion
 canonicalizationOutcome
+curationCoverageComplete
+admissionComplete
 blockingReasons[]
 ```
 
-The initial `PreservationCompleteRetentionPolicy` requires:
+The MD-010 `PreservationCompleteRetentionPolicy` requires:
 
 - complete distillation receipt;
-- explicit non-pending canonicalization outcome;
-- durable archive reference/checksum;
-- successful archive verification;
-- matching retention policy version.
+- explicit final canonicalization outcome;
+- durable archive reference/checksum and successful archive verification;
+- matching retention policy version;
+- matching admission policy version;
+- complete curation coverage;
+- curation decision/outcome counts matching every provider unit;
+- `admissionComplete=true`;
+- zero `pending_review` units.
 
-It does **not** require one or more canonical memories.
+It does **not** require one or more canonical memories: a fully curated source may
+legitimately resolve to evidence-only/rejected/zero-memory outcomes.
 
-`refresh()` may persist the eligibility decision onto the receipt, but it still
-does not delete Hermes data.
+Eligibility is revocable. `refresh()` may set `pruneEligible=false` again whenever
+current policy/admission conditions no longer hold. It still does not delete Hermes data.
 
 ---
 
@@ -444,12 +490,25 @@ DLMF does not own Hermes operational database maintenance.
 
 ### INV-9
 Successful preservation does not require a Canonical Memory commit. A source may
-be prune-eligible after durable archive, governed distillation, an explicit
-zero-memory/rejected/superseded outcome, and retention-policy satisfaction.
+be prune-eligible after durable archive, governed distillation, complete MD-010
+curation/admission, an explicit final evidence-only/zero-memory/rejected/superseded
+outcome, and current retention/admission-policy satisfaction.
 
 ### INV-10
 Provider-derived working memory and provider projections of Canonical Memory must
 remain logically distinguishable and rebuildable.
+
+### INV-11
+Provider output and curation-provider output are never canonical truth. Curation may
+propose; DLMF deterministic admission/governance retains final authority. Canonical
+authority independently rejects provider candidates without a matching DLMF-owned
+admitted curation record, treats `canonicalAdmission` only as a lookup reference, and
+rejects provider-derived `inferred`/`synthesized`/`uncertain` candidates from automatic
+commit even if a caller fabricates such a reference.
+
+### INV-12
+`AUTO_HERMES_PRUNE` remains frozen until post-MD-010 Production Pilot quality review
+passes. `pruneEligible` is an auditable decision, not a delete command.
 
 ---
 
@@ -475,8 +534,9 @@ small session sample.
 
 ## 16. Amendment acceptance
 
-The implementation is accepted by the repository test suite and the MD acceptance
-ledger in `docs/dlfm-md-001-009-acceptance.md`.
+MD-001 through MD-009 remain recorded in `docs/dlfm-md-001-009-acceptance.md`.
+MD-010 supersedes the old direct-admission/prune semantics and is specified in
+`docs/dlmf-md-010-canonical-admission-curation-gate.md`.
 
 Final contract target:
 

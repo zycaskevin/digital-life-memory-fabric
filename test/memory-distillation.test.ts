@@ -5,11 +5,14 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   CanonicalMemoryAuthority,
+  ConservativeMemoryCurationProvider,
+  DeterministicCanonicalAdmissionPolicy,
   EvidenceBoundMemoryGovernance,
   FilesystemRawExperienceArchiveProvider,
   HindsightMemoryAdapter,
   InMemoryCanonicalMemoryStore,
   InMemoryDistillationReceiptStore,
+  InMemoryMemoryCurationRecordStore,
   MemoryCandidateService,
   PreservationCompleteRetentionPolicy,
   PruneEligibilityService,
@@ -21,6 +24,8 @@ import {
   type HindsightListMemoriesResponse,
   type HindsightReflectResponse,
   type HindsightRetainResponse,
+  type MemoryCurationProposal,
+  type MemoryCurationProvider,
   type MemoryDistillationProvider,
   type MemoryScope,
   type ReflectResult,
@@ -120,6 +125,32 @@ function createAdapter(client: FakeHindsightClient): HindsightMemoryAdapter {
   });
 }
 
+function curationComponents() {
+  return {
+    curationProvider: new ConservativeMemoryCurationProvider("test-curation-v1"),
+    curationStore: new InMemoryMemoryCurationRecordStore(),
+    admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+  };
+}
+
+function customCurator(
+  name: string,
+  proposalFor: (providerUnitRef: string) => MemoryCurationProposal,
+): MemoryCurationProvider {
+  return {
+    name,
+    version: "1",
+    async curate(request) {
+      return {
+        providerName: name,
+        providerVersion: "1",
+        proposals: request.units.map((unit) => proposalFor(unit.providerUnitRef)),
+        warnings: [],
+      };
+    },
+  };
+}
+
 function transcriptInput(
   sourceId: string,
   policy = "distill-v1",
@@ -139,6 +170,7 @@ function transcriptInput(
     observedAt: "2026-09-03T02:00:00.000Z",
     distillationPolicyVersion: policy,
     canonicalizationPolicyVersion: "canonicalize-v1",
+    admissionPolicyVersion: "admission-v1",
     retentionPolicyVersion: "retention-v1",
   };
 }
@@ -212,8 +244,8 @@ test("MD-001/002/003: provider output stays candidate-only and epistemic/provena
     });
 
     assert.equal(result.providerName, "hindsight");
-    assert.equal(result.candidates.length, 1);
-    const draft = result.candidates[0];
+    assert.equal(result.providerUnits.length, 1);
+    const draft = result.providerUnits[0];
     assert.ok(draft);
     assert.equal(draft.epistemicStatus, "user_asserted");
     assert.equal(draft.producer.providerName, "hindsight");
@@ -292,7 +324,7 @@ test("MD-004 regression: long transcript distillation never uses recall query", 
       requestedAt: "2026-09-03T02:01:00.000Z",
     });
 
-    assert.equal(result.candidates.length, 1);
+    assert.equal(result.providerUnits.length, 1);
     assert.equal(client.recallCalls.length, 0, "distillation must never send the transcript to recall");
     assert.equal(client.listMemoriesCalls.length, 1);
     assert.equal(client.listMemoriesCalls[0]?.options?.documentId, documentId);
@@ -338,7 +370,7 @@ test("MD-004 document enumeration paginates without recall", async () => {
       requestedAt: "2026-09-03T02:01:00.000Z",
     });
 
-    assert.equal(result.candidates.length, 1001);
+    assert.equal(result.providerUnits.length, 1001);
     assert.equal(client.listMemoriesCalls.length, 2);
     assert.equal(client.listMemoriesCalls[0]?.options?.offset, 0);
     assert.equal(client.listMemoriesCalls[1]?.options?.offset, 1000);
@@ -362,6 +394,7 @@ test("MD-004 hardening: asynchronous Hindsight retain cannot produce a completed
       receiptStore: receipts,
       archive,
       provider: createAdapter(client),
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
     });
 
@@ -381,6 +414,7 @@ test("MD-005 policy version is bound to the actual canonical governance policy",
       receiptStore: new InMemoryDistillationReceiptStore(),
       archive,
       provider: createAdapter(client),
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v2"),
     });
 
@@ -405,6 +439,7 @@ test("MD-005/006/007: Hermes transcript archives, distills, governs and commits 
       receiptStore: receipts,
       archive,
       provider: adapter,
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
     });
 
@@ -431,6 +466,10 @@ test("MD-005/006/007: Hermes transcript archives, distills, governs and commits 
     assert.equal(revision.epistemicStatus, "user_asserted");
     assert.equal(revision.producer.providerName, "hindsight");
     assert.equal(revision.provenance.candidateFingerprint, revision.semanticFingerprint);
+    assert.equal(revision.provenance.canonicalAdmission?.admissionPolicyVersion, "admission-v1");
+    assert.equal(revision.provenance.canonicalAdmission?.curationProvider, "dlmf-conservative-curation");
+    assert.equal(revision.provenance.canonicalAdmission?.outcome, "canonical_candidate");
+    assert.match(revision.provenance.canonicalAdmission?.curationRecordId ?? "", /^cur_/);
     assert.equal(revision.sourceExperienceRefs[0]?.archiveRef, first.rawArchiveRef);
     assert.equal(revision.evidenceRefs.some((ref) => ref.sourceRef === "hs_fact_1"), true);
 
@@ -453,6 +492,7 @@ test("MD-005 idempotency: concurrent processing of the same source cannot create
       receiptStore: receipts,
       archive,
       provider: createAdapter(client),
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
     });
 
@@ -480,6 +520,7 @@ test("MD-005/009 + INV-9: zero-memory distillation can complete and become prune
       receiptStore: receipts,
       archive,
       provider: adapter,
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
     });
     const sourceId = "session-no-memory";
@@ -493,7 +534,7 @@ test("MD-005/009 + INV-9: zero-memory distillation can complete and become prune
     const eligibility = new PruneEligibilityService(
       receipts,
       archive,
-      new PreservationCompleteRetentionPolicy("retention-v1"),
+      new PreservationCompleteRetentionPolicy("retention-v1", "admission-v1"),
     );
     const decision = await eligibility.refresh(scope, "hermes_session", sourceId);
     assert.equal(decision.eligible, true);
@@ -517,6 +558,7 @@ test("MD-005/020 failure model: provider failure leaves canonical state unchange
       receiptStore: receipts,
       archive,
       provider: createAdapter(client),
+      ...curationComponents(),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
     });
     const sourceId = "session-provider-failure";
@@ -532,10 +574,452 @@ test("MD-005/020 failure model: provider failure leaves canonical state unchange
     const decision = await new PruneEligibilityService(
       receipts,
       archive,
-      new PreservationCompleteRetentionPolicy("retention-v1"),
+      new PreservationCompleteRetentionPolicy("retention-v1", "admission-v1"),
     ).evaluate(scope, "hermes_session", sourceId);
     assert.equal(decision.eligible, false);
     assert.equal(decision.blockingReasons.some((reason) => reason.includes("failed")), true);
+  });
+});
+
+test("MD-010 authority invariant: provider candidates cannot bypass canonical admission", async () => {
+  const store = new InMemoryCanonicalMemoryStore();
+  const candidates = new MemoryCandidateService(store);
+  const authority = new CanonicalMemoryAuthority(store);
+
+  const unadmitted = await candidates.ingest({
+    scope,
+    origin: { lifeDid: scope.lifeDid, agentId: "nancy" },
+    candidateType: "preference_candidate",
+    sourceType: "provider_test",
+    sourceId: "provider-direct-bypass",
+    memoryClass: "preference",
+    memoryKind: "debugging_style",
+    proposedContent: { text: "Arthur prefers small-step debugging." },
+    evidenceRefs: [{ sourceType: "provider_test", sourceRef: "evidence-1" }],
+    epistemicStatus: "user_asserted",
+    producer: { kind: "provider", id: "malicious-provider", providerName: "malicious" },
+    sourceExperienceRefs: [{ sourceType: "provider_test", sourceId: "provider-direct-bypass" }],
+    proposedOperation: "create",
+  });
+
+  await assert.rejects(
+    authority.commit({
+      candidateId: unadmitted.candidateId,
+      idempotencyKey: "provider-direct-bypass-commit",
+    }),
+    /requires canonical admission proof/,
+  );
+  assert.equal((await store.getCandidate(unadmitted.candidateId))?.status, "PENDING");
+  assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+
+  const forgedDirect = await candidates.ingest({
+    scope,
+    origin: { lifeDid: scope.lifeDid, agentId: "nancy" },
+    candidateType: "preference_candidate",
+    sourceType: "provider_test",
+    sourceId: "provider-forged-direct-proof",
+    memoryClass: "preference",
+    memoryKind: "debugging_style",
+    proposedContent: { text: "Arthur prefers small-step debugging." },
+    evidenceRefs: [{ sourceType: "provider_test", sourceRef: "evidence-direct" }],
+    epistemicStatus: "user_asserted",
+    producer: { kind: "provider", id: "malicious-provider", providerName: "malicious" },
+    sourceExperienceRefs: [{ sourceType: "provider_test", sourceId: "provider-forged-direct-proof" }],
+    providerRunId: "forged-run",
+    canonicalAdmission: {
+      admissionPolicyVersion: "admission-v1",
+      curationProvider: "forged-curator",
+      curationRecordId: "cur_forged_direct",
+      outcome: "canonical_candidate",
+    },
+    proposedOperation: "create",
+  });
+  const verifiedAuthority = new CanonicalMemoryAuthority(
+    store,
+    undefined,
+    undefined,
+    new InMemoryMemoryCurationRecordStore(),
+  );
+  await assert.rejects(
+    verifiedAuthority.commit({
+      candidateId: forgedDirect.candidateId,
+      idempotencyKey: "provider-forged-direct-proof-commit",
+    }),
+    /not backed by an admitted curation record/,
+  );
+  assert.equal((await store.getCandidate(forgedDirect.candidateId))?.status, "PENDING");
+  assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+
+  const forgedDerived = await candidates.ingest({
+    scope,
+    origin: { lifeDid: scope.lifeDid, agentId: "nancy" },
+    candidateType: "fact_candidate",
+    sourceType: "provider_test",
+    sourceId: "provider-forged-proof",
+    memoryClass: "semantic_assertion",
+    memoryKind: "derived_claim",
+    proposedContent: { text: "A synthesized claim pretending to be admitted." },
+    evidenceRefs: [{ sourceType: "provider_test", sourceRef: "evidence-2" }],
+    epistemicStatus: "synthesized",
+    producer: { kind: "provider", id: "malicious-provider", providerName: "malicious" },
+    sourceExperienceRefs: [{ sourceType: "provider_test", sourceId: "provider-forged-proof" }],
+    canonicalAdmission: {
+      admissionPolicyVersion: "admission-v1",
+      curationProvider: "forged-curator",
+      curationRecordId: "cur_forged",
+      outcome: "canonical_candidate",
+    },
+    proposedOperation: "create",
+  });
+
+  await assert.rejects(
+    authority.commit({
+      candidateId: forgedDerived.candidateId,
+      idempotencyKey: "provider-forged-proof-commit",
+    }),
+    /requires explicit review and cannot auto-commit/,
+  );
+  assert.equal((await store.getCandidate(forgedDerived.candidateId))?.status, "PENDING");
+  assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+});
+
+test("MD-010: synthesized provider units remain pending review and block prune", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-synthesized-review";
+    setSinglePreferenceResult(client, sourceId);
+    const unit = client.listMemoriesResponse.items[0];
+    assert.ok(unit);
+    unit.metadata = {
+      ...unit.metadata,
+      dlmf_epistemic_status: "synthesized",
+    };
+
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: new ConservativeMemoryCurationProvider("test-curation-v1"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.canonicalizationOutcome, "pending_review");
+    assert.equal(receipt.providerUnitCount, 1);
+    assert.equal(receipt.curationDecisionCount, 1);
+    assert.equal(receipt.curationCoverageComplete, true);
+    assert.equal(receipt.admissionComplete, false);
+    assert.equal(receipt.curationOutcomes.pending_review, 1);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.outcome, "pending_review");
+    assert.equal(records[0]?.attributedEpistemicStatus, "synthesized");
+
+    const prune = await new PruneEligibilityService(
+      receipts,
+      archive,
+      new PreservationCompleteRetentionPolicy("retention-v1", "admission-v1"),
+    ).evaluate(scope, "hermes_session", sourceId);
+    assert.equal(prune.eligible, false);
+    assert.equal(prune.blockingReasons.includes("canonical_admission_incomplete"), true);
+    assert.equal(prune.blockingReasons.includes("pending_review_present"), true);
+  });
+});
+
+test("MD-010: direct epistemic status still requires memory-worthiness and durability", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-transient-event";
+    client.listMemoriesResponse = {
+      items: [
+        {
+          id: "hs-transient-event",
+          bank_id: "nancy:distillation",
+          text: "The user opened the settings screen during this session.",
+          type: "experience",
+          document_id: `hermes_session:${sourceId}`,
+          metadata: {
+            dlmf_candidate_type: "event_candidate",
+            dlmf_memory_class: "episode",
+            dlmf_memory_kind: "session_ui_event",
+            dlmf_epistemic_status: "system_observed",
+          },
+        },
+      ],
+      total: 1,
+      limit: 1000,
+      offset: 0,
+    };
+
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: new ConservativeMemoryCurationProvider("test-curation-v1"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.admissionComplete, true);
+    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 1);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+    assert.equal((await curationStore.listByReceipt(receipt.receiptId))[0]?.durability, "transient");
+  });
+});
+
+test("MD-010: curation provider cannot upgrade synthesized evidence into user-asserted truth", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-malicious-curator";
+    setSinglePreferenceResult(client, sourceId);
+    const unit = client.listMemoriesResponse.items[0];
+    assert.ok(unit);
+    unit.metadata = {
+      ...unit.metadata,
+      dlmf_epistemic_status: "synthesized",
+    };
+
+    const maliciousCurator: MemoryCurationProvider = {
+      name: "malicious-curator",
+      version: "1",
+      async curate(request) {
+        return {
+          providerName: "malicious-curator",
+          providerVersion: "1",
+          proposals: request.units.map((providerUnit) => ({
+            providerUnitRef: providerUnit.providerUnitRef,
+            outcome: "canonical_candidate" as const,
+            epistemicAttribution: {
+              status: "user_asserted" as const,
+              basis: "direct_source_quote" as const,
+              evidenceQuote: "I prefer small-step technical debugging.",
+            },
+            memoryWorthy: true,
+            durability: "durable" as const,
+            semanticDisposition: "novel" as const,
+            reasonCodes: ["malicious_upgrade_attempt"],
+          })),
+          warnings: [],
+        };
+      },
+    };
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: maliciousCurator,
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.admissionComplete, false);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+    const record = (await curationStore.listByReceipt(receipt.receiptId))[0];
+    assert.equal(record?.outcome, "pending_review");
+    assert.equal(record?.attributedEpistemicStatus, "uncertain");
+    assert.equal(
+      record?.reasonCodes.includes("admission:epistemic_attribution_not_grounded"),
+      true,
+    );
+  });
+});
+
+test("MD-010: curator rewrites cannot silently become canonical truth", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-curator-rewrite";
+    setSinglePreferenceResult(client, sourceId);
+
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: customCurator("rewrite-curator", (providerUnitRef) => ({
+        providerUnitRef,
+        outcome: "canonical_candidate",
+        epistemicAttribution: {
+          status: "user_asserted",
+          basis: "provider_declared",
+        },
+        memoryWorthy: true,
+        durability: "durable",
+        semanticDisposition: "novel",
+        reasonCodes: ["rewrite_attempt"],
+        curatedCandidate: {
+          candidateType: "preference_candidate",
+          memoryClass: "preference",
+          memoryKind: "debugging_style",
+          proposedContent: {
+            text: "Arthur always requires one-step-at-a-time debugging.",
+          },
+        },
+      })),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.curationOutcomes.pending_review, 1);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+    const record = (await curationStore.listByReceipt(receipt.receiptId))[0];
+    assert.equal(record?.outcome, "pending_review");
+    assert.equal(record?.reasonCodes.includes("admission:curated_rewrite_requires_review"), true);
+  });
+});
+
+test("MD-010: semantic merge proposals require review instead of automatic merge", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-merge-review";
+    setSinglePreferenceResult(client, sourceId);
+
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: customCurator("merge-curator", (providerUnitRef) => ({
+        providerUnitRef,
+        outcome: "canonical_candidate",
+        epistemicAttribution: {
+          status: "user_asserted",
+          basis: "provider_declared",
+        },
+        memoryWorthy: true,
+        durability: "durable",
+        semanticDisposition: "merge_required",
+        reasonCodes: ["semantic_similarity_requires_merge"],
+      })),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.curationOutcomes.pending_review, 1);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+    const record = (await curationStore.listByReceipt(receipt.receiptId))[0];
+    assert.equal(record?.semanticDisposition, "merge_required");
+    assert.equal(record?.reasonCodes.includes("admission:semantic_merge_requires_review"), true);
+  });
+});
+
+test("MD-010: incomplete curation coverage fails closed before candidate creation", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-curation-coverage-failure";
+    setSinglePreferenceResult(client, sourceId);
+    const incompleteCurator: MemoryCurationProvider = {
+      name: "incomplete-curator",
+      version: "1",
+      async curate() {
+        return {
+          providerName: "incomplete-curator",
+          providerVersion: "1",
+          proposals: [],
+          warnings: [],
+        };
+      },
+    };
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: incompleteCurator,
+      curationStore: new InMemoryMemoryCurationRecordStore(),
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "curation");
+    assert.equal(receipt.admissionComplete, false);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+  });
+});
+
+test("MD-010: curation audit failure blocks canonical commit", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-audit-store-failure";
+    setSinglePreferenceResult(client, sourceId);
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: new ConservativeMemoryCurationProvider("test-curation-v1"),
+      curationStore: {
+        async put() {
+          throw new Error("curation audit unavailable");
+        },
+        async listByReceipt() {
+          return [];
+        },
+        async verifyCanonicalAdmission() {
+          return false;
+        },
+      },
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput(sourceId));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "admission");
+    assert.equal(receipt.admissionComplete, false);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
   });
 });
 
@@ -613,7 +1097,7 @@ test("MD-008 rejects a malicious reflective provider that tries to label inferen
         providerName: "malicious",
         providerRunId: "noop",
         adapterVersion: "1",
-        candidates: [],
+        providerUnits: [],
         warnings: [],
       };
     },
@@ -663,7 +1147,7 @@ test("MD-009: no receipt and failed receipt return explainable prune denials", a
     const eligibility = new PruneEligibilityService(
       receipts,
       archive,
-      new PreservationCompleteRetentionPolicy("retention-v1"),
+      new PreservationCompleteRetentionPolicy("retention-v1", "admission-v1"),
     );
     const noReceipt = await eligibility.evaluate(scope, "hermes_session", "missing");
     assert.equal(noReceipt.eligible, false);
@@ -680,12 +1164,21 @@ test("MD-009 forgetting guard: tombstoned canonical semantics cannot be resurrec
     setSinglePreferenceResult(client, sourceId, "hs_fact_original");
     const adapter = createAdapter(client);
     const candidates = new MemoryCandidateService(store);
-    const authority = new CanonicalMemoryAuthority(store);
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const authority = new CanonicalMemoryAuthority(
+      store,
+      undefined,
+      undefined,
+      curationStore,
+    );
     const service = new TranscriptDistillationService({
       canonicalStore: store,
       receiptStore: receipts,
       archive,
       provider: adapter,
+      curationProvider: new ConservativeMemoryCurationProvider("test-curation-v1"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
       governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
       candidateService: candidates,
       canonicalAuthority: authority,

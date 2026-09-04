@@ -41,25 +41,35 @@ export class InMemoryDistillationReceiptStore implements DistillationReceiptStor
     const existing = this.receipts.get(storageKey);
     const merged: DistillationReceipt = existing === undefined
       ? receipt
-      : {
-          ...receipt,
-          receiptId: existing.receiptId,
-          candidateIds: [...new Set([...existing.candidateIds, ...receipt.candidateIds])],
-          canonicalMemoryIds: [
+      : (() => {
+          const candidateIds = [...new Set([...existing.candidateIds, ...receipt.candidateIds])];
+          const canonicalMemoryIds = [
             ...new Set([...existing.canonicalMemoryIds, ...receipt.canonicalMemoryIds]),
-          ],
-          status: existing.status === "complete" ? "complete" : receipt.status,
-          canonicalizationOutcome:
-            existing.canonicalizationOutcome === "committed" ||
-            receipt.canonicalizationOutcome === "committed"
-              ? "committed"
-              : receipt.canonicalizationOutcome,
-          retentionState:
-            existing.retentionState === "prune_eligible"
-              ? "prune_eligible"
-              : receipt.retentionState,
-          pruneEligible: existing.pruneEligible || receipt.pruneEligible,
-        };
+          ];
+          const preserveCommittedRace =
+            existing.canonicalizationOutcome === "committed" &&
+            receipt.canonicalizationOutcome === "superseded";
+          return {
+            ...receipt,
+            receiptId: existing.receiptId,
+            candidateIds,
+            canonicalMemoryIds,
+            canonicalizationOutcome:
+              receipt.canonicalizationOutcome === "pending_review"
+                ? "pending_review"
+                : canonicalMemoryIds.length > 0
+                  ? "committed"
+                  : receipt.canonicalizationOutcome,
+            ...(preserveCommittedRace
+              ? {
+                  curationOutcomes: existing.curationOutcomes,
+                  curationDecisionCount: existing.curationDecisionCount,
+                  curationCoverageComplete: existing.curationCoverageComplete,
+                  admissionComplete: existing.admissionComplete,
+                }
+              : {}),
+          };
+        })();
     this.receipts.set(storageKey, clone(merged));
   }
 }

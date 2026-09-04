@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import type { MemoryScope } from "../domain/types.js";
+import type { CurationOutcomeCounts } from "../curation/types.js";
 import type { DistillationReceiptStore } from "./distillation-receipt-store.js";
 import type {
   CanonicalizationOutcome,
@@ -21,6 +22,7 @@ interface ReceiptRow {
   ingested_at: Date | string | null;
   archived_at: Date | string | null;
   distilled_at: Date | string | null;
+  curated_at: Date | string | null;
   canonicalized_at: Date | string | null;
   raw_archive_ref: string | null;
   raw_archive_checksum: string | null;
@@ -28,9 +30,17 @@ interface ReceiptRow {
   provider_run_id: string | null;
   distillation_policy_version: string;
   canonicalization_policy_version: string;
+  admission_policy_version: string;
   retention_policy_version: string;
   adapter_version: string;
   provider_version: string | null;
+  curation_provider: string;
+  curation_provider_version: string | null;
+  provider_unit_count: number;
+  curation_decision_count: number;
+  curation_outcomes: CurationOutcomeCounts;
+  curation_coverage_complete: boolean;
+  admission_complete: boolean;
   candidate_ids: string[];
   canonical_memory_ids: string[];
   status: DistillationReceiptStatus;
@@ -63,8 +73,15 @@ function fromRow(row: ReceiptRow): DistillationReceipt {
     provider: row.provider,
     distillationPolicyVersion: row.distillation_policy_version,
     canonicalizationPolicyVersion: row.canonicalization_policy_version,
+    admissionPolicyVersion: row.admission_policy_version,
     retentionPolicyVersion: row.retention_policy_version,
     adapterVersion: row.adapter_version,
+    curationProvider: row.curation_provider,
+    providerUnitCount: row.provider_unit_count,
+    curationDecisionCount: row.curation_decision_count,
+    curationOutcomes: row.curation_outcomes,
+    curationCoverageComplete: row.curation_coverage_complete,
+    admissionComplete: row.admission_complete,
     candidateIds: row.candidate_ids as DistillationReceipt["candidateIds"],
     canonicalMemoryIds: row.canonical_memory_ids as DistillationReceipt["canonicalMemoryIds"],
     status: row.status,
@@ -80,15 +97,20 @@ function fromRow(row: ReceiptRow): DistillationReceipt {
   const ingestedAt = optionalIso(row.ingested_at);
   const archivedAt = optionalIso(row.archived_at);
   const distilledAt = optionalIso(row.distilled_at);
+  const curatedAt = optionalIso(row.curated_at);
   const canonicalizedAt = optionalIso(row.canonicalized_at);
   if (ingestedAt !== undefined) receipt.ingestedAt = ingestedAt;
   if (archivedAt !== undefined) receipt.archivedAt = archivedAt;
   if (distilledAt !== undefined) receipt.distilledAt = distilledAt;
+  if (curatedAt !== undefined) receipt.curatedAt = curatedAt;
   if (canonicalizedAt !== undefined) receipt.canonicalizedAt = canonicalizedAt;
   if (row.raw_archive_ref !== null) receipt.rawArchiveRef = row.raw_archive_ref;
   if (row.raw_archive_checksum !== null) receipt.rawArchiveChecksum = row.raw_archive_checksum;
   if (row.provider_run_id !== null) receipt.providerRunId = row.provider_run_id;
   if (row.provider_version !== null) receipt.providerVersion = row.provider_version;
+  if (row.curation_provider_version !== null) {
+    receipt.curationProviderVersion = row.curation_provider_version;
+  }
   return receipt;
 }
 
@@ -130,23 +152,29 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
       `INSERT INTO memory_distillation_receipts (
         receipt_id, tenant_id, life_did, memory_namespace,
         source_type, source_id, idempotency_key,
-        ingested_at, archived_at, distilled_at, canonicalized_at,
+        ingested_at, archived_at, distilled_at, curated_at, canonicalized_at,
         raw_archive_ref, raw_archive_checksum,
         provider, provider_run_id,
         distillation_policy_version, canonicalization_policy_version,
-        retention_policy_version, adapter_version, provider_version,
+        admission_policy_version, retention_policy_version,
+        adapter_version, provider_version,
+        curation_provider, curation_provider_version,
+        provider_unit_count, curation_decision_count, curation_outcomes,
+        curation_coverage_complete, admission_complete,
         candidate_ids, canonical_memory_ids, status, errors, warnings,
         canonicalization_outcome, retention_state, prune_eligible, attempts,
         created_at, updated_at
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-        $21::text[],$22::text[],$23,$24::jsonb,$25::jsonb,$26,$27,$28,$29,$30,$31
+        $21,$22,$23,$24,$25,$26,$27::jsonb,$28,$29,$30::text[],$31::text[],$32,
+        $33::jsonb,$34::jsonb,$35,$36,$37,$38,$39,$40
       )
       ON CONFLICT (tenant_id, life_did, memory_namespace, idempotency_key)
       DO UPDATE SET
         ingested_at=EXCLUDED.ingested_at,
         archived_at=EXCLUDED.archived_at,
         distilled_at=EXCLUDED.distilled_at,
+        curated_at=EXCLUDED.curated_at,
         canonicalized_at=EXCLUDED.canonicalized_at,
         raw_archive_ref=EXCLUDED.raw_archive_ref,
         raw_archive_checksum=EXCLUDED.raw_archive_checksum,
@@ -154,9 +182,37 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         provider_run_id=EXCLUDED.provider_run_id,
         distillation_policy_version=EXCLUDED.distillation_policy_version,
         canonicalization_policy_version=EXCLUDED.canonicalization_policy_version,
+        admission_policy_version=EXCLUDED.admission_policy_version,
         retention_policy_version=EXCLUDED.retention_policy_version,
         adapter_version=EXCLUDED.adapter_version,
         provider_version=EXCLUDED.provider_version,
+        curation_provider=EXCLUDED.curation_provider,
+        curation_provider_version=EXCLUDED.curation_provider_version,
+        provider_unit_count=EXCLUDED.provider_unit_count,
+        curation_decision_count=CASE
+          WHEN memory_distillation_receipts.canonicalization_outcome = 'committed'
+            AND EXCLUDED.canonicalization_outcome = 'superseded'
+          THEN memory_distillation_receipts.curation_decision_count
+          ELSE EXCLUDED.curation_decision_count
+        END,
+        curation_outcomes=CASE
+          WHEN memory_distillation_receipts.canonicalization_outcome = 'committed'
+            AND EXCLUDED.canonicalization_outcome = 'superseded'
+          THEN memory_distillation_receipts.curation_outcomes
+          ELSE EXCLUDED.curation_outcomes
+        END,
+        curation_coverage_complete=CASE
+          WHEN memory_distillation_receipts.canonicalization_outcome = 'committed'
+            AND EXCLUDED.canonicalization_outcome = 'superseded'
+          THEN memory_distillation_receipts.curation_coverage_complete
+          ELSE EXCLUDED.curation_coverage_complete
+        END,
+        admission_complete=CASE
+          WHEN memory_distillation_receipts.canonicalization_outcome = 'committed'
+            AND EXCLUDED.canonicalization_outcome = 'superseded'
+          THEN memory_distillation_receipts.admission_complete
+          ELSE EXCLUDED.admission_complete
+        END,
         candidate_ids=ARRAY(
           SELECT DISTINCT value FROM unnest(
             memory_distillation_receipts.candidate_ids || EXCLUDED.candidate_ids
@@ -168,23 +224,23 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
           ) AS value
         ),
         status=CASE
-          WHEN memory_distillation_receipts.status = 'complete' THEN 'complete'
+          WHEN memory_distillation_receipts.status = 'complete'
+            AND EXCLUDED.status NOT IN ('awaiting_review')
+          THEN 'complete'
           ELSE EXCLUDED.status
         END,
         errors=EXCLUDED.errors,
         warnings=EXCLUDED.warnings,
         canonicalization_outcome=CASE
+          WHEN EXCLUDED.canonicalization_outcome = 'pending_review'
+          THEN 'pending_review'
           WHEN memory_distillation_receipts.canonicalization_outcome = 'committed'
-            OR EXCLUDED.canonicalization_outcome = 'committed'
+            AND EXCLUDED.canonicalization_outcome = 'superseded'
           THEN 'committed'
           ELSE EXCLUDED.canonicalization_outcome
         END,
-        retention_state=CASE
-          WHEN memory_distillation_receipts.retention_state = 'prune_eligible'
-          THEN 'prune_eligible'
-          ELSE EXCLUDED.retention_state
-        END,
-        prune_eligible=(memory_distillation_receipts.prune_eligible OR EXCLUDED.prune_eligible),
+        retention_state=EXCLUDED.retention_state,
+        prune_eligible=EXCLUDED.prune_eligible,
         attempts=EXCLUDED.attempts,
         updated_at=EXCLUDED.updated_at`,
       [
@@ -198,6 +254,7 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         receipt.ingestedAt ?? null,
         receipt.archivedAt ?? null,
         receipt.distilledAt ?? null,
+        receipt.curatedAt ?? null,
         receipt.canonicalizedAt ?? null,
         receipt.rawArchiveRef ?? null,
         receipt.rawArchiveChecksum ?? null,
@@ -205,9 +262,17 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         receipt.providerRunId ?? null,
         receipt.distillationPolicyVersion,
         receipt.canonicalizationPolicyVersion,
+        receipt.admissionPolicyVersion,
         receipt.retentionPolicyVersion,
         receipt.adapterVersion,
         receipt.providerVersion ?? null,
+        receipt.curationProvider,
+        receipt.curationProviderVersion ?? null,
+        receipt.providerUnitCount,
+        receipt.curationDecisionCount,
+        JSON.stringify(receipt.curationOutcomes),
+        receipt.curationCoverageComplete,
+        receipt.admissionComplete,
         receipt.candidateIds,
         receipt.canonicalMemoryIds,
         receipt.status,

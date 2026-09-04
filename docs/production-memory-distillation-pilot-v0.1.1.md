@@ -1,14 +1,19 @@
 # DLMF v0.1.1 — Nancy Production Memory Distillation Pilot
 
-**Date:** 2026-09-03  
-**Status:** Runner implemented; GB10 host apply required  
-**Scope:** Five real completed Nancy/Hermes sessions only  
-**Pruning:** Forbidden during pilot
+**Date:** 2026-09-04
+
+**Status:** MD-010 admission-aware runner implemented; post-MD-010 rerun intentionally not executed yet
+
+**Scope:** The same pinned five real completed Nancy/Hermes sessions
+
+**Pruning:** Forbidden during pilot; `AUTO_HERMES_PRUNE=FROZEN`
 
 ## Goal
 
 Validate the v0.1.1 Memory Distillation amendment against real Nancy data without
 changing Nancy's production canonical truth or deleting any Hermes history.
+
+Existing Production Evidence `pilot_20260904140955` proved long-session ingestion and document-scoped Hindsight extraction, including 48,540-, 24,695-, and 101,436-character sessions. It produced 419 provider-derived candidate units and 419 canonical memories, exposing **Canonical Admission Precision Failure** as the remaining blocker. MD-010 changes admission semantics; that dataset has not been rerun during implementation.
 
 The pilot samples exactly five distinct completed sessions:
 
@@ -40,6 +45,9 @@ pilot Hindsight distillation bank
 pilot DLMF PostgreSQL schema
   namespace = pilot.memory-distillation.v0.1.1
         |
+        +--> ProviderMemoryUnit extraction
+        +--> curation/admission audit records
+        +--> admitted DLMF candidates
         +--> pilot canonical projection bank
         +--> reflective candidate test
         +--> prune eligibility evaluation only
@@ -230,7 +238,7 @@ For a managed local pg0 target, Apply also verifies that the systemd service is 
 and that PostgreSQL answers `SELECT 1` **before** any Hindsight provider operation.
 
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
-runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0003
+runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0004
 inside that schema. It does not use `public`.
 
 The Hindsight TypeScript client is loaded from OmniHarness, keeping Hindsight out of
@@ -263,10 +271,14 @@ nancy-dlmf-pilot-canonical-v011
 Hermes transcript
  -> raw archive + checksum
  -> Hindsight distillation plane
- -> MemoryCandidate(s)
+ -> ProviderMemoryUnit(s)
+ -> MemoryCurationProvider proposal(s)
+ -> DLMF deterministic CanonicalAdmissionPolicy
+ -> supporting_evidence_only / rejected / pending_review / canonical_candidate
+ -> MemoryCandidate(s) only for admitted units
  -> pilot governance
  -> CanonicalMemory in isolated pilot namespace
- -> DistillationReceipt COMPLETE/FAILED
+ -> DistillationReceipt COMPLETE/AWAITING_REVIEW/FAILED
  -> canonical projection into isolated Hindsight projection bank
  -> PruneEligibilityDecision
 ```
@@ -288,7 +300,9 @@ It contains, for each sample:
 - reviewed Plan manifest/run ID and pinned transcript checksum;
 - raw transcript checksum/archive reference;
 - distillation receipt/outcome;
-- candidate text/type/epistemic status;
+- provider-unit count and per-unit curation audit outcome;
+- curation/admission policy identity, coverage, and pending-review state;
+- curated candidate text/type/epistemic status;
 - canonical text/ID/fingerprint;
 - prune eligibility decision;
 - explicit `deletionExecuted=false`.
@@ -306,10 +320,15 @@ PLAN_MANIFEST_PINNED=PASS
 TRANSCRIPT_CHECKSUMS_UNCHANGED=PASS
 RAW_ARCHIVE_VERIFIED=PASS
 HINDSIGHT_DISTILLATION_REAL=PASS
+PROVIDER_UNIT_TO_CURATED_CANDIDATE_METRICS=PASS
+CURATION_OUTCOME_REVIEW=PASS
+EPISTEMIC_ATTRIBUTION_REVIEW=PASS
+DURABILITY_CLASSIFICATION_REVIEW=PASS
 CANDIDATE_QUALITY_REVIEW=PASS
 CANONICAL_GOVERNANCE_REVIEW=PASS
 REFLECTIVE_EPISTEMIC_BOUNDARY=PASS
 PRUNE_ELIGIBILITY_ONLY=PASS
+AUTO_HERMES_PRUNE=FROZEN
 HERMES_PRUNE_EXECUTED=false
 PRODUCTION_PILOT=PASS
 ```
@@ -330,9 +349,10 @@ The inspector prints only receipt status, bounded/sanitized error diagnostics, e
 fingerprints, reflection count, and Hermes delete count. It does not print raw
 transcript content.
 
-Machine success is fail-closed: any non-complete receipt, pending canonicalization
-outcome, zero aggregate candidates/canonical memories, or zero reflective candidates
-causes `PRODUCTION_PILOT=FAIL` and a non-zero exit code.
+Machine success is fail-closed: any non-complete receipt, `pending`/`pending_review`
+canonicalization outcome, incomplete canonical admission, zero aggregate provider units,
+zero admitted candidates/canonical memories, or zero reflective candidates causes
+`PRODUCTION_PILOT=FAIL` and a non-zero exit code.
 
 ## Inspect a partially completed run
 
@@ -343,8 +363,7 @@ inspect the preserved PostgreSQL schema without re-running any provider work:
 npm run pilot:memory-distillation:inspect-run -- pilot_YYYYMMDDhhmmss
 ```
 
-This reports per-source receipt status, candidate/canonical counts, prune eligibility,
-and aggregate candidate/head/revision/change counts. It never prints canonical text or
+For MD-010 schemas this reports per-source `providerUnits -> curatedCandidates -> canonical` counts, curation outcome counts, admission completeness, and prune eligibility. It remains backward-compatible with pre-MD-010 pilot schemas such as `pilot_20260904140955`, where admission fields are reported as legacy. It never prints canonical text or
 raw transcripts. Reflection errors are now captured into the private run report; they
 do not erase the completed session evidence.
 
@@ -366,7 +385,8 @@ The production adapter instead performs:
 ```text
 retain(full archived transcript, documentId=<source>)
   -> listMemories(documentId=<source>, state=valid, paginated)
-  -> provider-neutral candidate drafts
+  -> provider-neutral ProviderMemoryUnit values
+  -> curation/admission gate before any DLMF MemoryCandidate
 ```
 
 Runtime `recall()` remains a separate path for short natural-language retrieval from

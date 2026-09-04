@@ -8,11 +8,14 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
 import {
+  ConservativeMemoryCurationProvider,
+  DeterministicCanonicalAdmissionPolicy,
   EvidenceBoundMemoryGovernance,
   FilesystemRawExperienceArchiveProvider,
   HindsightMemoryAdapter,
   PostgresCanonicalMemoryStore,
   PostgresDistillationReceiptStore,
+  PostgresMemoryCurationRecordStore,
   PreservationCompleteRetentionPolicy,
   PruneEligibilityService,
   ReflectiveMemoryService,
@@ -910,6 +913,7 @@ async function createPilotPostgres(databaseUrl) {
     "migrations/0001_canonical_core.sql",
     "migrations/0002_central_operations.sql",
     "migrations/0003_memory_distillation.sql",
+    "migrations/0004_canonical_admission.sql",
   ]) {
     await pool.query(await readFile(resolve(migration), "utf8"));
   }
@@ -977,8 +981,11 @@ async function runApply(selected, manifest) {
   const pool = await createPilotPostgres(databaseUrl);
   const canonicalStore = new PostgresCanonicalMemoryStore(pool);
   const receiptStore = new PostgresDistillationReceiptStore(pool);
+  const curationStore = new PostgresMemoryCurationRecordStore(pool);
   const archive = new FilesystemRawExperienceArchiveProvider(archiveRoot);
   const governance = new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1");
+  const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v1");
+  const admissionPolicy = new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1");
   const adapter = new HindsightMemoryAdapter({
     client: hindsightClient,
     adapterVersion: "hindsight-production-pilot-v0.1.1",
@@ -995,12 +1002,18 @@ async function runApply(selected, manifest) {
     receiptStore,
     archive,
     provider: adapter,
+    curationProvider,
+    curationStore,
+    admissionPolicy,
     governance,
   });
   const eligibility = new PruneEligibilityService(
     receiptStore,
     archive,
-    new PreservationCompleteRetentionPolicy("pilot-retention-v1"),
+    new PreservationCompleteRetentionPolicy(
+      "pilot-retention-v1",
+      admissionPolicy.policyVersion,
+    ),
   );
 
   const scope = { tenantId, lifeDid, memoryNamespace: namespace };
@@ -1037,9 +1050,11 @@ async function runApply(selected, manifest) {
         },
         distillationPolicyVersion: "pilot-distill-v1",
         canonicalizationPolicyVersion: governance.policyVersion,
+        admissionPolicyVersion: admissionPolicy.policyVersion,
         retentionPolicyVersion: "pilot-retention-v1",
       });
 
+      const curationRecords = await curationStore.listByReceipt(receipt.receiptId);
       const candidates = [];
       for (const candidateId of receipt.candidateIds) {
         const candidate = await canonicalStore.getCandidate(candidateId);
@@ -1092,11 +1107,32 @@ async function runApply(selected, manifest) {
           status: receipt.status,
           canonicalizationOutcome: receipt.canonicalizationOutcome,
           providerRunId: receipt.providerRunId,
+          curationProvider: receipt.curationProvider,
+          curationProviderVersion: receipt.curationProviderVersion,
+          admissionPolicyVersion: receipt.admissionPolicyVersion,
+          providerUnitCount: receipt.providerUnitCount,
+          curationDecisionCount: receipt.curationDecisionCount,
+          curationOutcomes: receipt.curationOutcomes,
+          curationCoverageComplete: receipt.curationCoverageComplete,
+          admissionComplete: receipt.admissionComplete,
           candidateIds: receipt.candidateIds,
           canonicalMemoryIds: receipt.canonicalMemoryIds,
           warnings: receipt.warnings,
           errors: receipt.errors,
         },
+        curation: curationRecords.map((record) => ({
+          providerUnitRef: record.providerUnitRef,
+          text: record.providerUnitText,
+          providerEpistemicStatus: record.providerEpistemicStatus,
+          outcome: record.outcome,
+          attributedEpistemicStatus: record.attributedEpistemicStatus,
+          durability: record.durability,
+          memoryWorthy: record.memoryWorthy,
+          semanticDisposition: record.semanticDisposition,
+          reasonCodes: record.reasonCodes,
+          candidateId: record.candidateId,
+          canonicalMemoryId: record.canonicalMemoryId,
+        })),
         candidates,
         canonical,
         pruneEligibility: pruneDecision,
@@ -1228,15 +1264,33 @@ async function main() {
   console.log(`Report: ${reportPath}`);
   for (const item of report.sessions) {
     console.log(
-      `${item.category}: receipt=${item.receipt.status}/${item.receipt.canonicalizationOutcome} candidates=${item.candidates.length} canonical=${item.canonical.length} pruneEligible=${item.pruneEligibility.eligible}`,
+      `${item.category}: receipt=${item.receipt.status}/${item.receipt.canonicalizationOutcome} providerUnits=${item.receipt.providerUnitCount} curatedCandidates=${item.candidates.length} canonical=${item.canonical.length} pendingReview=${item.receipt.curationOutcomes?.pending_review ?? 0} pruneEligible=${item.pruneEligibility.eligible}`,
     );
   }
   const failedSessions = report.sessions.filter((item) => item.receipt.status !== "complete");
   const pendingOutcomes = report.sessions.filter(
-    (item) => item.receipt.canonicalizationOutcome === "pending",
+    (item) =>
+      item.receipt.canonicalizationOutcome === "pending" ||
+      item.receipt.canonicalizationOutcome === "pending_review",
+  );
+  const incompleteAdmissions = report.sessions.filter(
+    (item) => item.receipt.admissionComplete !== true,
+  );
+  const totalProviderUnits = report.sessions.reduce(
+    (sum, item) => sum + Number(item.receipt.providerUnitCount || 0),
+    0,
   );
   const totalCandidates = report.sessions.reduce((sum, item) => sum + item.candidates.length, 0);
   const totalCanonical = report.sessions.reduce((sum, item) => sum + item.canonical.length, 0);
+  const totalCurationOutcomes = report.sessions.reduce(
+    (totals, item) => {
+      for (const key of ["supporting_evidence_only", "rejected", "pending_review", "canonical_candidate"]) {
+        totals[key] += Number(item.receipt.curationOutcomes?.[key] ?? 0);
+      }
+      return totals;
+    },
+    { supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0 },
+  );
   const reflectionCount = report.reflection?.produced ?? 0;
   const executionFailures = [];
   if (failedSessions.length > 0) {
@@ -1245,13 +1299,25 @@ async function main() {
   if (pendingOutcomes.length > 0) {
     executionFailures.push(`CANONICALIZATION_PENDING:${pendingOutcomes.length}`);
   }
+  if (incompleteAdmissions.length > 0) {
+    executionFailures.push(`CANONICAL_ADMISSION_INCOMPLETE:${incompleteAdmissions.length}`);
+  }
+  if (totalProviderUnits === 0) executionFailures.push("NO_PROVIDER_UNITS_PRODUCED");
   if (totalCandidates === 0) executionFailures.push("NO_CANDIDATES_PRODUCED");
   if (totalCanonical === 0) executionFailures.push("NO_CANONICAL_MEMORY_PRODUCED");
   if (report.reflection?.status === "failed") executionFailures.push("REFLECTION_FAILED");
   if (reflectionCount === 0) executionFailures.push("NO_REFLECTIVE_CANDIDATE_PRODUCED");
 
+  console.log(`provider_units=${totalProviderUnits}`);
+  console.log(`curated_candidates=${totalCandidates}`);
+  console.log(`canonical_memories=${totalCanonical}`);
+  console.log(`curation_supporting_evidence_only=${totalCurationOutcomes.supporting_evidence_only}`);
+  console.log(`curation_rejected=${totalCurationOutcomes.rejected}`);
+  console.log(`curation_pending_review=${totalCurationOutcomes.pending_review}`);
+  console.log(`curation_canonical_candidate=${totalCurationOutcomes.canonical_candidate}`);
   console.log(`reflection_status=${report.reflection?.status ?? "not_run"}`);
   console.log(`reflection_candidates=${reflectionCount}`);
+  console.log("AUTO_HERMES_PRUNE=FROZEN");
   console.log("HERMES_PRUNE_EXECUTED=false");
   if (executionFailures.length > 0) {
     for (const failure of executionFailures) console.error(`PILOT_FAILURE=${failure}`);

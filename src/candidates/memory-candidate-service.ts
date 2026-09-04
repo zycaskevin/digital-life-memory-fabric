@@ -78,6 +78,22 @@ function validateInput(input: CandidateInput): void {
   if (input.producer !== undefined) {
     requireNonEmpty(input.producer.id, "producer.id");
   }
+  if (input.canonicalAdmission !== undefined) {
+    requireNonEmpty(
+      input.canonicalAdmission.admissionPolicyVersion,
+      "canonicalAdmission.admissionPolicyVersion",
+    );
+    requireNonEmpty(
+      input.canonicalAdmission.curationProvider,
+      "canonicalAdmission.curationProvider",
+    );
+    if (!input.canonicalAdmission.curationRecordId.startsWith("cur_")) {
+      throw new ValidationError("canonicalAdmission.curationRecordId must start with cur_");
+    }
+    if (input.canonicalAdmission.outcome !== "canonical_candidate") {
+      throw new ValidationError("canonicalAdmission.outcome must be canonical_candidate");
+    }
+  }
   for (const [index, ref] of (input.sourceExperienceRefs ?? []).entries()) {
     requireNonEmpty(ref.sourceType, `sourceExperienceRefs[${index}].sourceType`);
     requireNonEmpty(ref.sourceId, `sourceExperienceRefs[${index}].sourceId`);
