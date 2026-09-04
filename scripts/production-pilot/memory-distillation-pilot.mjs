@@ -72,8 +72,9 @@ const CATEGORIES = [
   "inferred_insight",
 ];
 
-function readPersistedPilotDatabaseUrl() {
-  if (!existsSync(pilotEnvFile)) return undefined;
+function readPersistedPilotConfig() {
+  if (!existsSync(pilotEnvFile)) return {};
+  const values = {};
   const text = readFileSync(pilotEnvFile, "utf8");
   for (const raw of text.split(/\r?\n/)) {
     let line = raw.trim();
@@ -82,18 +83,26 @@ function readPersistedPilotDatabaseUrl() {
     const index = line.indexOf("=");
     if (index < 1) continue;
     const key = line.slice(0, index).trim();
-    if (key !== "DLMF_PILOT_DATABASE_URL") continue;
     let value = line.slice(index + 1).trim();
     if (value.length >= 2 && value[0] === value.at(-1) && ["'", '"'].includes(value[0])) {
       value = value.slice(1, -1);
     }
-    return value || undefined;
+    values[key] = value;
   }
-  return undefined;
+  return values;
+}
+
+function readPersistedPilotDatabaseUrl() {
+  return readPersistedPilotConfig().DLMF_PILOT_DATABASE_URL || undefined;
 }
 
 function pilotDatabaseUrl() {
   return process.env.DLMF_PILOT_DATABASE_URL || readPersistedPilotDatabaseUrl();
+}
+
+function pilotDatabaseSource() {
+  if (nonEmptyString(process.env.DLMF_PILOT_DATABASE_URL)) return "environment";
+  return existsSync(pilotEnvFile) ? "private_file" : "none";
 }
 
 function clampInt(raw, fallback, min, max) {
@@ -726,6 +735,42 @@ function postgresLocalHints() {
   };
 }
 
+function postgresServiceStatus() {
+  const unitPath = join(home, ".config", "systemd", "user", "dlmf-pilot-postgres.service");
+  const installed = existsSync(unitPath);
+  if (!installed) {
+    return { installed: false, active: "not-installed", enabled: "not-installed", unitPath };
+  }
+  const activeResult = spawnSync("systemctl", ["--user", "is-active", "dlmf-pilot-postgres.service"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const enabledResult = spawnSync("systemctl", ["--user", "is-enabled", "dlmf-pilot-postgres.service"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const active = String(activeResult.stdout || activeResult.stderr || "unavailable").trim() || "unavailable";
+  const enabled = String(enabledResult.stdout || enabledResult.stderr || "unavailable").trim() || "unavailable";
+  return { installed, active, enabled, unitPath };
+}
+
+async function probePilotPostgres(databaseUrl) {
+  if (!nonEmptyString(databaseUrl)) return "unconfigured";
+  const probePool = new Pool({
+    connectionString: databaseUrl,
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+  });
+  try {
+    await probePool.query("SELECT 1 AS ready");
+    return "healthy";
+  } catch {
+    return "unavailable";
+  } finally {
+    await probePool.end().catch(() => undefined);
+  }
+}
+
 function redactedDatabaseTarget(databaseUrl) {
   if (!nonEmptyString(databaseUrl)) return undefined;
   try {
@@ -774,22 +819,13 @@ async function runPreflight() {
   }
   if (hindsightConnection.authHealthy !== true) hindsightAuth = "unavailable";
 
-  let postgresHealth = nonEmptyString(databaseUrl) ? "unavailable" : "unconfigured";
-  if (nonEmptyString(databaseUrl)) {
-    const probePool = new Pool({
-      connectionString: databaseUrl,
-      max: 1,
-      connectionTimeoutMillis: 5_000,
-    });
-    try {
-      await probePool.query("SELECT 1 AS ready");
-      postgresHealth = "healthy";
-    } catch {
-      postgresHealth = "unavailable";
-    } finally {
-      await probePool.end().catch(() => undefined);
-    }
-  }
+  const postgresHealth = await probePilotPostgres(databaseUrl);
+  const databaseSource = pilotDatabaseSource();
+  const persistedPilotConfig = readPersistedPilotConfig();
+  const managedPg0 =
+    databaseSource === "private_file" && nonEmptyString(persistedPilotConfig.DLMF_PILOT_PG0_NAME);
+  const serviceStatus = postgresServiceStatus();
+  const serviceReady = !managedPg0 || (serviceStatus.installed && serviceStatus.active === "active");
 
   const localHints = postgresLocalHints();
   const target = redactedDatabaseTarget(databaseUrl);
@@ -805,7 +841,10 @@ async function runPreflight() {
   console.log(
     `Hindsight: mode=${hindsightConnection.mode} endpoint=${endpointKind} health=${hindsightHealth} auth=${hindsightAuth} auth_source=${hindsightConnection.authSource} key_fp=${hindsightConnection.authFingerprint} version=${hindsightVersion}`,
   );
-  console.log(`DLMF PostgreSQL: configured=${nonEmptyString(databaseUrl)} source=${process.env.DLMF_PILOT_DATABASE_URL ? "environment" : existsSync(pilotEnvFile) ? "private_file" : "none"} health=${postgresHealth}`);
+  console.log(`DLMF PostgreSQL: configured=${nonEmptyString(databaseUrl)} source=${databaseSource} health=${postgresHealth}`);
+  console.log(
+    `DLMF PostgreSQL service: managed_pg0=${managedPg0} installed=${serviceStatus.installed} active=${serviceStatus.active} enabled=${serviceStatus.enabled}`,
+  );
   console.log(
     `Local PostgreSQL hints: psql=${localHints.psql ? "yes" : "no"} pg_isready=${localHints.pgIsReady ? "yes" : "no"} socket5432=${localHints.defaultSocketVisible}`,
   );
@@ -820,13 +859,17 @@ async function runPreflight() {
     selected.length === 5 &&
     hindsightHealth === "healthy" &&
     hindsightAuth === "healthy" &&
-    postgresHealth === "healthy";
+    postgresHealth === "healthy" &&
+    serviceReady;
 
   console.log(`PRODUCTION_PILOT_PREFLIGHT=${ready ? "PASS" : "BLOCKED"}`);
   if (!nonEmptyString(databaseUrl)) {
     console.log("BLOCKER=DLMF_PILOT_DATABASE_URL_NOT_CONFIGURED");
   } else if (postgresHealth !== "healthy") {
     console.log("BLOCKER=DLMF_PILOT_DATABASE_NOT_REACHABLE");
+  }
+  if (managedPg0 && !serviceReady) {
+    console.log("BLOCKER=DLMF_PILOT_POSTGRES_SERVICE_NOT_ACTIVE");
   }
   if (hindsightHealth !== "healthy") {
     console.log("BLOCKER=HINDSIGHT_NOT_HEALTHY");
@@ -898,6 +941,22 @@ async function runApply(selected, manifest) {
   const databaseUrl = pilotDatabaseUrl();
   if (!nonEmptyString(databaseUrl)) {
     throw new Error("DLMF pilot PostgreSQL is not configured; run pilot:memory-distillation:bootstrap-postgres or set DLMF_PILOT_DATABASE_URL.");
+  }
+  const databaseSource = pilotDatabaseSource();
+  const persistedPilotConfig = readPersistedPilotConfig();
+  const managedPg0 =
+    databaseSource === "private_file" && nonEmptyString(persistedPilotConfig.DLMF_PILOT_PG0_NAME);
+  const serviceStatus = postgresServiceStatus();
+  if (managedPg0 && (!serviceStatus.installed || serviceStatus.active !== "active")) {
+    throw new Error(
+      "DLMF pilot PostgreSQL managed service is not active; run npm run pilot:memory-distillation:bootstrap-postgres before Apply.",
+    );
+  }
+  const postgresHealth = await probePilotPostgres(databaseUrl);
+  if (postgresHealth !== "healthy") {
+    throw new Error(
+      "DLMF pilot PostgreSQL is not reachable; run npm run pilot:memory-distillation:bootstrap-postgres before Apply.",
+    );
   }
   const hindsightConnection = await resolveHindsightConnection();
   if (hindsightConnection.authHealthy !== true) {

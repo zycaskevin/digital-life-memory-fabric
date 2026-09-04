@@ -159,6 +159,32 @@ Credentials and the selected instance/port are persisted **before** PostgreSQL i
 started, so an interrupted bootstrap can be safely retried without losing the
 cluster password.
 
+### Managed pg0 lifecycle on GB10
+
+On Linux hosts with a systemd user manager, the bootstrap also installs and enables:
+
+```text
+~/.config/systemd/user/dlmf-pilot-postgres.service
+```
+
+The unit does **not** create a new database. It reuses the existing
+`DLMF_PILOT_PG0_NAME`, port, database, and credentials from
+`~/.config/dlmf/production-pilot.env`. A small monitor keeps the pg0 instance healthy;
+if PostgreSQL disappears, the monitor exits and systemd restarts it with
+`Restart=on-failure`.
+
+Useful diagnostics:
+
+```bash
+systemctl --user status dlmf-pilot-postgres.service
+journalctl --user -u dlmf-pilot-postgres.service -n 100 --no-pager
+```
+
+The service is enabled under the user's `default.target`, so it starts again when the
+user systemd manager starts (normally at login). Hosts that intentionally do not use
+systemd can set `DLMF_PILOT_MANAGED_SERVICE=0` for development-only bootstrap; this is
+not the GB10 production-pilot configuration.
+
 ## Hindsight tenant authentication
 
 For `local_external`, Hermes may store `HINDSIGHT_API_KEY` in
@@ -182,9 +208,12 @@ npm run pilot:memory-distillation:preflight
 
 The preflight checks the real Hermes sample, Hindsight mode/health/auth/version, whether
 DLMF PostgreSQL is configured (environment or private bootstrap file), performs a
-real read-only `SELECT 1` connectivity probe, and reports local PostgreSQL clues. It prints no database password or Hindsight API key and creates no
-schema or memory. A blocked preflight exits with status 2 and emits explicit
-`BLOCKER=...` markers.
+real read-only `SELECT 1` connectivity probe, and reports local PostgreSQL clues. For
+a bootstrap-managed pg0 database it also requires the systemd user service to be
+installed and `active`; otherwise it emits
+`BLOCKER=DLMF_PILOT_POSTGRES_SERVICE_NOT_ACTIVE`. It prints no database password or
+Hindsight API key and creates no schema or memory. A blocked preflight exits with
+status 2 and emits explicit `BLOCKER=...` markers.
 
 Expected before apply:
 
@@ -197,6 +226,8 @@ PRODUCTION_PILOT_PREFLIGHT=PASS
 Apply must be pinned to the exact Plan manifest that was reviewed. The runner reloads
 only those five Hermes session IDs and recomputes each transcript SHA-256. If any
 transcript changed after Plan, Apply fails before any Hindsight/PostgreSQL write.
+For a managed local pg0 target, Apply also verifies that the systemd service is active
+and that PostgreSQL answers `SELECT 1` **before** any Hindsight provider operation.
 
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
 runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0003
