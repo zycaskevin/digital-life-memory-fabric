@@ -206,6 +206,7 @@ function publicReceipt(receipt: DistillationReceipt) {
     retentionState: receipt.retentionState,
     curationCoverageComplete: receipt.curationCoverageComplete,
     admissionComplete: receipt.admissionComplete,
+    pruneEligible: receipt.pruneEligible,
     ...(receipt.rawArchiveRef === undefined ? {} : { rawArchiveRef: receipt.rawArchiveRef }),
     ...(receipt.rawArchiveChecksum === undefined
       ? {}
