@@ -1,0 +1,26 @@
+[Unit]
+Description=Digital Life Memory Fabric — Relationship OS private-turn ingress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_SERVICE_USER
+Group=REPLACE_WITH_SERVICE_GROUP
+WorkingDirectory=/workspace/digital-life-memory-fabric
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/dlmf/relationship-os.env
+ExecStart=REPLACE_WITH_NODE_BIN /workspace/digital-life-memory-fabric/scripts/relationship-os-ingress-server.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dlmf
+
+[Install]
+WantedBy=multi-user.target
