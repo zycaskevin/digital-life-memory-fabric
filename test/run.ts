@@ -5,4 +5,5 @@ import "./provider-materialization.test.js";
 import "./http-delivery-port.test.js";
 import "./verified-retrieval.test.js";
 import "./memory-distillation.test.js";
+import "./relationship-os-ingress.test.js";
 import "./postgres.integration.test.js";
