@@ -1,8 +1,8 @@
 # DLMF v0.1.1 — Nancy Production Memory Distillation Pilot
 
-**Date:** 2026-09-04
+**Date:** 2026-09-05
 
-**Status:** MD-010 admission-aware runner implemented; post-MD-010 rerun intentionally not executed yet
+**Status:** First post-MD-010 Apply failed safe with admission-recall failure; role-aware remediation implemented and locally tested; rerun pending
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -13,7 +13,11 @@
 Validate the v0.1.1 Memory Distillation amendment against real Nancy data without
 changing Nancy's production canonical truth or deleting any Hermes history.
 
-Existing Production Evidence `pilot_20260904140955` proved long-session ingestion and document-scoped Hindsight extraction, including 48,540-, 24,695-, and 101,436-character sessions. It produced 419 provider-derived candidate units and 419 canonical memories, exposing **Canonical Admission Precision Failure** as the remaining blocker. MD-010 changes admission semantics; that dataset has not been rerun during implementation.
+Existing Production Evidence `pilot_20260904140955` proved long-session ingestion and document-scoped Hindsight extraction, including 48,540-, 24,695-, and 101,436-character sessions. It produced 419 provider-derived candidate units and 419 canonical memories, exposing **Canonical Admission Precision Failure** as the remaining blocker.
+
+The first post-MD-010 Apply reused reviewed Plan manifest `pilot_20260903061930` and produced run `pilot_20260905050229`. It failed safe with 667 provider units, 667 `pending_review`, zero curated candidates, and zero canonical memories. All five receipts remained `awaiting_review`, Reflection was skipped, `pruneEligible=false` for every source, `AUTO_HERMES_PRUNE=FROZEN`, and `HERMES_PRUNE_EXECUTED=false`. This proves the canonical gate prevented over-admission, while exposing a new **Canonical Admission Recall Failure / Epistemic Attribution Coverage Failure**: mixed-transcript Hindsight facts lacked direct source-role attribution and the conservative curator routed every synthesized or unknown-durability unit to review.
+
+The role-aware remediation preserves the strict gate. Full-transcript extraction remains unchanged for high recall; an additional user-only source projection is distilled from original Hermes `role=user` records so direct user assertions can be attributed without treating assistant text as user truth. Hindsight `observation` units remain `synthesized` even under that projection. Low-certainty and unknown-durability units now terminate as `supporting_evidence_only` rather than flooding human review. Deterministic admission and canonical authority rules are unchanged.
 
 The pilot samples exactly five distinct completed sessions:
 
@@ -270,7 +274,8 @@ nancy-dlmf-pilot-canonical-v011
 ```text
 Hermes transcript
  -> raw archive + checksum
- -> Hindsight distillation plane
+ -> role-aware source segments (execution provenance only)
+ -> Hindsight full-transcript document + user-only source projection
  -> ProviderMemoryUnit(s)
  -> MemoryCurationProvider proposal(s)
  -> DLMF deterministic CanonicalAdmissionPolicy
@@ -337,6 +342,41 @@ A successful pilot still does not authorize bulk migration of ~11,216 sessions o
 automatic pruning. Bulk migration is a separate bounded and resumable operational
 stage.
 
+## First post-MD-010 failed-safe evidence
+
+The preserved run `pilot_20260905050229` is a required audit artifact and must not be overwritten or treated as an incidental provider failure. Its aggregate result was:
+
+```text
+provider_units=667
+curated_candidates=0
+canonical_memories=0
+curation_supporting_evidence_only=0
+curation_rejected=0
+curation_pending_review=667
+curation_canonical_candidate=0
+reflection_status=skipped
+AUTO_HERMES_PRUNE=FROZEN
+HERMES_PRUNE_EXECUTED=false
+PRODUCTION_PILOT=FAIL
+```
+
+The five pinned source sessions were unchanged and Hindsight/PostgreSQL infrastructure was healthy. The failure is therefore an admission-policy integration finding, not an ingestion or infrastructure failure.
+
+Role-aware remediation execution identities are intentionally versioned separately from the failed run:
+
+```text
+distillationPolicyVersion = pilot-distill-v2-role-aware
+curationProviderVersion    = pilot-curation-v2-role-aware
+adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-v2
+admissionPolicyVersion     = pilot-admission-v1
+```
+
+The admission policy version remains unchanged because the deterministic admission authority was not relaxed. Only source-role attribution and conservative proposal classification changed.
+
+Local remediation acceptance is `63 pass / 0 fail / 1 PostgreSQL runtime integration skip`. The skipped test requires a PostgreSQL runtime URL unavailable inside CatDesk; the production pg0 runtime remains independently verified by GB10 preflight.
+
+On the next Apply, `provider_units` may exceed 667 because each session can now produce units from both the unchanged full-transcript document and the additional user-only projection. Do not compare raw provider-unit count alone. Compare outcome distribution and manually review admitted canonical memories for precision, recall, epistemic correctness, durability, and duplicate/merge quality.
+
 ## Inspect a failed apply
 
 A failed apply must not be rerun blindly. Inspect the existing private report first:
@@ -385,9 +425,19 @@ The production adapter instead performs:
 ```text
 retain(full archived transcript, documentId=<source>)
   -> listMemories(documentId=<source>, state=valid, paginated)
+
+plus, when role-aware source segments are available:
+
+retain(original user-role content only, documentId=<source>:source-actor:user)
+  -> listMemories(documentId=<source>:source-actor:user, state=valid, paginated)
+
+both paths
   -> provider-neutral ProviderMemoryUnit values
-  -> curation/admission gate before any DLMF MemoryCandidate
+  -> DLMF epistemic attribution / curation / admission gate
+  -> DLMF MemoryCandidate only when admitted
 ```
+
+The full-transcript path remains epistemically conservative. The user-only projection may establish `user_asserted` provenance for Hindsight raw `world` facts because assistant/system content is excluded at the source boundary. Hindsight `observation` remains derived/consolidated and is therefore always treated as `synthesized`; it cannot inherit direct-source status merely from the projection metadata.
 
 Runtime `recall()` remains a separate path for short natural-language retrieval from
 the canonical projection plane. Document enumeration is bounded to 10,000 memory units
