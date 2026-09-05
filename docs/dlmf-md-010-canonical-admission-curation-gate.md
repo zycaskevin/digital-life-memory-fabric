@@ -2,11 +2,13 @@
 
 **Date:** 2026-09-04
 
-**Status:** Implemented; local automated acceptance PASS; PostgreSQL runtime integration and post-MD-010 Production Pilot pending
+**Status:** Implemented; first post-MD-010 Production Pilot failed safe with admission-recall failure; role-aware remediation local automated acceptance PASS; production rerun pending
 
 **Applies to:** Digital Life Memory Fabric v0.1.1+
 
 **Production pilot baseline:** `pilot_20260904140955`
+
+**First post-MD-010 pilot evidence:** `pilot_20260905050229` (failed safe; no Hermes deletion)
 
 ## 1. Problem statement
 
@@ -136,9 +138,9 @@ Baseline durability classes:
 - `time_bounded`: commitments/project state that may expire or change; supporting evidence only in the conservative baseline.
 - `durable`: stable preferences, relationships, habits, or explicitly classified durable content.
 - `identity_long_term`: highest long-term durability class; must be explicitly proposed and still pass deterministic policy.
-- `unknown`: fail closed to review.
+- `unknown`: supporting evidence only in the conservative baseline; unknown durability never auto-admits.
 
-The built-in conservative curator intentionally classifies generic facts as `unknown`. A richer cloud/local curator may improve classification, but its result remains a proposal subject to the same deterministic gate.
+The built-in conservative curator intentionally classifies generic facts as `unknown`. A richer cloud/local curator may improve classification, but its result remains a proposal subject to the same deterministic gate. Low-certainty (`inferred` / `synthesized` / `uncertain`) units also terminate as `supporting_evidence_only` unless a separate deterministic ambiguity requires review. This avoids turning high-recall provider output into an unbounded human-review queue while preserving the rule that such units cannot become canonical truth automatically.
 
 ## 8. Dedup / merge semantics
 
@@ -275,20 +277,66 @@ MD-010 is implementation-complete only when automated tests prove at minimum:
 - PostgreSQL migration, receipt, and curation-record persistence round-trip
 - long-transcript distillation continues using `retain(documentId) -> listMemories(documentId)` without recall-query regression
 
-## 15. Production Pilot acceptance after MD-010
+## 15. Production Pilot evidence and admission-recall remediation
 
-Do **not** rerun Production Pilot during implementation.
+MD-010 implementation was completed without rerunning the Production Pilot. The first post-implementation Apply then reused the exact reviewed five-session manifest `pilot_20260903061930` and produced run `pilot_20260905050229`.
 
-After MD-010 code/tests/docs are complete, rerun the exact pinned 5-session dataset used by the existing Production Pilot and record:
+The run failed safe:
+
+```text
+provider_units=667
+curated_candidates=0
+canonical_memories=0
+curation_supporting_evidence_only=0
+curation_rejected=0
+curation_pending_review=667
+curation_canonical_candidate=0
+PRODUCTION_PILOT=FAIL
+AUTO_HERMES_PRUNE=FROZEN
+HERMES_PRUNE_EXECUTED=false
+```
+
+All five receipts ended `awaiting_review/pending_review`, Reflection was skipped, and every source remained non-prune-eligible. This is valid production evidence: MD-010 successfully prevented the prior precision failure from becoming `667 -> 667` canonical memories, but the conservative gate over-corrected to `667 -> 0`. The blocker is classified as **Canonical Admission Recall Failure / Epistemic Attribution Coverage Failure**.
+
+The root cause was deterministic and reproducible:
+
+1. The mixed Hermes transcript was retained as one Hindsight document.
+2. Hindsight source facts from that document did not carry DLMF source-role epistemic metadata.
+3. The adapter therefore correctly defaulted them to `synthesized` rather than inventing a direct attribution.
+4. The original conservative curator escalated every synthesized or unknown-durability unit to `pending_review`.
+5. Consequently, complete extraction coverage became a 667-item review queue with zero admissible candidates.
+
+The remediation preserves the strict canonical boundary rather than weakening it:
+
+- The original full transcript still uses the proven `retain(full transcript, documentId) -> listMemories(documentId)` path for high recall. Units from this mixed-source projection remain `synthesized` unless independently grounded.
+- The distillation request may now carry role-aware `sourceSegments` derived from the raw Hermes records. These segments are execution provenance only; the raw archive remains evidence authority.
+- The adapter creates a second **user-only source projection** containing only original `role=user` message content. Hindsight `world` facts from this isolated projection may carry `user_asserted` provenance.
+- Hindsight `observation` units are always mapped back to `synthesized`, even if produced from a user-only projection, because observations are consolidation outputs rather than raw source facts.
+- `inferred`, `synthesized`, `uncertain`, and unknown-durability facts now terminate as `supporting_evidence_only` in the conservative baseline instead of automatically requiring human review.
+- `pending_review` remains reserved for genuine unresolved admission ambiguity such as material curator rewrites, fuzzy/required merges, invalid duplicate targets, or ungrounded epistemic upgrades.
+- `DeterministicCanonicalAdmissionPolicy` and `CanonicalMemoryAuthority` verification rules are unchanged. A provider or curator still cannot self-authorize canonical truth.
+
+The remediation changes execution identity so old receipts cannot be reused accidentally:
+
+```text
+distillationPolicyVersion = pilot-distill-v2-role-aware
+curationProviderVersion    = pilot-curation-v2-role-aware
+adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-v2
+admissionPolicyVersion     = pilot-admission-v1   # unchanged deterministic authority
+```
+
+Local automated acceptance after remediation: **63 pass, 0 fail, 1 PostgreSQL runtime integration skip** in the CatDesk environment. The new regression test proves that mixed-transcript facts remain synthesized, a user-only `world` preference can become a `user_asserted` canonical candidate, and a user-projection `observation` still remains synthesized/supporting evidence.
+
+The next Production Pilot rerun must use the same pinned five-session manifest and report:
 
 ```text
 provider memory units
-  -> canonical_candidate outcomes (curated candidates)
+  -> supporting_evidence_only / rejected / pending_review / canonical_candidate
   -> canonical memories
 ```
 
-Also report the other three curation outcomes and perform human quality review for precision, recall, epistemic correctness, duplicate/merge quality, and durability classification.
+Because the role-aware remediation intentionally adds a second user-only Hindsight document per session, the next `provider_units` total may be greater than 667. That total is therefore not a direct extraction-count regression metric. Acceptance is based on admission outcome distribution plus human review of precision, recall, epistemic correctness, duplicate/merge quality, and durability classification.
 
-The pilot must continue to report `HERMES_PRUNE_EXECUTED=false`.
+The pilot must continue to report `AUTO_HERMES_PRUNE=FROZEN` and `HERMES_PRUNE_EXECUTED=false`.
 
-Do not claim bulk migration readiness or automatic pruning readiness until the post-MD-010 Production Pilot and manual quality review pass.
+Do not claim bulk migration readiness or automatic pruning readiness until the remediated Production Pilot and manual quality review pass.

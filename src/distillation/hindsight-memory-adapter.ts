@@ -175,6 +175,9 @@ function parseConfidence(metadata: Record<string, string> | null | undefined): n
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 }
 
+const preferencePattern = /\b(?:prefers?|preference|likes?|dislikes?|would rather)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡/i;
+const habitPattern = /\b(?:usually|typically|habit(?:ually)?|often)\b|通常|習慣|經常|常常/i;
+
 function mappedType(result: HindsightRecallResult): {
   candidateType: MemoryCandidateType;
   memoryClass: MemoryClass;
@@ -198,6 +201,23 @@ function mappedType(result: HindsightRecallResult): {
     };
   }
 
+  if (result.type === "world" || result.type == null) {
+    if (preferencePattern.test(result.text)) {
+      return {
+        candidateType: "preference_candidate",
+        memoryClass: "preference",
+        memoryKind: "user_preference",
+      };
+    }
+    if (habitPattern.test(result.text)) {
+      return {
+        candidateType: "habit_candidate",
+        memoryClass: "preference",
+        memoryKind: "user_habit",
+      };
+    }
+  }
+
   if (result.type === "experience") {
     return {
       candidateType: "event_candidate",
@@ -213,8 +233,31 @@ function mappedType(result: HindsightRecallResult): {
 }
 
 function mappedEpistemicStatus(result: HindsightRecallResult): EpistemicStatus {
+  // Hindsight observations are consolidation/synthesis outputs even when the
+  // underlying document came from a direct actor projection. They must never
+  // inherit a direct-source epistemic label automatically.
+  if (result.type === "observation") return "synthesized";
   const declared = result.metadata?.dlmf_epistemic_status as EpistemicStatus | undefined;
   return declared !== undefined && epistemicStatuses.has(declared) ? declared : "synthesized";
+}
+
+function assertRetainComplete(
+  retained: HindsightRetainResponse,
+  bankId: string,
+  projection: string,
+): void {
+  if (!retained.success) {
+    throw new Error(`Hindsight ${projection} retain reported success=false`);
+  }
+  if (retained.async) {
+    throw new Error(`Hindsight ${projection} retain remained asynchronous; distillation is not complete`);
+  }
+  if (retained.bank_id !== bankId) {
+    throw new Error(`Hindsight ${projection} retain returned a mismatched bank_id`);
+  }
+  if (!Number.isSafeInteger(retained.items_count) || retained.items_count < 1) {
+    throw new Error(`Hindsight ${projection} retain did not durably accept the source experience`);
+  }
 }
 
 export class HindsightMemoryAdapter implements MemoryDistillationProvider {
@@ -288,36 +331,51 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     const providerRunId = `hs_distill_${randomUUID().replaceAll("-", "")}`;
     const documentId = `${request.experience.sourceType}:${request.experience.sourceId}`;
     const timestamp = request.experience.observedAt ?? request.experience.createdAt;
+    const commonMetadata = {
+      dlmf_plane: "distillation",
+      dlmf_source_type: request.experience.sourceType,
+      dlmf_source_id: request.experience.sourceId,
+      dlmf_archive_ref: request.experience.archiveRef,
+      dlmf_checksum: request.experience.checksum,
+      dlmf_policy_version: request.distillationPolicyVersion,
+      dlmf_provider_run_id: providerRunId,
+    };
     const retained = await this.options.client.retain(distillation, request.experience.content, {
       ...(timestamp === undefined ? {} : { timestamp }),
       context: request.experience.contentType,
       documentId,
       async: false,
       tags: ["dlmf", "distillation"],
-      metadata: {
-        dlmf_plane: "distillation",
-        dlmf_source_type: request.experience.sourceType,
-        dlmf_source_id: request.experience.sourceId,
-        dlmf_archive_ref: request.experience.archiveRef,
-        dlmf_checksum: request.experience.checksum,
-        dlmf_policy_version: request.distillationPolicyVersion,
-        dlmf_provider_run_id: providerRunId,
-      },
+      metadata: commonMetadata,
     });
-    if (!retained.success) {
-      throw new Error("Hindsight retain reported success=false");
-    }
-    if (retained.async) {
-      throw new Error("Hindsight retain remained asynchronous; distillation is not complete");
-    }
-    if (retained.bank_id !== distillation) {
-      throw new Error("Hindsight retain returned a mismatched bank_id");
-    }
-    if (!Number.isSafeInteger(retained.items_count) || retained.items_count < 1) {
-      throw new Error("Hindsight retain did not durably accept the source experience");
-    }
+    assertRetainComplete(retained, distillation, "full-source");
 
     const documentMemories = await this.listDocumentMemories(distillation, documentId);
+    const userSegments = (request.experience.sourceSegments ?? []).filter(
+      (segment) => segment.actor === "user" && segment.content.trim().length > 0,
+    );
+    if (userSegments.length > 0) {
+      const userDocumentId = `${documentId}:source-actor:user`;
+      const userContent = userSegments.map((segment) => segment.content.trim()).join("\n\n");
+      const userRetained = await this.options.client.retain(distillation, userContent, {
+        ...(timestamp === undefined ? {} : { timestamp }),
+        context: `${request.experience.contentType}; source-actor=user`,
+        documentId: userDocumentId,
+        async: false,
+        tags: ["dlmf", "distillation", "source_actor:user"],
+        metadata: {
+          ...commonMetadata,
+          dlmf_projection_kind: "source_actor",
+          dlmf_source_actor: "user",
+          dlmf_epistemic_status: "user_asserted",
+          dlmf_projection_segment_count: String(userSegments.length),
+        },
+      });
+      assertRetainComplete(userRetained, distillation, "user-source-projection");
+      documentMemories.push(
+        ...(await this.listDocumentMemories(distillation, userDocumentId)),
+      );
+    }
 
     const sourceExperienceRefs: SourceExperienceRef[] = [
       {
