@@ -57,6 +57,11 @@ export class DlmfDevelopmentReferenceGateway {
       return json({ error: "unauthorized" }, 401);
     }
 
+    const queryError = validateQuery(url.searchParams);
+    if (queryError !== undefined) {
+      return json({ error: queryError }, 400);
+    }
+
     const rawMemoryId = url.pathname.slice(this.#pathPrefix.length);
     if (rawMemoryId.length === 0 || rawMemoryId.includes("/")) {
       return json({ error: "development_reference_memory_id_invalid" }, 400);
@@ -104,6 +109,18 @@ export class DlmfDevelopmentReferenceGateway {
       return json({ error: "development_reference_gateway_failed" }, 500);
     }
   }
+}
+
+function validateQuery(searchParams: URLSearchParams): string | undefined {
+  for (const key of searchParams.keys()) {
+    if (key !== "revision") {
+      return "development_reference_query_invalid";
+    }
+  }
+  if (searchParams.getAll("revision").length > 1) {
+    return "development_reference_query_invalid";
+  }
+  return undefined;
 }
 
 function parseRevisionSelection(

@@ -8,4 +8,5 @@ import "./memory-distillation.test.js";
 import "./relationship-os-ingress.test.js";
 import "./relationship-os-deployment.test.js";
 import "./development-reference-gateway.test.js";
+import "./development-reference-gateway-audit.test.js";
 import "./postgres.integration.test.js";
