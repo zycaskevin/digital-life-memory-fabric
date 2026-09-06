@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 
-**Status:** First post-MD-010 Apply failed safe with admission-recall failure; role-aware remediation implemented and locally tested; rerun pending
+**Status:** Production Pilot #2 validated role-aware admission recall but exposed synchronous Hindsight user-projection retain transport failures; async retain remediation locally tested; Pilot #3 pending
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -18,6 +18,10 @@ Existing Production Evidence `pilot_20260904140955` proved long-session ingestio
 The first post-MD-010 Apply reused reviewed Plan manifest `pilot_20260903061930` and produced run `pilot_20260905050229`. It failed safe with 667 provider units, 667 `pending_review`, zero curated candidates, and zero canonical memories. All five receipts remained `awaiting_review`, Reflection was skipped, `pruneEligible=false` for every source, `AUTO_HERMES_PRUNE=FROZEN`, and `HERMES_PRUNE_EXECUTED=false`. This proves the canonical gate prevented over-admission, while exposing a new **Canonical Admission Recall Failure / Epistemic Attribution Coverage Failure**: mixed-transcript Hindsight facts lacked direct source-role attribution and the conservative curator routed every synthesized or unknown-durability unit to review.
 
 The role-aware remediation preserves the strict gate. Full-transcript extraction remains unchanged for high recall; an additional user-only source projection is distilled from original Hermes `role=user` records so direct user assertions can be attributed without treating assistant text as user truth. Hindsight `observation` units remain `synthesized` even under that projection. Low-certainty and unknown-durability units now terminate as `supporting_evidence_only` rather than flooding human review. Deterministic admission and canonical authority rules are unchanged.
+
+Production Pilot #2, `pilot_20260906095623`, reused the same pinned Plan manifest and showed the admission fix working: 83 provider units yielded 82 `supporting_evidence_only`, zero `pending_review`, one `canonical_candidate`, and one canonical memory. `inferred_insight` and `ordinary_conversation` completed admission. The other three longer sessions failed at the provider stage before unit enumeration with the identical diagnostic `retainBatch failed: "fetch failed"`. `AUTO_HERMES_PRUNE=FROZEN` and `HERMES_PRUNE_EXECUTED=false` remained intact. This run remains `PRODUCTION_PILOT=FAIL`; its `PILOT_RUN_INSPECT=PASS` marker only confirms that the preserved failed run can be audited.
+
+The remaining blocker is therefore provider transport, not canonical admission. The new user-only Hindsight projection was being freshly extracted through a synchronous `async=false` request. The async remediation submits only that role projection with Hindsight's native `async=true` operation mechanism, supplies a deterministic client operation ID for idempotent resumption, polls a bounded status endpoint until explicit completion, and fails closed before provider-unit enumeration on any failed/cancelled/missing/timeout condition. Hindsight retains ownership of its native document chunking; DLMF does not invent a second text chunker.
 
 The pilot samples exactly five distinct completed sessions:
 
@@ -365,9 +369,9 @@ The five pinned source sessions were unchanged and Hindsight/PostgreSQL infrastr
 Role-aware remediation execution identities are intentionally versioned separately from the failed run:
 
 ```text
-distillationPolicyVersion = pilot-distill-v2-role-aware
+distillationPolicyVersion = pilot-distill-v3-role-aware-async
 curationProviderVersion    = pilot-curation-v2-role-aware
-adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-v2
+adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-async-v3
 admissionPolicyVersion     = pilot-admission-v1
 ```
 

@@ -899,6 +899,44 @@ async function runPreflight() {
   return ready;
 }
 
+function createPilotHindsightPort(client, connection) {
+  return {
+    retain: client.retain.bind(client),
+    listMemories: client.listMemories.bind(client),
+    recall: client.recall.bind(client),
+    reflect: client.reflect.bind(client),
+    async getOperationStatus(bankId, operationId) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const url = `${connection.baseUrl}/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}`;
+        const response = await fetch(url, {
+          headers: connection.apiKey ? { Authorization: `Bearer ${connection.apiKey}` } : {},
+          signal: controller.signal,
+        });
+        const body = await response.text();
+        if (!response.ok) {
+          throw new Error(`Hindsight operation status HTTP ${response.status}`);
+        }
+        const parsed = JSON.parse(body);
+        const allowedStatuses = new Set(["pending", "processing", "completed", "failed", "cancelled", "not_found"]);
+        if (
+          !parsed ||
+          typeof parsed !== "object" ||
+          !nonEmptyString(parsed.operation_id) ||
+          !nonEmptyString(parsed.status) ||
+          !allowedStatuses.has(parsed.status)
+        ) {
+          throw new Error("Hindsight operation status returned a malformed response");
+        }
+        return parsed;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 async function probeHindsight(client, baseUrl, apiKey) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
@@ -1002,9 +1040,10 @@ async function runApply(selected, manifest) {
   const governance = new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1");
   const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v2-role-aware");
   const admissionPolicy = new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1");
+  const hindsightPort = createPilotHindsightPort(hindsightClient, hindsightConnection);
   const adapter = new HindsightMemoryAdapter({
-    client: hindsightClient,
-    adapterVersion: "hindsight-production-pilot-v0.1.1-role-aware-v2",
+    client: hindsightPort,
+    adapterVersion: "hindsight-production-pilot-v0.1.1-role-aware-async-v3",
     providerVersion: String(hindsightVersion.api_version || hindsightVersion.version || "unknown"),
     banks: {
       distillationBankId: () => distillationBank,
@@ -1065,7 +1104,7 @@ async function runApply(selected, manifest) {
           messageCount: Number(session.message_count || 0),
         },
         sourceSegments: distillationSourceSegments(session.messages),
-        distillationPolicyVersion: "pilot-distill-v2-role-aware",
+        distillationPolicyVersion: "pilot-distill-v3-role-aware-async",
         canonicalizationPolicyVersion: governance.policyVersion,
         admissionPolicyVersion: admissionPolicy.policyVersion,
         retentionPolicyVersion: "pilot-retention-v1",

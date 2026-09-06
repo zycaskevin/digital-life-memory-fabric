@@ -58,6 +58,10 @@ function classifyProviderError(message) {
   if (text.includes("request entity too large") || text.includes("payload too large") || text.includes("413")) {
     return "HINDSIGHT_PAYLOAD_TOO_LARGE";
   }
+  if (text.includes("retainbatch failed") && text.includes("fetch failed")) {
+    return "HINDSIGHT_RETAIN_TRANSPORT_FAILURE";
+  }
+  if (text.includes("fetch failed")) return "HINDSIGHT_TRANSPORT_FAILURE";
   if (text.includes("timed out") || text.includes("timeout")) return "HINDSIGHT_PROVIDER_TIMEOUT";
   if (text.includes("batch api is enabled") && text.includes("async=false")) {
     return "HINDSIGHT_REQUIRES_ASYNC_RETAIN";

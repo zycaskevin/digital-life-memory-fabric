@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ValidationError } from "../domain/errors.js";
 import type {
   EpistemicStatus,
@@ -76,6 +76,13 @@ export interface HindsightRetainResponse {
   bank_id: string;
   items_count: number;
   async: boolean;
+  operation_id?: string | null;
+}
+
+export interface HindsightOperationStatusResponse {
+  operation_id: string;
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found";
+  error_message?: string | null;
 }
 
 /** Provider-specific port. These Hindsight shapes never enter the canonical domain. */
@@ -90,8 +97,13 @@ export interface HindsightClientPort {
       documentId?: string;
       tags?: string[];
       async?: boolean;
+      operationId?: string;
     },
   ): Promise<HindsightRetainResponse>;
+  getOperationStatus?(
+    bankId: string,
+    operationId: string,
+  ): Promise<HindsightOperationStatusResponse>;
   listMemories(
     bankId: string,
     options?: {
@@ -136,6 +148,9 @@ export interface HindsightMemoryAdapterOptions {
   providerVersion?: string;
   recallBudget?: HindsightBudget;
   reflectBudget?: HindsightBudget;
+  asyncRetainPollIntervalMs?: number;
+  asyncRetainTimeoutMs?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 const candidateTypes = new Set<MemoryCandidateType>([
@@ -241,6 +256,14 @@ function mappedEpistemicStatus(result: HindsightRecallResult): EpistemicStatus {
   return declared !== undefined && epistemicStatuses.has(declared) ? declared : "synthesized";
 }
 
+function deterministicOperationId(value: string): string {
+  const hex = createHash("sha256").update(value, "utf8").digest("hex").slice(0, 32).split("");
+  hex[12] = "5";
+  hex[16] = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16);
+  const joined = hex.join("");
+  return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`;
+}
+
 function assertRetainComplete(
   retained: HindsightRetainResponse,
   bankId: string,
@@ -260,6 +283,30 @@ function assertRetainComplete(
   }
 }
 
+function assertAsyncRetainAccepted(
+  retained: HindsightRetainResponse,
+  bankId: string,
+  projection: string,
+): string {
+  if (!retained.success) {
+    throw new Error(`Hindsight ${projection} async retain reported success=false`);
+  }
+  if (!retained.async) {
+    throw new Error(`Hindsight ${projection} async retain unexpectedly completed synchronously`);
+  }
+  if (retained.bank_id !== bankId) {
+    throw new Error(`Hindsight ${projection} async retain returned a mismatched bank_id`);
+  }
+  if (!Number.isSafeInteger(retained.items_count) || retained.items_count < 1) {
+    throw new Error(`Hindsight ${projection} async retain did not accept the source experience`);
+  }
+  const operationId = retained.operation_id?.trim();
+  if (!operationId) {
+    throw new Error(`Hindsight ${projection} async retain did not return an operation_id`);
+  }
+  return operationId;
+}
+
 export class HindsightMemoryAdapter implements MemoryDistillationProvider {
   readonly name = "hindsight";
   readonly adapterVersion: string;
@@ -268,6 +315,12 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
   constructor(private readonly options: HindsightMemoryAdapterOptions) {
     if (options.adapterVersion.trim().length === 0) {
       throw new ValidationError("Hindsight adapterVersion must not be empty");
+    }
+    if ((options.asyncRetainPollIntervalMs ?? 1_000) < 1) {
+      throw new ValidationError("Hindsight asyncRetainPollIntervalMs must be positive");
+    }
+    if ((options.asyncRetainTimeoutMs ?? 600_000) < 1) {
+      throw new ValidationError("Hindsight asyncRetainTimeoutMs must be positive");
     }
     this.adapterVersion = options.adapterVersion;
     this.providerVersion = options.providerVersion;
@@ -285,6 +338,38 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       );
     }
     return { distillation, projection };
+  }
+
+  private async waitForAsyncRetain(
+    bankId: string,
+    operationId: string,
+    projection: string,
+  ): Promise<void> {
+    const timeoutMs = this.options.asyncRetainTimeoutMs ?? 600_000;
+    const pollIntervalMs = this.options.asyncRetainPollIntervalMs ?? 1_000;
+    const sleep = this.options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    const getOperationStatus = this.options.client.getOperationStatus;
+    if (getOperationStatus === undefined) {
+      throw new Error(`Hindsight ${projection} async retain requires operation-status capability`);
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const status = await getOperationStatus.call(this.options.client, bankId, operationId);
+      if (status.operation_id !== operationId) {
+        throw new Error(`Hindsight ${projection} operation status returned a mismatched operation_id`);
+      }
+      if (status.status === "completed") return;
+      if (status.status === "failed" || status.status === "cancelled" || status.status === "not_found") {
+        const detail = status.error_message?.trim();
+        throw new Error(
+          `Hindsight ${projection} async retain ${status.status}${detail ? `: ${detail}` : ""}`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Hindsight ${projection} async retain timed out after ${timeoutMs}ms`);
+      }
+      await sleep(pollIntervalMs);
+    }
   }
 
   private async listDocumentMemories(
@@ -357,11 +442,15 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     if (userSegments.length > 0) {
       const userDocumentId = `${documentId}:source-actor:user`;
       const userContent = userSegments.map((segment) => segment.content.trim()).join("\n\n");
+      const userProjectionOperationId = deterministicOperationId(
+        `${request.experience.checksum}|${request.distillationPolicyVersion}|${userDocumentId}|${userContent}`,
+      );
       const userRetained = await this.options.client.retain(distillation, userContent, {
         ...(timestamp === undefined ? {} : { timestamp }),
         context: `${request.experience.contentType}; source-actor=user`,
         documentId: userDocumentId,
-        async: false,
+        async: true,
+        operationId: userProjectionOperationId,
         tags: ["dlmf", "distillation", "source_actor:user"],
         metadata: {
           ...commonMetadata,
@@ -371,7 +460,19 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
           dlmf_projection_segment_count: String(userSegments.length),
         },
       });
-      assertRetainComplete(userRetained, distillation, "user-source-projection");
+      const acceptedOperationId = assertAsyncRetainAccepted(
+        userRetained,
+        distillation,
+        "user-source-projection",
+      );
+      if (acceptedOperationId !== userProjectionOperationId) {
+        throw new Error("Hindsight user-source-projection returned an unexpected operation_id");
+      }
+      await this.waitForAsyncRetain(
+        distillation,
+        acceptedOperationId,
+        "user-source-projection",
+      );
       documentMemories.push(
         ...(await this.listDocumentMemories(distillation, userDocumentId)),
       );

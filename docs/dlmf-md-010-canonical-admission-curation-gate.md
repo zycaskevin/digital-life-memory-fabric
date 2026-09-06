@@ -2,13 +2,15 @@
 
 **Date:** 2026-09-04
 
-**Status:** Implemented; first post-MD-010 Production Pilot failed safe with admission-recall failure; role-aware remediation local automated acceptance PASS; production rerun pending
+**Status:** Implemented; role-aware admission recall validated in Production Pilot #2; fresh user-projection synchronous retain transport failure identified; async retain remediation local automated acceptance PASS; Production Pilot #3 pending
 
 **Applies to:** Digital Life Memory Fabric v0.1.1+
 
 **Production pilot baseline:** `pilot_20260904140955`
 
 **First post-MD-010 pilot evidence:** `pilot_20260905050229` (failed safe; no Hermes deletion)
+
+**Second post-MD-010 pilot evidence:** `pilot_20260906095623` (admission recall improved; three Hindsight retain transport failures; no Hermes deletion)
 
 ## 1. Problem statement
 
@@ -325,7 +327,45 @@ adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-v2
 admissionPolicyVersion     = pilot-admission-v1   # unchanged deterministic authority
 ```
 
-Local automated acceptance after remediation: **63 pass, 0 fail, 1 PostgreSQL runtime integration skip** in the CatDesk environment. The new regression test proves that mixed-transcript facts remain synthesized, a user-only `world` preference can become a `user_asserted` canonical candidate, and a user-projection `observation` still remains synthesized/supporting evidence.
+Local automated acceptance after the first role-aware remediation: **63 pass, 0 fail, 1 PostgreSQL runtime integration skip** in the CatDesk environment. The regression test proves that mixed-transcript facts remain synthesized, a user-only `world` preference can become a `user_asserted` canonical candidate, and a user-projection `observation` still remains synthesized/supporting evidence.
+
+The second Production Pilot reused the same pinned manifest and produced `pilot_20260906095623`. Admission behavior improved materially:
+
+```text
+provider_units=83
+curated_candidates=1
+canonical_memories=1
+curation_supporting_evidence_only=82
+curation_pending_review=0
+curation_canonical_candidate=1
+AUTO_HERMES_PRUNE=FROZEN
+HERMES_PRUNE_EXECUTED=false
+PRODUCTION_PILOT=FAIL
+```
+
+Two sessions completed admission (`inferred_insight`: 80 units, 1 canonical; `ordinary_conversation`: 3 units, no memory-worthy content). Three longer sessions failed before provider-unit enumeration with the same provider error: `retainBatch failed: "fetch failed"`. The run inspector classified the preserved receipts as provider-stage failures; PostgreSQL admission state and pruning safeguards remained intact. `PILOT_RUN_INSPECT=PASS` means the failed run is auditable, not that Production Pilot acceptance passed.
+
+The failure is isolated to the newly introduced fresh user-only Hindsight projection. The full mixed transcript path had already been exercised by prior runs, while the user-only document requires fresh extraction. Holding that extraction on a synchronous `async=false` HTTP request exposed a provider transport failure on longer sessions.
+
+The second remediation keeps Hindsight's native chunking and changes only the user-role projection execution mode:
+
+- submit the user-only projection with `async=true`;
+- use a deterministic client-supplied Hindsight `operation_id`, derived from source checksum, policy, document identity, and projection content, so a retry cannot enqueue duplicate work;
+- poll the provider operation with bounded requests until explicit `completed`;
+- fail closed on `failed`, `cancelled`, `not_found`, malformed status, status transport failure, or polling timeout;
+- enumerate document-scoped provider memory units only after provider completion;
+- leave full-source extraction, epistemic attribution, curation, deterministic admission, governance, and canonical authority unchanged.
+
+Execution identity is advanced again:
+
+```text
+distillationPolicyVersion = pilot-distill-v3-role-aware-async
+curationProviderVersion    = pilot-curation-v2-role-aware
+adapterVersion             = hindsight-production-pilot-v0.1.1-role-aware-async-v3
+admissionPolicyVersion     = pilot-admission-v1
+```
+
+Local automated acceptance after async remediation: **85 pass, 0 fail, 1 PostgreSQL runtime integration skip**. Tests cover successful async role projection, deterministic operation tracking, fail-closed provider operation failure, long-transcript no-recall behavior, and all MD-010 authority invariants.
 
 The next Production Pilot rerun must use the same pinned five-session manifest and report:
 

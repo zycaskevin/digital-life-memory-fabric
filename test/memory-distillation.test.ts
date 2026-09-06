@@ -58,12 +58,14 @@ class FakeHindsightClient implements HindsightClientPort {
     query: string;
     options: Parameters<HindsightClientPort["reflect"]>[2];
   }> = [];
+  readonly operationStatusCalls: Array<{ bankId: string; operationId: string }> = [];
 
   recallResponse: HindsightRecallResponse = { results: [] };
   listMemoriesResponse: HindsightListMemoriesResponse = { items: [], total: 0, limit: 1000, offset: 0 };
   reflectResponse: HindsightReflectResponse = { text: "" };
   retainResponse: HindsightRetainResponse | undefined;
   retainFailure?: Error;
+  operationStatuses: Array<"pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found"> = ["completed"];
 
   async retain(
     bankId: string,
@@ -72,7 +74,26 @@ class FakeHindsightClient implements HindsightClientPort {
   ): Promise<HindsightRetainResponse> {
     this.retainCalls.push({ bankId, content, options });
     if (this.retainFailure !== undefined) throw this.retainFailure;
-    return this.retainResponse ?? { success: true, bank_id: bankId, items_count: 1, async: false };
+    if (this.retainResponse !== undefined) return this.retainResponse;
+    return options?.async === true
+      ? {
+          success: true,
+          bank_id: bankId,
+          items_count: 1,
+          async: true,
+          ...(options.operationId === undefined ? {} : { operation_id: options.operationId }),
+        }
+      : { success: true, bank_id: bankId, items_count: 1, async: false };
+  }
+
+  async getOperationStatus(bankId: string, operationId: string) {
+    this.operationStatusCalls.push({ bankId, operationId });
+    const status = this.operationStatuses.shift() ?? "completed";
+    return {
+      operation_id: operationId,
+      status,
+      ...(status === "failed" ? { error_message: "simulated async extraction failure" } : {}),
+    };
   }
 
   async listMemories(
@@ -373,6 +394,10 @@ test("MD-010 remediation: role-aware user projection preserves direct assertions
     assert.doesNotMatch(client.retainCalls[1]?.content ?? "", /configure that for you/);
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_source_actor, "user");
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_epistemic_status, "user_asserted");
+    assert.equal(client.retainCalls[1]?.options?.async, true);
+    assert.match(client.retainCalls[1]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
+    assert.equal(client.operationStatusCalls.length, 1);
+    assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[1]?.options?.operationId);
     assert.equal(client.listMemoriesCalls.length, 2);
     assert.equal(client.recallCalls.length, 0);
 
@@ -386,6 +411,50 @@ test("MD-010 remediation: role-aware user projection preserves direct assertions
     assert.equal(observation?.outcome, "supporting_evidence_only");
     assert.equal(mixed?.providerEpistemicStatus, "synthesized");
     assert.equal(mixed?.outcome, "supporting_evidence_only");
+  });
+});
+
+test("MD-010 remediation: role projection async retain fails closed until provider operation completes", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-role-aware-async-failure";
+    client.operationStatuses = ["processing", "failed"];
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-role-aware-async-v3",
+      providerVersion: "test-provider",
+      asyncRetainPollIntervalMs: 1,
+      sleep: async () => undefined,
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const input = transcriptInput(sourceId, "distill-role-aware-async-v3");
+    input.sourceSegments = [
+      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+    ];
+
+    const receipt = await service.run(input);
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "provider");
+    assert.match(receipt.errors.at(-1)?.message ?? "", /user-source-projection async retain failed/);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(receipt.providerUnitCount, 0);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
   });
 });
 
