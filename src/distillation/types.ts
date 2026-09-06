@@ -28,6 +28,19 @@ export interface RawExperienceRef extends SourceExperienceRef {
   createdAt?: string;
 }
 
+export type DistillationSourceActor = "user" | "assistant" | "system" | "tool" | "unknown";
+
+/**
+ * Optional source-role projection derived from the raw experience. Segments are
+ * execution provenance only: the raw archive remains the evidence authority.
+ */
+export interface DistillationSourceSegment {
+  segmentId: string;
+  actor: DistillationSourceActor;
+  content: string;
+  observedAt?: string;
+}
+
 export interface DistillationExperience {
   scope: MemoryScope;
   sourceType: string;
@@ -39,6 +52,7 @@ export interface DistillationExperience {
   createdAt?: string;
   observedAt?: string;
   metadata?: Record<string, unknown>;
+  sourceSegments?: DistillationSourceSegment[];
 }
 
 export interface DistillationRequest {
@@ -221,6 +235,7 @@ export interface TranscriptDistillationInput {
   createdAt?: string;
   observedAt?: string;
   metadata?: Record<string, unknown>;
+  sourceSegments?: DistillationSourceSegment[];
   distillationPolicyVersion: string;
   canonicalizationPolicyVersion: string;
   admissionPolicyVersion: string;

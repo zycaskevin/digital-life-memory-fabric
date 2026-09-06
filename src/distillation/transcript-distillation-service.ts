@@ -40,6 +40,8 @@ const candidateTypes = new Set<MemoryCandidateType>([
   "derived_insight_candidate",
 ]);
 
+const sourceActors = new Set(["user", "assistant", "system", "tool", "unknown"] as const);
+
 export interface DistillationReceiptIdFactory {
   forIdempotencyKey(idempotencyKey: string): DistillationReceiptId;
 }
@@ -89,6 +91,20 @@ function validateInput(input: TranscriptDistillationInput): void {
   requireNonEmpty(input.admissionPolicyVersion, "admissionPolicyVersion");
   if (input.origin.lifeDid !== input.scope.lifeDid) {
     throw new ValidationError("origin.lifeDid must match scope.lifeDid");
+  }
+  if (input.sourceSegments !== undefined) {
+    const segmentIds = new Set<string>();
+    for (const [index, segment] of input.sourceSegments.entries()) {
+      requireNonEmpty(segment.segmentId, `sourceSegments[${index}].segmentId`);
+      requireNonEmpty(segment.content, `sourceSegments[${index}].content`);
+      if (!sourceActors.has(segment.actor)) {
+        throw new ValidationError(`sourceSegments[${index}].actor is unsupported`);
+      }
+      if (segmentIds.has(segment.segmentId)) {
+        throw new ValidationError(`duplicate source segment ${segment.segmentId}`);
+      }
+      segmentIds.add(segment.segmentId);
+    }
   }
 }
 
@@ -237,6 +253,8 @@ export class TranscriptDistillationService {
       curationProvider: this.options.curationProvider.name,
       curationProviderVersion: this.options.curationProvider.version ?? null,
       admissionPolicyVersion: input.admissionPolicyVersion,
+      sourceSegmentFingerprint:
+        input.sourceSegments === undefined ? null : sha256(input.sourceSegments),
     });
     const previous = await this.options.receiptStore.getByIdempotencyKey(
       input.scope,
@@ -340,6 +358,7 @@ export class TranscriptDistillationService {
           ...(archived.createdAt === undefined ? {} : { createdAt: archived.createdAt }),
           ...(archived.observedAt === undefined ? {} : { observedAt: archived.observedAt }),
           ...(archived.metadata === undefined ? {} : { metadata: archived.metadata }),
+          ...(input.sourceSegments === undefined ? {} : { sourceSegments: input.sourceSegments }),
         },
         distillationPolicyVersion: input.distillationPolicyVersion,
         requestedAt: this.clock.now(),

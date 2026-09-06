@@ -186,7 +186,7 @@ function setSinglePreferenceResult(
         id: providerId,
         bank_id: "nancy:distillation",
         text: "Arthur prefers small-step technical debugging.",
-        type: "observation",
+        type: "world",
         document_id: `hermes_session:${sourceId}`,
         occurred_start: "2026-09-03T02:00:00.000Z",
         metadata: {
@@ -280,6 +280,113 @@ test("MD-004: Hindsight adapter enforces distinct distillation and canonical pro
     ValidationError,
   );
   assert.equal(client.recallCalls.length, 0);
+});
+
+test("MD-010 remediation: role-aware user projection preserves direct assertions without trusting mixed transcript synthesis", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const client = new FakeHindsightClient();
+    const sourceId = "session-role-aware";
+    const documentId = `hermes_session:${sourceId}`;
+    const userDocumentId = `${documentId}:source-actor:user`;
+    client.listMemoriesResponse = {
+      items: [
+        {
+          id: "hs-mixed-synthesis",
+          bank_id: "nancy:distillation",
+          text: "The conversation covered interface design and implementation sequencing.",
+          type: "world",
+          document_id: documentId,
+        },
+        {
+          id: "hs-user-preference",
+          bank_id: "nancy:distillation",
+          text: "Arthur prefers dark mode.",
+          type: "world",
+          document_id: userDocumentId,
+          metadata: {
+            dlmf_projection_kind: "source_actor",
+            dlmf_source_actor: "user",
+            dlmf_epistemic_status: "user_asserted",
+          },
+        },
+        {
+          id: "hs-user-observation",
+          bank_id: "nancy:distillation",
+          text: "Arthur often asks for incremental debugging steps.",
+          type: "observation",
+          document_id: userDocumentId,
+          metadata: {
+            dlmf_projection_kind: "source_actor",
+            dlmf_source_actor: "user",
+            dlmf_epistemic_status: "user_asserted",
+          },
+        },
+      ],
+      total: 3,
+      limit: 1000,
+      offset: 0,
+    };
+
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: createAdapter(client),
+      curationProvider: new ConservativeMemoryCurationProvider("test-curation-role-aware-v2"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("admission-v1"),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const input = transcriptInput(sourceId, "distill-role-aware-v2");
+    input.sourceSegments = [
+      {
+        segmentId: "hermes_message:1",
+        actor: "user",
+        content: "I prefer dark mode.",
+        observedAt: "2026-09-03T02:00:00.000Z",
+      },
+      {
+        segmentId: "hermes_message:2",
+        actor: "assistant",
+        content: "I can configure that for you.",
+        observedAt: "2026-09-03T02:00:01.000Z",
+      },
+    ];
+
+    const receipt = await service.run(input);
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.admissionComplete, true);
+    assert.equal(receipt.providerUnitCount, 3);
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 2);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(receipt.candidateIds.length, 1);
+    assert.equal(receipt.canonicalMemoryIds.length, 1);
+
+    assert.equal(client.retainCalls.length, 2);
+    assert.equal(client.retainCalls[0]?.options?.documentId, documentId);
+    assert.equal(client.retainCalls[1]?.options?.documentId, userDocumentId);
+    assert.match(client.retainCalls[1]?.content ?? "", /I prefer dark mode/);
+    assert.doesNotMatch(client.retainCalls[1]?.content ?? "", /configure that for you/);
+    assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_source_actor, "user");
+    assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_epistemic_status, "user_asserted");
+    assert.equal(client.listMemoriesCalls.length, 2);
+    assert.equal(client.recallCalls.length, 0);
+
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    const direct = records.find((record) => record.providerUnitRef === "hs-user-preference");
+    const observation = records.find((record) => record.providerUnitRef === "hs-user-observation");
+    const mixed = records.find((record) => record.providerUnitRef === "hs-mixed-synthesis");
+    assert.equal(direct?.providerEpistemicStatus, "user_asserted");
+    assert.equal(direct?.outcome, "canonical_candidate");
+    assert.equal(observation?.providerEpistemicStatus, "synthesized");
+    assert.equal(observation?.outcome, "supporting_evidence_only");
+    assert.equal(mixed?.providerEpistemicStatus, "synthesized");
+    assert.equal(mixed?.outcome, "supporting_evidence_only");
+  });
 });
 
 test("MD-004 regression: long transcript distillation never uses recall query", async () => {
@@ -683,7 +790,7 @@ test("MD-010 authority invariant: provider candidates cannot bypass canonical ad
   assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
 });
 
-test("MD-010: synthesized provider units remain pending review and block prune", async () => {
+test("MD-010: synthesized provider units terminate as supporting evidence without canonicalizing", async () => {
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();
     const receipts = new InMemoryDistillationReceiptStore();
@@ -710,30 +817,31 @@ test("MD-010: synthesized provider units remain pending review and block prune",
     });
 
     const receipt = await service.run(transcriptInput(sourceId));
-    assert.equal(receipt.status, "awaiting_review");
-    assert.equal(receipt.canonicalizationOutcome, "pending_review");
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.canonicalizationOutcome, "no_memory_worthy_content");
     assert.equal(receipt.providerUnitCount, 1);
     assert.equal(receipt.curationDecisionCount, 1);
     assert.equal(receipt.curationCoverageComplete, true);
-    assert.equal(receipt.admissionComplete, false);
-    assert.equal(receipt.curationOutcomes.pending_review, 1);
+    assert.equal(receipt.admissionComplete, true);
+    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 1);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
     assert.deepEqual(receipt.candidateIds, []);
     assert.deepEqual(receipt.canonicalMemoryIds, []);
     assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     assert.equal(records.length, 1);
-    assert.equal(records[0]?.outcome, "pending_review");
+    assert.equal(records[0]?.outcome, "supporting_evidence_only");
     assert.equal(records[0]?.attributedEpistemicStatus, "synthesized");
+    assert.equal(records[0]?.memoryWorthy, false);
 
     const prune = await new PruneEligibilityService(
       receipts,
       archive,
       new PreservationCompleteRetentionPolicy("retention-v1", "admission-v1"),
     ).evaluate(scope, "hermes_session", sourceId);
-    assert.equal(prune.eligible, false);
-    assert.equal(prune.blockingReasons.includes("canonical_admission_incomplete"), true);
-    assert.equal(prune.blockingReasons.includes("pending_review_present"), true);
+    assert.equal(prune.eligible, true);
+    assert.deepEqual(prune.blockingReasons, []);
   });
 });
 

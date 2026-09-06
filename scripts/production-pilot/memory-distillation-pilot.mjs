@@ -186,6 +186,22 @@ function renderTranscript(messages) {
     .join("\n\n");
 }
 
+function distillationSourceSegments(messages) {
+  return messages
+    .map((message) => {
+      const content = normalizeMessageContent(message.content);
+      if (!content) return undefined;
+      const observedAt = hermesTimestampToIso(message.timestamp);
+      return {
+        segmentId: `hermes_message:${message.id}`,
+        actor: message.role === "user" ? "user" : "assistant",
+        content,
+        ...(observedAt ? { observedAt } : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
 function keywordHits(text, patterns) {
   const lower = text.toLowerCase();
   return patterns.reduce((count, pattern) => count + (lower.includes(pattern) ? 1 : 0), 0);
@@ -984,11 +1000,11 @@ async function runApply(selected, manifest) {
   const curationStore = new PostgresMemoryCurationRecordStore(pool);
   const archive = new FilesystemRawExperienceArchiveProvider(archiveRoot);
   const governance = new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1");
-  const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v1");
+  const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v2-role-aware");
   const admissionPolicy = new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1");
   const adapter = new HindsightMemoryAdapter({
     client: hindsightClient,
-    adapterVersion: "hindsight-production-pilot-v0.1.1",
+    adapterVersion: "hindsight-production-pilot-v0.1.1-role-aware-v2",
     providerVersion: String(hindsightVersion.api_version || hindsightVersion.version || "unknown"),
     banks: {
       distillationBankId: () => distillationBank,
@@ -1048,7 +1064,8 @@ async function runApply(selected, manifest) {
           title: session.title || "",
           messageCount: Number(session.message_count || 0),
         },
-        distillationPolicyVersion: "pilot-distill-v1",
+        sourceSegments: distillationSourceSegments(session.messages),
+        distillationPolicyVersion: "pilot-distill-v2-role-aware",
         canonicalizationPolicyVersion: governance.policyVersion,
         admissionPolicyVersion: admissionPolicy.policyVersion,
         retentionPolicyVersion: "pilot-retention-v1",

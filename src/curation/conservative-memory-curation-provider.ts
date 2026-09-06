@@ -33,7 +33,7 @@ function classifyOutcome(
     epistemicStatus === "synthesized" ||
     epistemicStatus === "uncertain"
   ) {
-    return "pending_review";
+    return "supporting_evidence_only";
   }
   if (
     durability === "transient" ||
@@ -42,19 +42,22 @@ function classifyOutcome(
   ) {
     return "supporting_evidence_only";
   }
-  if (durability === "unknown") return "pending_review";
+  if (durability === "unknown") return "supporting_evidence_only";
   return "canonical_candidate";
 }
 
 /**
- * Deliberately conservative baseline curator. Generic facts and all derived /
- * uncertain units fail closed to review. This provider can be replaced; DLMF
+ * Deliberately conservative baseline curator. Derived/uncertain units and
+ * unknown-durability facts terminate as supporting evidence instead of creating
+ * an unbounded human-review queue. Genuine admission ambiguity (for example a
+ * merge, rewrite, or ungrounded epistemic upgrade) is still escalated by the
+ * deterministic DLMF admission policy. This provider can be replaced; DLMF
  * deterministic admission still owns the final outcome.
  */
 export class ConservativeMemoryCurationProvider implements MemoryCurationProvider {
   readonly name = "dlmf-conservative-curation";
 
-  constructor(readonly version = "md010-conservative-v1") {}
+  constructor(readonly version = "md010-conservative-v2") {}
 
   async curate(request: MemoryCurationRequest): Promise<MemoryCurationResult> {
     const proposals: MemoryCurationProposal[] = request.units.map((unit) => {
@@ -67,8 +70,7 @@ export class ConservativeMemoryCurationProvider implements MemoryCurationProvide
           status: unit.epistemicStatus,
           basis: "provider_declared",
         },
-        memoryWorthy:
-          outcome === "canonical_candidate" || outcome === "pending_review",
+        memoryWorthy: outcome === "canonical_candidate" || outcome === "pending_review",
         durability,
         semanticDisposition: "novel",
         reasonCodes: [
