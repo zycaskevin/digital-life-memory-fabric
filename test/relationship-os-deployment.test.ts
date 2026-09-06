@@ -21,6 +21,7 @@ const deploymentModule = await import(moduleUrl) as {
   checkRelationshipOsIngressConfig: DeploymentChecker;
 };
 const check = deploymentModule.checkRelationshipOsIngressConfig;
+const allExpectedFilesExist = (_path: string): boolean => true;
 
 const validEnv = `
 DLMF_RELATIONSHIP_OS_HOST=127.0.0.1
@@ -40,7 +41,7 @@ OMNIHARNESS_DIR=/workspace/OmniHarness
 `;
 
 test("Relationship OS DLMF deployment preflight accepts protected loopback production shape", () => {
-  const result = check(validEnv);
+  const result = check(validEnv, { exists: allExpectedFilesExist });
   assert.equal(result.ok, true, result.errors.join("\n"));
   const summary = result.publicSummary.join("\n");
   assert.match(summary, /DLMF_RELATIONSHIP_OS_CONFIG_PREFLIGHT=PASS/u);
@@ -55,6 +56,7 @@ test("Relationship OS DLMF deployment preflight rejects unsafe transport, archiv
       "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=http://127.0.0.1:8888",
       "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=http://hindsight.example.test:8888",
     ),
+    { exists: allExpectedFilesExist },
   );
   assert.equal(transport.ok, false);
   assert.ok(transport.errors.includes("dlmf_relationship_os_hindsight_url_invalid"));
@@ -64,6 +66,7 @@ test("Relationship OS DLMF deployment preflight rejects unsafe transport, archiv
       "/var/lib/dlmf/relationship-os/raw",
       "/workspace/digital-life-memory-fabric/private-raw",
     ),
+    { exists: allExpectedFilesExist },
   );
   assert.equal(archive.ok, false);
   assert.ok(archive.errors.includes("dlmf_relationship_os_archive_root_invalid"));
@@ -73,6 +76,7 @@ test("Relationship OS DLMF deployment preflight rejects unsafe transport, archiv
       "DLMF_RELATIONSHIP_OS_TENANT_ID=relationship-os-production",
       "DLMF_RELATIONSHIP_OS_TENANT_ID=REPLACE_WITH_TENANT",
     ),
+    { exists: allExpectedFilesExist },
   );
   assert.equal(placeholder.ok, false);
   assert.ok(
@@ -80,4 +84,16 @@ test("Relationship OS DLMF deployment preflight rejects unsafe transport, archiv
       "dlmf_relationship_os_env_unresolved:DLMF_RELATIONSHIP_OS_TENANT_ID",
     ),
   );
+});
+
+test("Relationship OS DLMF deployment preflight rejects a missing Hindsight client deterministically", () => {
+  const result = check(validEnv, {
+    exists: (path) =>
+      !path.endsWith(
+        "/node_modules/@vectorize-io/hindsight-client/dist/index.mjs",
+      ),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("dlmf_relationship_os_hindsight_client_missing"));
 });
