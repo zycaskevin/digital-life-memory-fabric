@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -111,6 +112,16 @@ test("Relationship OS DLMF deployment preflight rejects unsafe transport, archiv
       "dlmf_relationship_os_env_unresolved:DLMF_RELATIONSHIP_OS_TENANT_ID",
     ),
   );
+});
+
+test("Relationship OS DLMF systemd template does not assume a workspace repository path", () => {
+  const template = readFileSync(
+    resolve("deploy/gb10/relationship-os/dlmf-relationship-os.service.in"),
+    "utf8",
+  );
+  assert.match(template, /WorkingDirectory=REPLACE_WITH_DLMF_REPO/u);
+  assert.match(template, /REPLACE_WITH_DLMF_REPO\/scripts\/relationship-os-ingress-server\.mjs/u);
+  assert.equal(template.includes("/workspace/digital-life-memory-fabric"), false);
 });
 
 test("Relationship OS DLMF deployment preflight rejects a missing Hindsight client deterministically", () => {
