@@ -83,13 +83,14 @@ DLMF_RELATIONSHIP_OS_HINDSIGHT_URL
 Normally also configure:
 
 ```text
-DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY
 OMNIHARNESS_DIR
 DLMF_RELATIONSHIP_OS_SCHEMA=dlmf_relationship_os
 DLMF_RELATIONSHIP_OS_NAMESPACE_PREFIX=relationship.private.
 DLMF_RELATIONSHIP_OS_HINDSIGHT_BANK_PREFIX=dlmf-ros-nancy
 DLMF_RELATIONSHIP_OS_PORT=8793
 ```
+
+`DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY` is optional only when the Hindsight endpoint is loopback-only (`127.0.0.1`, `localhost`, or `::1`). Any non-loopback Hindsight endpoint must use HTTPS and a provider API key. This keeps the public trust boundary at the authenticated DLMF ingress without requiring a second credential on an internal loopback provider.
 
 The server dynamically loads the installed Hindsight client from `OMNIHARNESS_DIR`; DLMF canonical code remains provider-SDK-independent.
 

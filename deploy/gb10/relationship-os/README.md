@@ -11,7 +11,7 @@ The service must remain:
 - backed by PostgreSQL Canonical Memory state;
 - scoped to one approved Relationship OS tenant and Nancy life DID;
 - restricted to `relationship.private.<32 lowercase hex>` namespaces;
-- backed by an authenticated Hindsight tenant endpoint;
+- backed by a loopback-only Hindsight endpoint, or by an authenticated Hindsight endpoint when Hindsight is remote;
 - configured with a raw archive outside the repository and mode `0700`;
 - exposed externally only through trusted TLS termination.
 
@@ -39,7 +39,7 @@ sudo install -o root -g "$SERVICE_GROUP" -m 0640 \
   /etc/dlmf/relationship-os.env
 ```
 
-Replace every `REPLACE_WITH_...` value. The Hindsight key is required for the production Relationship OS ingress; do not reuse the DLMF ingress Bearer token.
+Replace every required `REPLACE_WITH_...` value. A Hindsight API key is optional only when `DLMF_RELATIONSHIP_OS_HINDSIGHT_URL` is loopback (`127.0.0.1`, `localhost`, or `::1`). Any non-loopback Hindsight endpoint must use HTTPS and a distinct Hindsight API key. Do not reuse the DLMF ingress Bearer token.
 
 Run the static fail-closed preflight from the DLMF repository:
 
@@ -56,7 +56,7 @@ Expected:
 DLMF_RELATIONSHIP_OS_CONFIG_PREFLIGHT=PASS
 ```
 
-The checker prints no credentials or database URL.
+The checker prints no credentials or database URL. A loopback-only Hindsight provider may be unauthenticated because it is not a public trust boundary; the DLMF ingress itself remains Bearer-protected and loopback-only until TLS termination. Remote Hindsight endpoints fail closed without provider authentication.
 
 ## 2. Re-verify and build the exact candidate
 
