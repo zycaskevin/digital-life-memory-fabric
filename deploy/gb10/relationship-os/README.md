@@ -98,11 +98,13 @@ Resolve the host values before installation:
 SERVICE_USER="${USER}"
 SERVICE_GROUP="$(id -gn)"
 NODE_BIN="$(command -v node)"
+DLMF_REPO="$(pwd -P)"
 
 sed \
   -e "s|REPLACE_WITH_SERVICE_USER|$SERVICE_USER|g" \
   -e "s|REPLACE_WITH_SERVICE_GROUP|$SERVICE_GROUP|g" \
   -e "s|REPLACE_WITH_NODE_BIN|$NODE_BIN|g" \
+  -e "s|REPLACE_WITH_DLMF_REPO|$DLMF_REPO|g" \
   deploy/gb10/relationship-os/dlmf-relationship-os.service.in \
   > /tmp/dlmf-relationship-os.service
 
@@ -114,7 +116,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dlmf-relationship-os.service
 ```
 
-CatDesk's workspace shell is not proof of the GB10 host systemd state. Run these commands from the real host shell.
+The rendered unit uses the exact checked-out repository path from `pwd -P`; it does not assume `/workspace`. CatDesk's workspace shell is not proof of the GB10 host systemd state. Run these commands from the real host shell.
 
 ## 5. Local service acceptance
 
