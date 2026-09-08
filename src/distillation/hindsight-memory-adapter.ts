@@ -6,6 +6,7 @@ import type {
   MemoryProducer,
   MemoryScope,
   SourceExperienceRef,
+  SpeakerProvenance,
 } from "../domain/types.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
 import type {
@@ -69,6 +70,8 @@ export interface HindsightReflectFact {
 export interface HindsightReflectResponse {
   text: string;
   based_on?: HindsightReflectFact[];
+  confidence?: number | null;
+  model?: string | null;
 }
 
 export interface HindsightRetainResponse {
@@ -254,6 +257,14 @@ function mappedEpistemicStatus(result: HindsightRecallResult): EpistemicStatus {
   if (result.type === "observation") return "synthesized";
   const declared = result.metadata?.dlmf_epistemic_status as EpistemicStatus | undefined;
   return declared !== undefined && epistemicStatuses.has(declared) ? declared : "synthesized";
+}
+
+function mappedSpeakerProvenance(result: HindsightRecallResult): SpeakerProvenance {
+  const actor = result.metadata?.dlmf_source_actor;
+  if (actor === "user" || actor === "assistant" || actor === "system" || actor === "tool") {
+    return actor;
+  }
+  return result.metadata?.dlmf_plane === "distillation" ? "mixed" as const : "unknown" as const;
 }
 
 function deterministicOperationId(value: string): string {
@@ -522,6 +533,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
             },
           ],
           epistemicStatus: mappedEpistemicStatus(result),
+          speakerProvenance: mappedSpeakerProvenance(result),
           ...(confidence === undefined ? {} : { confidence }),
           producer: producerBase,
           sourceExperienceRefs,
@@ -586,10 +598,29 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
 
     const candidates: DerivedMemoryCandidateDraft[] = [];
     if (response.text.trim().length > 0) {
-      const providerEvidence = (response.based_on ?? [])
+      const basedOn = response.based_on ?? [];
+      const providerEvidence = basedOn
         .filter((fact) => fact.id != null)
         .map((fact) => ({ sourceType: "hindsight", sourceRef: fact.id as string }));
       const callerEvidence = request.evidence.map((evidence) => evidence.evidenceRef);
+      const normalizedBasedOnText = new Set(
+        basedOn.map((fact) => fact.text.normalize("NFKC").trim().toLocaleLowerCase("en-US")),
+      );
+      const supportingMemoryIds = request.canonicalMemories
+        .filter((memory) =>
+          normalizedBasedOnText.has(memory.text.normalize("NFKC").trim().toLocaleLowerCase("en-US")),
+        )
+        .map((memory) => memory.memoryId);
+      const supportingMemoryIdSet = new Set(supportingMemoryIds);
+      const supportingEvidenceIds = [
+        ...providerEvidence.map((evidence) => `${evidence.sourceType}:${evidence.sourceRef}`),
+        ...callerEvidence
+          .filter((evidence) =>
+            evidence.sourceType === "canonical_memory" &&
+            [...supportingMemoryIdSet].some((memoryId) => evidence.sourceRef.includes(memoryId)),
+          )
+          .map((evidence) => `${evidence.sourceType}:${evidence.sourceRef}`),
+      ];
       const sourceExperienceRefs = [
         ...request.evidence.flatMap((evidence) => evidence.sourceExperienceRefs),
         ...request.canonicalMemories.flatMap((memory) => memory.sourceExperienceRefs),
@@ -600,6 +631,11 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
         memoryKind: "reflective_insight",
         proposedContent: { text: response.text },
         evidenceRefs: [...providerEvidence, ...callerEvidence],
+        supportingMemoryIds,
+        supportingEvidenceIds,
+        contradictingMemoryIds: [],
+        ...(response.confidence == null ? {} : { confidence: response.confidence }),
+        derivationModel: response.model?.trim() || this.providerVersion || this.adapterVersion,
         epistemicStatus: "synthesized",
         producer: {
           kind: "provider",

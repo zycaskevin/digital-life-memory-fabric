@@ -12,6 +12,8 @@
 ---
 
 > **MD-010 admission amendment — 2026-09-04:** Hindsight distillation output is now explicitly `ProviderMemoryUnit`, not a DLMF `MemoryCandidate`. Every provider unit must pass a replaceable curation-proposal seam and DLMF-owned deterministic canonical admission policy before candidate creation. Derived/uncertain epistemic states cannot auto-canonicalize, and prune eligibility requires complete admission. See `docs/dlmf-md-010-canonical-admission-curation-gate.md`.
+>
+> **Semantic Governance Hardening — 2026-09-08:** DLMF now owns per-memory classification, speaker-versus-epistemic attribution, deterministic semantic identity, audited equivalence/subsumption evidence merge, and first-class reflective-insight promotion eligibility. This does not grant Hindsight or a curator canonical authority. See `docs/dlmf-sg-001-semantic-governance-hardening.md`.
 
 ## 1. Executive decision
 
@@ -166,7 +168,10 @@ They remain in evidence/provenance/run metadata.
 Every new `MemoryCandidate` and `MemoryRevision` carries:
 
 ```text
-epistemicStatus
+memoryType                 # per-memory; never inherited from session category
+speakerProvenance          # source speaker, not truth authority
+epistemicStatus            # DLMF attribution
+semanticKey                # versioned DLMF semantic identity
 producer
 sourceExperienceRefs[]
 candidateFingerprint / semanticFingerprint
@@ -199,9 +204,11 @@ consistent.
 
 ---
 
-## 6. Provider-independent semantic fingerprint
+## 6. DLMF semantic key and provider-independent fingerprint
 
-DLMF computes a provider-independent semantic fingerprint from:
+DLMF first computes a versioned semantic key from per-memory content/type. The bounded v1 policy recognizes the known Nancy inline-live-commentary preference family; other content falls back to normalized exact semantic identity. Active key matches may create an audited evidence-only merge revision; a tombstoned match remains suppressed.
+
+DLMF also computes a provider-independent candidate/revision fingerprint from:
 
 ```text
 scope
@@ -288,7 +295,7 @@ Receipt persistence is provider-neutral. Implementations:
 - `InMemoryDistillationReceiptStore` for deterministic tests/development;
 - `PostgresDistillationReceiptStore` for durable canonical operations.
 
-The base receipt schema is in `migrations/0003_memory_distillation.sql`; MD-010 admission/audit fields and `memory_curation_records` are added by `migrations/0004_canonical_admission.sql`.
+The base receipt schema is in `migrations/0003_memory_distillation.sql`; MD-010 admission/audit fields and `memory_curation_records` are added by `migrations/0004_canonical_admission.sql`. Additive semantic fields, canonical-merge proof shape, per-scope semantic-key uniqueness, five-outcome receipts, `reflective_insights`, and DLMF-owned `insight_promotion_records` are added by `migrations/0005_semantic_governance.sql`.
 
 Important receipt states:
 
@@ -392,15 +399,29 @@ Canonical Memory + Evidence
 Hindsight reflect
         |
         v
-DerivedMemoryCandidate
+provider-derived insight draft
   epistemic = inferred/synthesized/uncertain
         |
         v
-PENDING
+ReflectiveInsight
+  supportingMemoryIds / supportingEvidenceIds
+  contradictingMemoryIds / confidence
+  derivationProvider / derivationModel / derivationRunId
+  status = pending
+  canonicalWritePerformed = false
 ```
 
 There is deliberately no `CanonicalMemoryAuthority.commit()` call in this
-service. A later explicit governance decision is required for canonical commit.
+service. `ReflectiveInsightPromotionGate` requires evidence closure, no unresolved
+contradictions, minimum confidence, and explicit accepted status before promotion
+eligibility. The gate does not itself perform a canonical write.
+
+`ReflectiveInsightPromotionService` is a separate DLMF-owned, explicitly invoked
+workflow. It revalidates current in-scope supporting canonical revisions and their
+evidence closure, records the reviewer and idempotency key, creates a runtime-owned
+candidate, and delegates the commit to `CanonicalMemoryAuthority`. Hindsight remains
+derivation provenance only. The original insight remains
+`canonicalWritePerformed=false`, including after a successful promotion.
 
 ---
 

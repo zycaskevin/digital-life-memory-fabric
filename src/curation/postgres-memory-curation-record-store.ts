@@ -1,14 +1,22 @@
 import { Pool } from "pg";
-import type { EpistemicStatus, MemoryCandidate, MemoryScope } from "../domain/types.js";
+import type {
+  EpistemicStatus,
+  MemoryCandidate,
+  MemoryScope,
+  MemoryType,
+  SemanticRelation,
+  SpeakerProvenance,
+} from "../domain/types.js";
 import {
   curationRecordBacksCanonicalAdmission,
   type MemoryCurationRecordStore,
 } from "./memory-curation-record-store.js";
 import type {
+  CanonicalAdmissionOutcome,
   CurationRecordId,
+  EpistemicAttributionBasis,
   MemoryCurationRecord,
   MemoryDurability,
-  ProviderMemoryUnitOutcome,
   SemanticDisposition,
 } from "./types.js";
 
@@ -26,10 +34,16 @@ interface CurationRow {
   provider_unit_text: string;
   provider_unit_fingerprint: string;
   provider_epistemic_status: EpistemicStatus;
+  attributed_epistemic_basis: EpistemicAttributionBasis;
+  memory_type: MemoryType;
+  speaker_provenance: SpeakerProvenance;
+  semantic_key: string;
+  semantic_policy_version: string;
+  semantic_relation: SemanticRelation | null;
   curation_provider: string;
   curation_provider_version: string | null;
   admission_policy_version: string;
-  outcome: ProviderMemoryUnitOutcome;
+  outcome: CanonicalAdmissionOutcome;
   attributed_epistemic_status: EpistemicStatus;
   durability: MemoryDurability;
   memory_worthy: boolean;
@@ -65,6 +79,12 @@ function fromRow(row: CurationRow): MemoryCurationRecord {
     providerUnitText: row.provider_unit_text,
     providerUnitFingerprint: row.provider_unit_fingerprint,
     providerEpistemicStatus: row.provider_epistemic_status,
+    attributedEpistemicBasis: row.attributed_epistemic_basis,
+    memoryType: row.memory_type,
+    speakerProvenance: row.speaker_provenance,
+    semanticKey: row.semantic_key,
+    semanticPolicyVersion: row.semantic_policy_version,
+    ...(row.semantic_relation === null ? {} : { semanticRelation: row.semantic_relation }),
     curationProvider: row.curation_provider,
     ...(row.curation_provider_version === null
       ? {}
@@ -98,14 +118,22 @@ export class PostgresMemoryCurationRecordStore implements MemoryCurationRecordSt
          record_id, receipt_id, tenant_id, life_did, memory_namespace,
          source_type, source_id, provider_name, provider_run_id,
          provider_unit_ref, provider_unit_text, provider_unit_fingerprint,
-         provider_epistemic_status, curation_provider, curation_provider_version,
+         provider_epistemic_status, attributed_epistemic_basis, memory_type,
+         speaker_provenance, semantic_key, semantic_policy_version, semantic_relation,
+         curation_provider, curation_provider_version,
          admission_policy_version, outcome, attributed_epistemic_status,
          durability, memory_worthy, semantic_disposition, reason_codes,
          target_memory_id, candidate_id, canonical_memory_id, created_at
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::text[],$23,$24,$25,$26
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28::text[],$29,$30,$31,$32
        )
        ON CONFLICT (record_id) DO UPDATE SET
+         semantic_relation=CASE
+           WHEN memory_curation_records.canonical_memory_id IS NOT NULL
+             AND EXCLUDED.canonical_memory_id IS NULL
+           THEN memory_curation_records.semantic_relation
+           ELSE EXCLUDED.semantic_relation
+         END,
          outcome=CASE
            WHEN memory_curation_records.canonical_memory_id IS NOT NULL
              AND EXCLUDED.canonical_memory_id IS NULL
@@ -165,6 +193,12 @@ export class PostgresMemoryCurationRecordStore implements MemoryCurationRecordSt
         record.providerUnitText,
         record.providerUnitFingerprint,
         record.providerEpistemicStatus,
+        record.attributedEpistemicBasis,
+        record.memoryType,
+        record.speakerProvenance,
+        record.semanticKey,
+        record.semanticPolicyVersion,
+        record.semanticRelation ?? null,
         record.curationProvider,
         record.curationProviderVersion ?? null,
         record.admissionPolicyVersion,

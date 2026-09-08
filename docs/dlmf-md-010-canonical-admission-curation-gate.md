@@ -148,12 +148,12 @@ The built-in conservative curator intentionally classifies generic facts as `unk
 
 Automatic semantic merge is deliberately narrow:
 
-- Exact DLMF semantic fingerprint match -> `supporting_evidence_only`, linked to the existing canonical memory.
-- Exact match to a tombstoned memory -> suppressed as governed forgetting; no resurrection commit.
-- Curator-declared duplicate -> accepted only when the target canonical memory exists in the same scope; otherwise `pending_review`.
-- `merge_required` / fuzzy semantic merge -> `pending_review`.
+- Active DLMF semantic-key equivalence/subsumption match -> an audited `canonical_merge` candidate targeting the existing memory.
+- The merge revision preserves canonical ID/content and unions evidence/source provenance.
+- A tombstoned semantic-key match -> suppressed as governed forgetting; no resurrection commit.
+- Curator-declared duplicate requires a valid same-scope target; provider/model `merge_required` or fuzzy matching remains `pending_review`.
 
-A model may propose a merge but cannot mutate or merge canonical memory directly. MD-010 does not introduce automatic fuzzy merge authority.
+Only the DLMF-owned semantic policy may authorize this narrow merge. Its proof binds target, relation, policy version, and curation record; Canonical Memory Authority independently verifies it. A model/provider still cannot mutate or merge canonical memory directly.
 
 ## 9. Curation provider boundary
 
@@ -225,7 +225,7 @@ Eligibility is revocable: refreshing a receipt can set `pruneEligible=false` aga
 
 - provider unit count
 - curation decision count
-- all four outcome counts
+- all five outcome counts, including `canonical_merge`
 - curation coverage completeness
 - admission completeness
 - curator identity/version
@@ -235,12 +235,13 @@ Eligibility is revocable: refreshing a receipt can set `pruneEligible=false` aga
 - warnings/errors
 - retention/prune decision state
 
-An admitted provider candidate also carries `canonicalAdmission`, and canonical provenance preserves the same reference fields: admission policy version, curation provider/version, curation record ID, and `canonical_candidate` outcome. Canonical authority treats these fields only as a lookup reference and verifies them against the DLMF-owned curation record before commit.
+An admitted provider candidate also carries `canonicalAdmission`, and canonical provenance preserves the same reference fields: admission policy version, curation provider/version, curation record ID, and either `canonical_candidate` create or DLMF-issued `canonical_merge` outcome. Canonical authority treats these fields only as a lookup reference and verifies them against the DLMF-owned curation record before commit.
 
 `memory_curation_records` persists one auditable record per provider unit, including:
 
 - raw provider unit text/fingerprint/reference
-- provider epistemic status
+- provider epistemic status and distinct DLMF-attributed status/basis
+- per-memory type, speaker provenance, semantic key/policy/relation
 - curator identity/version
 - admission policy version
 - attributed epistemic status
@@ -252,6 +253,8 @@ An admitted provider candidate also carries `canonicalAdmission`, and canonical 
 ## 13. Migration impact
 
 Migration `0004_canonical_admission.sql` is additive to canonical memory data. It adds nullable `memory_candidates.canonical_admission` for MD-010 proof persistence and validates its structural shape when present.
+
+Migration `0005_semantic_governance.sql` additively backfills conservative semantic metadata, admits the bound `canonical_merge` proof shape, adds per-scope semantic-key uniqueness, and creates `reflective_insights` plus DLMF-owned `insight_promotion_records`. The reflective object itself is database-constrained to `canonical_write_performed=false`; an explicitly approved promotion is separately audited and must still pass through `MemoryCandidateService` and `CanonicalMemoryAuthority`.
 
 Existing canonical memory/revisions are not rewritten or deleted.
 
@@ -271,7 +274,7 @@ MD-010 is implementation-complete only when automated tests prove at minimum:
 - incomplete curation coverage fails before candidate/canonical creation
 - curator content rewrite cannot silently become canonical
 - fuzzy/`merge_required` semantics require review
-- exact semantic duplicates do not create duplicate canonical memories
+- semantic equivalence/subsumption does not create duplicate canonical identities and instead records evidence-union merge revisions
 - governed forgetting cannot be resurrected by re-distillation
 - curation audit failure blocks canonical commit
 - `pending_review` blocks admission completeness and pruning

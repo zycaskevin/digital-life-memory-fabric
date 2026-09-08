@@ -1,4 +1,7 @@
-import { ValidationError } from "../domain/errors.js";
+import {
+  SemanticIdentityConflictError,
+  ValidationError,
+} from "../domain/errors.js";
 import type {
   CanonicalCommitResult,
   CanonicalMemoryHead,
@@ -124,6 +127,19 @@ class InMemoryTx implements CanonicalMemoryStoreTx {
   }
 
   async putHead(head: CanonicalMemoryHead): Promise<void> {
+    if (head.currentRevision === 1) {
+      if (this.state.heads.has(head.memoryId)) {
+        throw new ValidationError(`Canonical memory identity collision: ${head.memoryId}`);
+      }
+      const semanticCollision = [...this.state.heads.values()].find(
+        (current) =>
+          scopeKey(current.scope) === scopeKey(head.scope) &&
+          current.semanticKey === head.semanticKey,
+      );
+      if (semanticCollision !== undefined) {
+        throw new SemanticIdentityConflictError(head.scope, head.semanticKey);
+      }
+    }
     this.state.heads.set(head.memoryId, clone(head));
   }
 
@@ -269,6 +285,21 @@ export class InMemoryCanonicalMemoryStore implements CentralOperationsStore {
       if (revision?.semanticFingerprint === semanticFingerprint) {
         return clone(revision);
       }
+    }
+    return undefined;
+  }
+
+  async findCurrentRevisionBySemanticKey(
+    scope: MemoryScope,
+    semanticKey: string,
+  ): Promise<MemoryRevision | undefined> {
+    await this.afterWrites();
+    for (const head of this.state.heads.values()) {
+      if (scopeKey(head.scope) !== scopeKey(scope)) continue;
+      const revision = this.state.revisions.get(
+        revisionKey(head.memoryId, head.currentRevision),
+      );
+      if (revision?.semanticKey === semanticKey) return clone(revision);
     }
     return undefined;
   }

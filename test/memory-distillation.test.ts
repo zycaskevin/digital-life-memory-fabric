@@ -13,6 +13,7 @@ import {
   InMemoryCanonicalMemoryStore,
   InMemoryDistillationReceiptStore,
   InMemoryMemoryCurationRecordStore,
+  InMemoryReflectiveInsightStore,
   MemoryCandidateService,
   PreservationCompleteRetentionPolicy,
   PruneEligibilityService,
@@ -215,6 +216,7 @@ function setSinglePreferenceResult(
           dlmf_memory_class: "preference",
           dlmf_memory_kind: "debugging_style",
           dlmf_epistemic_status: "user_asserted",
+          dlmf_source_actor: "user",
           dlmf_confidence: "0.96",
         },
       },
@@ -1200,7 +1202,7 @@ test("MD-010: curation audit failure blocks canonical commit", async () => {
   });
 });
 
-test("MD-008: reflect produces a derived PENDING candidate and cannot directly commit canonical memory", async () => {
+test("MD-008: reflect produces a pending first-class insight and cannot directly commit canonical memory", async () => {
   const store = new InMemoryCanonicalMemoryStore();
   const candidates = new MemoryCandidateService(store);
   const authority = new CanonicalMemoryAuthority(store);
@@ -1226,7 +1228,7 @@ test("MD-008: reflect produces a derived PENDING candidate and cannot directly c
 
   const client = new FakeHindsightClient();
   client.reflectResponse = {
-    text: "Operational transcript history should be distilled before long-term pruning.",
+    text: "\"Phase leakage\" is a systemic recurrence risk when execution concerns enter canonical-memory governance.",
     based_on: [
       {
         id: "hs_projection_fact_1",
@@ -1235,11 +1237,12 @@ test("MD-008: reflect produces a derived PENDING candidate and cannot directly c
       },
     ],
   };
-  const reflective = new ReflectiveMemoryService(store, createAdapter(client));
+  const insightStore = new InMemoryReflectiveInsightStore();
+  const reflective = new ReflectiveMemoryService(store, createAdapter(client), insightStore);
   const derived = await reflective.reflect({
     scope,
     origin: { lifeDid: scope.lifeDid, agentId: "nancy", runtimeId: "hermes-gb10" },
-    context: "What architectural pattern follows from the current memory boundary?",
+    context: "Evaluate the phase-leakage reflective candidate without promoting it.",
     evidence: [
       {
         evidenceRef: { sourceType: "canonical_memory", sourceRef: seeded.head.memoryId },
@@ -1252,15 +1255,29 @@ test("MD-008: reflect produces a derived PENDING candidate and cannot directly c
   });
 
   assert.equal(derived.length, 1);
-  const candidate = derived[0];
-  assert.ok(candidate);
-  assert.equal(candidate.candidateType, "derived_insight_candidate");
-  assert.equal(candidate.epistemicStatus, "synthesized");
-  assert.notEqual(candidate.epistemicStatus, "observed");
-  assert.equal(candidate.status, "PENDING");
+  const insight = derived[0];
+  assert.ok(insight);
+  assert.equal(
+    insight.proposition,
+    "\"Phase leakage\" is a systemic recurrence risk when execution concerns enter canonical-memory governance.",
+  );
+  assert.equal(insight.epistemicStatus, "synthesized");
+  assert.notEqual(insight.epistemicStatus, "observed");
+  assert.equal(insight.status, "pending");
+  assert.deepEqual(insight.supportingMemoryIds, [seeded.head.memoryId]);
+  assert.deepEqual(insight.supportingEvidenceIds, [
+    `canonical_memory:${seeded.head.memoryId}`,
+  ]);
+  assert.deepEqual(insight.contradictingMemoryIds, []);
+  assert.equal(insight.confidence, 0);
+  assert.equal(insight.derivationProvider, "hindsight");
+  assert.equal(insight.promotionEligibility.evidenceClosure, false);
+  assert.equal(insight.promotionEligibility.eligible, false);
+  assert.equal(insight.canonicalWritePerformed, false);
+  assert.equal((await insightStore.get(insight.insightId))?.status, "pending");
   assert.equal(client.reflectCalls[0]?.bankId, "nancy:canonical-projection");
   assert.equal((await store.listChangesAfter(scope, 0)).length, 1, "reflect must not add a canonical commit");
-  assert.equal((await store.getCandidate(candidate.candidateId))?.status, "PENDING");
+  assert.equal((await store.getCandidate(seedCandidate.candidateId))?.status, "ACCEPTED");
 });
 
 test("MD-008 rejects a malicious reflective provider that tries to label inference as observed", async () => {

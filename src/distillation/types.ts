@@ -9,6 +9,8 @@ import type {
   MemoryProducer,
   MemoryRevision,
   MemoryScope,
+  MemoryType,
+  SpeakerProvenance,
   SourceExperienceRef,
 } from "../domain/types.js";
 import type { CurationOutcomeCounts } from "../curation/types.js";
@@ -67,9 +69,16 @@ export interface ProviderMemoryUnit {
   candidateType: MemoryCandidateType;
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType?: MemoryType;
+  speakerProvenance?: SpeakerProvenance;
+  semanticKey?: string;
+  epistemicAttributionBasis?: "provider_declared" | "dlmf_semantic_policy";
+  semanticReasonCodes?: string[];
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
   epistemicStatus: EpistemicStatus;
+  /** Original provider label retained for audit before DLMF attribution. */
+  providerDeclaredEpistemicStatus?: EpistemicStatus;
   confidence?: number;
   producer: MemoryProducer;
   sourceExperienceRefs: SourceExperienceRef[];
@@ -85,8 +94,16 @@ export interface DerivedMemoryCandidateDraft {
   candidateType: "derived_insight_candidate";
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType?: MemoryType;
+  speakerProvenance?: SpeakerProvenance;
+  semanticKey?: string;
+  epistemicAttributionBasis?: "provider_declared" | "dlmf_semantic_policy";
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
+  supportingMemoryIds?: MemoryId[];
+  supportingEvidenceIds?: string[];
+  contradictingMemoryIds?: MemoryId[];
+  derivationModel?: string;
   epistemicStatus: "inferred" | "synthesized" | "uncertain";
   confidence?: number;
   producer: MemoryProducer;
@@ -200,6 +217,7 @@ export interface DistillationReceipt {
   provider: string;
   providerRunId?: string;
   distillationPolicyVersion: string;
+  semanticPolicyVersion: string;
   canonicalizationPolicyVersion: string;
   admissionPolicyVersion: string;
   retentionPolicyVersion: string;

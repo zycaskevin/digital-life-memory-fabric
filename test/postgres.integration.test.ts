@@ -14,7 +14,11 @@ import {
   OutboxClaimConflictError,
   PostgresCanonicalMemoryStore,
   PostgresDistillationReceiptStore,
+  PostgresInsightPromotionRecordStore,
   PostgresMemoryCurationRecordStore,
+  PostgresReflectiveInsightStore,
+  ReflectiveInsightPromotionGate,
+  ReflectiveInsightPromotionService,
   RevisionConflictError,
   VerifiedRetrievalService,
   type MemoryFabricMaterializationEvent,
@@ -55,10 +59,15 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0004_canonical_admission.sql",
       "utf8",
     );
+    const semanticGovernanceMigration = await readFile(
+      "migrations/0005_semantic_governance.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
     await pool.query(admissionMigration);
+    await pool.query(semanticGovernanceMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -86,6 +95,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       provider: "hindsight",
       providerRunId: "hs_pg_1",
       distillationPolicyVersion: "distill-v1",
+      semanticPolicyVersion: "test-semantic-v1",
       canonicalizationPolicyVersion: "canonicalize-v1",
       admissionPolicyVersion: "admission-v1",
       retentionPolicyVersion: "retention-v1",
@@ -100,6 +110,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
         rejected: 0,
         pending_review: 0,
         canonical_candidate: 0,
+        canonical_merge: 0,
       },
       curationCoverageComplete: true,
       admissionComplete: true,
@@ -125,6 +136,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.deepEqual(loadedReceipt?.canonicalMemoryIds, []);
     assert.equal(loadedReceipt?.admissionComplete, true);
     assert.equal(loadedReceipt?.curationCoverageComplete, true);
+    assert.equal(loadedReceipt?.semanticPolicyVersion, "test-semantic-v1");
 
     const curationRecords = new PostgresMemoryCurationRecordStore(pool);
     await curationRecords.put({
@@ -139,6 +151,11 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       providerUnitText: "Temporary supporting context.",
       providerUnitFingerprint: "sha256:pg-unit-1",
       providerEpistemicStatus: "system_observed",
+      attributedEpistemicBasis: "system_record",
+      memoryType: "transient_state",
+      speakerProvenance: "system",
+      semanticKey: "transient:test:pg-unit-1",
+      semanticPolicyVersion: "test-semantic-v1",
       curationProvider: "test-curator",
       curationProviderVersion: "1",
       admissionPolicyVersion: "admission-v1",
@@ -154,6 +171,37 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(loadedCuration.length, 1);
     assert.equal(loadedCuration[0]?.outcome, "supporting_evidence_only");
     assert.equal(loadedCuration[0]?.admissionPolicyVersion, "admission-v1");
+    assert.equal(loadedCuration[0]?.memoryType, "transient_state");
+    assert.equal(loadedCuration[0]?.attributedEpistemicBasis, "system_record");
+
+    const insightStore = new PostgresReflectiveInsightStore(pool);
+    await insightStore.put({
+      insightId: "insight_pg_phase_leakage_1",
+      scope,
+      proposition: "Phase leakage is a recurrence risk.",
+      epistemicStatus: "synthesized",
+      supportingMemoryIds: [],
+      supportingEvidenceIds: [],
+      contradictingMemoryIds: [],
+      confidence: 0,
+      derivationProvider: "hindsight",
+      derivationModel: "test-model",
+      derivationRunId: "hs_reflect_pg_1",
+      status: "pending",
+      promotionEligibility: {
+        eligible: false,
+        evidenceClosure: false,
+        requiresExplicitApproval: true,
+        reasonCodes: ["promotion:no_supporting_memories"],
+      },
+      canonicalWritePerformed: false,
+      createdAt: "2026-09-03T02:00:02.600Z",
+      updatedAt: "2026-09-03T02:00:02.600Z",
+    });
+    const loadedInsight = await insightStore.get("insight_pg_phase_leakage_1");
+    assert.equal(loadedInsight?.status, "pending");
+    assert.equal(loadedInsight?.promotionEligibility.eligible, false);
+    assert.equal(loadedInsight?.canonicalWritePerformed, false);
 
     const createCandidate = await candidates.ingest({
       scope,
@@ -181,6 +229,8 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     });
     assert.equal(created.revision.revision, 1);
     assert.equal(created.change.commitSeq, 1);
+    assert.equal(created.head.memoryType, "general_fact");
+    assert.equal(created.head.semanticKey, createCandidate.semanticKey);
 
     const retry = await authority.commit({
       candidateId: createCandidate.candidateId,
@@ -697,6 +747,56 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
         scope: materializationScope,
       })).materializations.map((value) => value.providerName),
       ["memory-reference"],
+    );
+
+    const promotionGate = new ReflectiveInsightPromotionGate();
+    const promotionInsight = {
+      insightId: "insight_pg_governed_promotion" as const,
+      scope: materializationScope,
+      proposition: "Provider delivery failures are a systemic operational risk.",
+      epistemicStatus: "synthesized" as const,
+      supportingMemoryIds: [materializationCommit.head.memoryId],
+      supportingEvidenceIds: ["task_result:dlfm-004:postgres:1"],
+      contradictingMemoryIds: [],
+      confidence: 0.9,
+      derivationProvider: "hindsight",
+      derivationModel: "postgres-fixture-model",
+      derivationRunId: "hs_reflect_pg_promotion",
+      status: "pending" as const,
+      canonicalWritePerformed: false as const,
+      createdAt: "2026-09-09T00:00:00.000Z",
+      updatedAt: "2026-09-09T00:00:00.000Z",
+    };
+    await insightStore.put({
+      ...promotionInsight,
+      promotionEligibility: promotionGate.assess(promotionInsight),
+    });
+    const promotionRecords = new PostgresInsightPromotionRecordStore(pool);
+    const promoted = await new ReflectiveInsightPromotionService({
+      canonicalStore: store,
+      insightStore,
+      promotionStore: promotionRecords,
+      approvalVerifier: { verifyApproval: async () => true },
+    }).promote({
+      insightId: promotionInsight.insightId,
+      scope: materializationScope,
+      approvedBy: {
+        lifeDid: materializationScope.lifeDid,
+        agentId: "human-reviewer",
+      },
+      idempotencyKey: "pg-governed-insight-promotion-v1",
+    });
+    assert.equal(promoted.record.status, "committed");
+    assert.equal(promoted.insight.canonicalWritePerformed, false);
+    assert.equal(
+      (await promotionRecords.get(promoted.record.promotionId))?.canonicalMemoryId,
+      promoted.canonicalMemoryId,
+    );
+    const promotedHead = await store.getHead(promoted.canonicalMemoryId);
+    assert.equal(promotedHead?.currentRevision, 1);
+    assert.equal(
+      (await store.getRevision(promoted.canonicalMemoryId, 1))?.epistemicStatus,
+      "synthesized",
     );
   } finally {
     await store.close();

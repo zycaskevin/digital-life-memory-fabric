@@ -377,7 +377,19 @@ admissionPolicyVersion     = pilot-admission-v1
 
 The admission policy version remains unchanged because the deterministic admission authority was not relaxed. Only source-role attribution and conservative proposal classification changed.
 
-Local remediation acceptance is `63 pass / 0 fail / 1 PostgreSQL runtime integration skip`. The skipped test requires a PostgreSQL runtime URL unavailable inside CatDesk; the production pg0 runtime remains independently verified by GB10 preflight.
+Semantic Governance Hardening advances only the execution identities used by the next Apply:
+
+```text
+distillationPolicyVersion = pilot-distill-v5-semantic-governance
+curationProviderVersion    = pilot-curation-v4-semantic-governance
+adapterVersion             = hindsight-production-pilot-v0.1.1-semantic-governance-v5
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v2
+```
+
+The report now includes `canonical_merge`, per-memory type/speaker/semantic fields, and persisted `ReflectiveInsight` governance fields. Semantic v2 adds multilingual concept identity, contradiction review, generalized token-subset subsumption, and bounded collision retry. The historical v2/v3 execution identities below remain audit evidence and are not rewritten.
+
+DLMF-SG-002 acceptance on the current main baseline is `102 tests / 102 pass / 0 fail / 0 skip` when run against a disposable PostgreSQL 16 database. This includes migration 0005, durable insight-promotion persistence, and a two-process semantic-key collision. Runs without `DLFM_TEST_DATABASE_URL` explicitly skip the two PostgreSQL tests.
 
 On the next Apply, `provider_units` may exceed 667 because each session can now produce units from both the unchanged full-transcript document and the additional user-only projection. Do not compare raw provider-unit count alone. Compare outcome distribution and manually review admitted canonical memories for precision, recall, epistemic correctness, durability, and duplicate/merge quality.
 

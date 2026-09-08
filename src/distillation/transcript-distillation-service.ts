@@ -12,11 +12,24 @@ import type {
 import { emptyCurationOutcomeCounts } from "../curation/types.js";
 import type { CanonicalAdmissionPolicy } from "../curation/types.js";
 import type { MemoryCurationRecordStore } from "../curation/memory-curation-record-store.js";
-import { ValidationError } from "../domain/errors.js";
-import type { CandidateInput, MemoryId } from "../domain/types.js";
+import {
+  RevisionConflictError,
+  SemanticIdentityConflictError,
+  ValidationError,
+} from "../domain/errors.js";
+import type {
+  CandidateInput,
+  MemoryId,
+  MemoryRevision,
+  SemanticRelation,
+} from "../domain/types.js";
 import { SystemClock, sameScope, sha256, type Clock } from "../domain/utils.js";
 import type { RawExperienceArchiveProvider } from "../archive/raw-experience-archive.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
+import {
+  DeterministicSemanticMemoryGovernance,
+  type SemanticMemoryGovernance,
+} from "../semantic/deterministic-semantic-governance.js";
 import type { DistillationReceiptStore } from "./distillation-receipt-store.js";
 import type { MemoryCandidateGovernance } from "./governance.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
@@ -68,6 +81,7 @@ export interface TranscriptDistillationServiceOptions {
   governance: MemoryCandidateGovernance;
   candidateService?: MemoryCandidateService;
   canonicalAuthority?: CanonicalMemoryAuthority;
+  semanticGovernance?: SemanticMemoryGovernance;
   clock?: Clock;
   receiptIds?: DistillationReceiptIdFactory;
 }
@@ -204,8 +218,13 @@ function providerUnitFingerprint(unit: ProviderMemoryUnit): string {
     candidateType: unit.candidateType,
     memoryClass: unit.memoryClass,
     memoryKind: unit.memoryKind,
+    memoryType: unit.memoryType ?? null,
+    speakerProvenance: unit.speakerProvenance ?? null,
+    semanticKey: unit.semanticKey ?? null,
     proposedContent: unit.proposedContent,
-    epistemicStatus: unit.epistemicStatus,
+    providerDeclaredEpistemicStatus: unit.providerDeclaredEpistemicStatus ?? null,
+    attributedEpistemicStatus: unit.epistemicStatus,
+    epistemicAttributionBasis: unit.epistemicAttributionBasis ?? null,
     evidenceRefs: unit.evidenceRefs,
   });
 }
@@ -213,8 +232,10 @@ function providerUnitFingerprint(unit: ProviderMemoryUnit): string {
 export class TranscriptDistillationService {
   private readonly candidateService: MemoryCandidateService;
   private readonly canonicalAuthority: CanonicalMemoryAuthority;
+  private readonly semanticGovernance: SemanticMemoryGovernance;
   private readonly clock: Clock;
   private readonly receiptIds: DistillationReceiptIdFactory;
+  private readonly inFlight = new Map<string, Promise<DistillationReceipt>>();
 
   constructor(private readonly options: TranscriptDistillationServiceOptions) {
     this.candidateService =
@@ -227,6 +248,8 @@ export class TranscriptDistillationService {
         undefined,
         options.curationStore,
       );
+    this.semanticGovernance =
+      options.semanticGovernance ?? new DeterministicSemanticMemoryGovernance();
     this.clock = options.clock ?? new SystemClock();
     this.receiptIds = options.receiptIds ?? new DeterministicDistillationReceiptIdFactory();
   }
@@ -253,9 +276,27 @@ export class TranscriptDistillationService {
       curationProvider: this.options.curationProvider.name,
       curationProviderVersion: this.options.curationProvider.version ?? null,
       admissionPolicyVersion: input.admissionPolicyVersion,
+      semanticPolicyVersion: this.semanticGovernance.policyVersion,
       sourceSegmentFingerprint:
         input.sourceSegments === undefined ? null : sha256(input.sourceSegments),
     });
+    const active = this.inFlight.get(idempotencyKey);
+    if (active !== undefined) return active;
+    const operation = this.runWithIdempotency(input, idempotencyKey);
+    this.inFlight.set(idempotencyKey, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.inFlight.get(idempotencyKey) === operation) {
+        this.inFlight.delete(idempotencyKey);
+      }
+    }
+  }
+
+  private async runWithIdempotency(
+    input: TranscriptDistillationInput,
+    idempotencyKey: string,
+  ): Promise<DistillationReceipt> {
     const previous = await this.options.receiptStore.getByIdempotencyKey(
       input.scope,
       idempotencyKey,
@@ -274,6 +315,7 @@ export class TranscriptDistillationService {
           idempotencyKey,
           provider: this.options.provider.name,
           distillationPolicyVersion: input.distillationPolicyVersion,
+          semanticPolicyVersion: this.semanticGovernance.policyVersion,
           canonicalizationPolicyVersion: input.canonicalizationPolicyVersion,
           retentionPolicyVersion: input.retentionPolicyVersion,
           adapterVersion: this.options.provider.adapterVersion,
@@ -364,6 +406,19 @@ export class TranscriptDistillationService {
         requestedAt: this.clock.now(),
       });
       validateProviderResult(result, this.options.provider);
+      result.providerUnits = result.providerUnits.map((unit) => {
+        const classified = this.semanticGovernance.classify(unit);
+        return {
+          ...unit,
+          providerDeclaredEpistemicStatus: unit.epistemicStatus,
+          memoryType: classified.memoryType,
+          speakerProvenance: classified.speakerProvenance,
+          semanticKey: classified.semanticKey,
+          epistemicStatus: classified.epistemicStatus,
+          epistemicAttributionBasis: classified.attributionBasis,
+          semanticReasonCodes: classified.reasonCodes,
+        };
+      });
       receipt = {
         ...receipt,
         status: "distilled",
@@ -418,6 +473,22 @@ export class TranscriptDistillationService {
           proposal,
           rawContent: archived.content,
         });
+        decision = {
+          ...decision,
+          reasonCodes: [...(unit.semanticReasonCodes ?? []), ...decision.reasonCodes],
+        };
+        const memoryType = unit.memoryType;
+        const speakerProvenance = unit.speakerProvenance;
+        const semanticKey = unit.semanticKey;
+        if (
+          memoryType === undefined ||
+          speakerProvenance === undefined ||
+          semanticKey === undefined
+        ) {
+          throw new ValidationError(
+            `DLMF semantic policy did not classify ${unit.providerUnitRef}`,
+          );
+        }
         let candidateId: MemoryCurationRecord["candidateId"] | undefined;
         let canonicalMemoryId: MemoryId | undefined;
 
@@ -441,6 +512,7 @@ export class TranscriptDistillationService {
           }
         }
 
+        let semanticRelation: SemanticRelation | undefined;
         if (decision.outcome === "canonical_candidate") {
           const draft = decision.candidateDraft;
           if (draft === undefined) {
@@ -452,7 +524,7 @@ export class TranscriptDistillationService {
             archived.archiveRef,
             archived.checksum,
           );
-          const candidateInput: CandidateInput = {
+          let candidateInput: CandidateInput = {
             scope: input.scope,
             origin: input.origin,
             candidateType: draft.candidateType,
@@ -460,6 +532,9 @@ export class TranscriptDistillationService {
             sourceId: input.sourceId,
             memoryClass: draft.memoryClass,
             memoryKind: draft.memoryKind,
+            memoryType,
+            speakerProvenance,
+            semanticKey,
             proposedContent: draft.proposedContent,
             evidenceRefs: unit.evidenceRefs,
             epistemicStatus: decision.epistemicStatus,
@@ -482,23 +557,26 @@ export class TranscriptDistillationService {
             ...(draft.validFrom === undefined ? {} : { validFrom: draft.validFrom }),
             ...(draft.validUntil === undefined ? {} : { validUntil: draft.validUntil }),
           };
-          const fingerprint = candidateSemanticFingerprint(
+
+          const provisionalFingerprint = candidateSemanticFingerprint(
             candidateInput,
             decision.epistemicStatus,
           );
-          candidateInput.candidateFingerprint = fingerprint;
-
-          const current = await this.options.canonicalStore.findCurrentRevisionBySemanticFingerprint(
-            input.scope,
-            fingerprint,
-          );
-          if (current !== undefined) {
-            exactDuplicates += 1;
-            receipt.warnings.push(
-              current.status === "tombstoned"
-                ? `suppressed_by_governed_forget:${fingerprint}`
-                : `duplicate_canonical_semantics:${fingerprint}`,
+          const exactCurrent =
+            await this.options.canonicalStore.findCurrentRevisionBySemanticFingerprint(
+              input.scope,
+              provisionalFingerprint,
             );
+          const current =
+            exactCurrent ??
+            (await this.options.canonicalStore.findCurrentRevisionBySemanticKey(
+              input.scope,
+              semanticKey,
+            ));
+
+          if (current?.status === "tombstoned") {
+            exactDuplicates += 1;
+            receipt.warnings.push(`suppressed_by_governed_forget:${semanticKey}`);
             decision = {
               ...decision,
               outcome: "supporting_evidence_only",
@@ -506,90 +584,229 @@ export class TranscriptDistillationService {
               targetMemoryId: current.memoryId,
               reasonCodes: [
                 ...decision.reasonCodes,
-                current.status === "tombstoned"
-                  ? "admission:suppressed_by_governed_forget"
-                  : "admission:exact_canonical_duplicate",
+                "admission:suppressed_by_governed_forget",
               ],
             };
           } else {
-            // Persist the admission decision before a provider-produced DLMF
-            // candidate exists. If audit persistence fails, no committable
-            // provider candidate is created.
-            const precanonicalRecord: MemoryCurationRecord = {
-              recordId,
-              receiptId: receipt.receiptId,
-              scope: input.scope,
-              sourceType: input.sourceType,
-              sourceId: input.sourceId,
-              providerName: result.providerName,
-              providerRunId: result.providerRunId,
-              providerUnitRef: unit.providerUnitRef,
-              providerUnitText: unit.proposedContent.text,
-              providerUnitFingerprint: providerUnitFingerprint(unit),
-              providerEpistemicStatus: unit.epistemicStatus,
-              curationProvider: this.options.curationProvider.name,
-              ...(this.options.curationProvider.version === undefined
-                ? {}
-                : { curationProviderVersion: this.options.curationProvider.version }),
-              admissionPolicyVersion: input.admissionPolicyVersion,
-              outcome: decision.outcome,
-              attributedEpistemicStatus: decision.epistemicStatus,
-              durability: decision.durability,
-              memoryWorthy: decision.memoryWorthy,
-              semanticDisposition: decision.semanticDisposition,
-              reasonCodes: [...decision.reasonCodes, "audit:precanonical_recorded"],
-              ...(decision.targetMemoryId === undefined
-                ? {}
-                : { targetMemoryId: decision.targetMemoryId }),
-              createdAt: this.clock.now(),
-            };
-            await this.options.curationStore.put(precanonicalRecord);
-
-            const candidate = await this.candidateService.ingest(candidateInput);
-            candidateId = candidate.candidateId;
-            if (!receipt.candidateIds.includes(candidate.candidateId)) {
-              receipt.candidateIds.push(candidate.candidateId);
-            }
-
-            // Link the audit record to the concrete candidate before governance
-            // or canonical authority may run. CanonicalMemoryAuthority verifies
-            // this linkage independently.
-            await this.options.curationStore.put({
-              ...precanonicalRecord,
-              candidateId: candidate.candidateId,
-              createdAt: this.clock.now(),
-            });
-
-            stage = "canonicalization";
-            const governanceDecision = await this.options.governance.evaluate(candidate);
-            stage = "admission";
-            if (governanceDecision.action === "reject") {
-              await this.options.canonicalStore.transaction(async (tx) => {
-                await tx.setCandidateStatus(candidate.candidateId, "REJECTED");
-              });
+            const configureMerge = (
+              target: MemoryRevision,
+              retryReason?: string,
+            ): boolean => {
+              semanticRelation = this.semanticGovernance.relate(unit, target);
+              if (semanticRelation === "contradicts" || semanticRelation === "unrelated") {
+                decision = {
+                  ...decision,
+                  outcome: "pending_review",
+                  semanticDisposition: "merge_required",
+                  targetMemoryId: target.memoryId,
+                  reasonCodes: [
+                    ...decision.reasonCodes,
+                    ...(retryReason === undefined ? [] : [retryReason]),
+                    `admission:semantic_${semanticRelation}`,
+                    semanticRelation === "contradicts"
+                      ? "admission:semantic_contradiction_requires_review"
+                      : "admission:semantic_key_collision_requires_review",
+                  ],
+                };
+                return false;
+              }
               decision = {
                 ...decision,
-                outcome: "rejected",
+                outcome: "canonical_merge",
+                semanticDisposition: "duplicate",
+                targetMemoryId: target.memoryId,
                 reasonCodes: [
                   ...decision.reasonCodes,
-                  `governance:${governanceDecision.reason}`,
+                  ...(retryReason === undefined ? [] : [retryReason]),
+                  `admission:semantic_${semanticRelation}`,
+                  "admission:canonical_merge_allowed",
                 ],
               };
-            } else {
-              stage = "canonicalization";
-              const committed = await this.canonicalAuthority.commit({
+              candidateInput = {
+                ...candidateInput,
+                memoryClass: target.memoryClass,
+                memoryKind: target.memoryKind,
+                memoryType: target.memoryType,
+                semanticKey: target.semanticKey,
+                proposedContent: target.canonicalContent,
+                epistemicStatus: target.epistemicStatus,
+                proposedOperation: "merge",
+                baseMemoryId: target.memoryId,
+                baseRevision: target.revision,
+                canonicalAdmission: {
+                  admissionPolicyVersion: input.admissionPolicyVersion,
+                  curationProvider: this.options.curationProvider.name,
+                  ...(this.options.curationProvider.version === undefined
+                    ? {}
+                    : { curationProviderVersion: this.options.curationProvider.version }),
+                  curationRecordId: recordId,
+                  outcome: "canonical_merge",
+                  semanticPolicyVersion: this.semanticGovernance.policyVersion,
+                  semanticRelation,
+                  targetMemoryId: target.memoryId,
+                },
+              };
+              return true;
+            };
+
+            if (current === undefined || configureMerge(current)) {
+              const maxSemanticAttempts = 4;
+              let canonicalizationFinished = false;
+              for (
+                let semanticAttempt = 1;
+                semanticAttempt <= maxSemanticAttempts && !canonicalizationFinished;
+                semanticAttempt += 1
+              ) {
+              const fingerprint = candidateSemanticFingerprint(
+                candidateInput,
+                candidateInput.epistemicStatus ?? decision.epistemicStatus,
+              );
+              candidateInput.candidateFingerprint = fingerprint;
+
+              // Persist the DLMF admission decision before a provider-produced
+              // candidate exists. CanonicalMemoryAuthority independently verifies
+              // this immutable linkage before create or merge.
+              const precanonicalRecord: MemoryCurationRecord = {
+                recordId,
+                receiptId: receipt.receiptId,
+                scope: input.scope,
+                sourceType: input.sourceType,
+                sourceId: input.sourceId,
+                providerName: result.providerName,
+                providerRunId: result.providerRunId,
+                providerUnitRef: unit.providerUnitRef,
+                providerUnitText: unit.proposedContent.text,
+                providerUnitFingerprint: providerUnitFingerprint(unit),
+                providerEpistemicStatus:
+                  unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
+                attributedEpistemicBasis:
+                  unit.epistemicAttributionBasis ?? "provider_declared",
+                memoryType,
+                speakerProvenance,
+                semanticKey,
+                semanticPolicyVersion: this.semanticGovernance.policyVersion,
+                ...(semanticRelation === undefined ? {} : { semanticRelation }),
+                curationProvider: this.options.curationProvider.name,
+                ...(this.options.curationProvider.version === undefined
+                  ? {}
+                  : { curationProviderVersion: this.options.curationProvider.version }),
+                admissionPolicyVersion: input.admissionPolicyVersion,
+                outcome: decision.outcome,
+                attributedEpistemicStatus: decision.epistemicStatus,
+                durability: decision.durability,
+                memoryWorthy: decision.memoryWorthy,
+                semanticDisposition: decision.semanticDisposition,
+                reasonCodes: [...decision.reasonCodes, "audit:precanonical_recorded"],
+                ...(decision.targetMemoryId === undefined
+                  ? {}
+                  : { targetMemoryId: decision.targetMemoryId }),
+                createdAt: this.clock.now(),
+              };
+              await this.options.curationStore.put(precanonicalRecord);
+
+              const candidate = await this.candidateService.ingest(candidateInput);
+              candidateId = candidate.candidateId;
+              if (!receipt.candidateIds.includes(candidate.candidateId)) {
+                receipt.candidateIds.push(candidate.candidateId);
+              }
+
+              await this.options.curationStore.put({
+                ...precanonicalRecord,
                 candidateId: candidate.candidateId,
-                idempotencyKey: sha256({
-                  distillationIdempotencyKey: receipt.idempotencyKey,
-                  providerUnitRef: unit.providerUnitRef,
-                  candidateFingerprint: candidate.candidateFingerprint,
-                  operation: "canonical_commit",
-                }),
+                createdAt: this.clock.now(),
               });
+
+              stage = "canonicalization";
+              const governanceDecision = await this.options.governance.evaluate(candidate);
               stage = "admission";
-              canonicalMemoryId = committed.head.memoryId;
-              if (!receipt.canonicalMemoryIds.includes(committed.head.memoryId)) {
-                receipt.canonicalMemoryIds.push(committed.head.memoryId);
+              if (governanceDecision.action === "reject") {
+                await this.options.canonicalStore.transaction(async (tx) => {
+                  await tx.setCandidateStatus(candidate.candidateId, "REJECTED");
+                });
+                decision = {
+                  ...decision,
+                  outcome: "rejected",
+                  reasonCodes: [
+                    ...decision.reasonCodes,
+                    `governance:${governanceDecision.reason}`,
+                  ],
+                };
+                canonicalizationFinished = true;
+                continue;
+              }
+
+              stage = "canonicalization";
+              try {
+                const committed = await this.canonicalAuthority.commit({
+                  candidateId: candidate.candidateId,
+                  idempotencyKey: sha256({
+                    distillationIdempotencyKey: receipt.idempotencyKey,
+                    providerUnitRef: unit.providerUnitRef,
+                    candidateFingerprint: candidate.candidateFingerprint,
+                    operation:
+                      candidate.proposedOperation === "merge"
+                        ? "canonical_merge"
+                        : "canonical_commit",
+                  }),
+                });
+                stage = "admission";
+                canonicalMemoryId = committed.head.memoryId;
+                if (!receipt.canonicalMemoryIds.includes(committed.head.memoryId)) {
+                  receipt.canonicalMemoryIds.push(committed.head.memoryId);
+                }
+                canonicalizationFinished = true;
+              } catch (error) {
+                const retryable =
+                  error instanceof SemanticIdentityConflictError ||
+                  error instanceof RevisionConflictError;
+                if (!retryable) throw error;
+
+                if (error instanceof SemanticIdentityConflictError) {
+                  await this.options.canonicalStore.transaction(async (tx) => {
+                    await tx.setCandidateStatus(candidate.candidateId, "CONFLICT");
+                  });
+                }
+                if (semanticAttempt === maxSemanticAttempts) {
+                  throw new ValidationError(
+                    `semantic canonicalization retry limit exceeded for ${semanticKey}`,
+                  );
+                }
+
+                const latest =
+                  await this.options.canonicalStore.findCurrentRevisionBySemanticKey(
+                    input.scope,
+                    semanticKey,
+                  );
+                if (latest === undefined) {
+                  throw new ValidationError(
+                    `semantic collision target disappeared for ${semanticKey}`,
+                  );
+                }
+                if (latest.status === "tombstoned") {
+                  exactDuplicates += 1;
+                  receipt.warnings.push(`suppressed_by_governed_forget:${semanticKey}`);
+                  decision = {
+                    ...decision,
+                    outcome: "supporting_evidence_only",
+                    semanticDisposition: "duplicate",
+                    targetMemoryId: latest.memoryId,
+                    reasonCodes: [
+                      ...decision.reasonCodes,
+                      "admission:suppressed_by_governed_forget",
+                    ],
+                  };
+                  canonicalizationFinished = true;
+                  continue;
+                }
+
+                const retryReason = error instanceof SemanticIdentityConflictError
+                  ? `admission:semantic_identity_collision_retry:${semanticAttempt}`
+                  : `admission:semantic_revision_collision_retry:${semanticAttempt}`;
+                receipt.warnings.push(retryReason);
+                if (!configureMerge(latest, retryReason)) {
+                  canonicalizationFinished = true;
+                }
+              }
               }
             }
           }
@@ -607,7 +824,15 @@ export class TranscriptDistillationService {
           providerUnitRef: unit.providerUnitRef,
           providerUnitText: unit.proposedContent.text,
           providerUnitFingerprint: providerUnitFingerprint(unit),
-          providerEpistemicStatus: unit.epistemicStatus,
+          providerEpistemicStatus:
+            unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
+          attributedEpistemicBasis:
+            unit.epistemicAttributionBasis ?? "provider_declared",
+          memoryType,
+          speakerProvenance,
+          semanticKey,
+          semanticPolicyVersion: this.semanticGovernance.policyVersion,
+          ...(semanticRelation === undefined ? {} : { semanticRelation }),
           curationProvider: this.options.curationProvider.name,
           ...(this.options.curationProvider.version === undefined
             ? {}
@@ -637,7 +862,8 @@ export class TranscriptDistillationService {
         outcomeCounts.supporting_evidence_only +
           outcomeCounts.rejected +
           outcomeCounts.pending_review +
-          outcomeCounts.canonical_candidate ===
+          outcomeCounts.canonical_candidate +
+          outcomeCounts.canonical_merge ===
           result.providerUnits.length;
       const admissionComplete = coverageComplete && outcomeCounts.pending_review === 0;
       const canonicalizationOutcome = outcomeCounts.pending_review > 0

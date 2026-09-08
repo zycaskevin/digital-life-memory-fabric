@@ -17,6 +17,7 @@ import type {
   MemoryId,
   MemoryProvenance,
   MemoryRevision,
+  SemanticRelation,
   MemoryStatus,
 } from "../domain/types.js";
 import {
@@ -42,11 +43,21 @@ export interface CanonicalAdmissionVerifier {
   verifyCanonicalAdmission(candidate: MemoryCandidate): Promise<boolean>;
 }
 
+const semanticRelations = new Set<SemanticRelation>([
+  "equivalent",
+  "existing_subsumes_candidate",
+  "candidate_subsumes_existing",
+]);
+
 type CommitOutcome =
   | { kind: "committed"; result: CanonicalCommitResult }
   | { kind: "conflict"; conflict: MemoryConflict };
 
-function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
+function provenanceFor(
+  candidate: MemoryCandidate,
+  producer = candidate.producer,
+  sourceExperienceRefs = candidate.sourceExperienceRefs,
+): MemoryProvenance {
   const admission = candidate.canonicalAdmission === undefined
     ? {}
     : { canonicalAdmission: candidate.canonicalAdmission };
@@ -55,8 +66,8 @@ function provenanceFor(candidate: MemoryCandidate): MemoryProvenance {
       sourceType: candidate.sourceType,
       candidateId: candidate.candidateId,
       candidateFingerprint: candidate.candidateFingerprint,
-      producer: candidate.producer,
-      sourceExperienceRefs: candidate.sourceExperienceRefs,
+      producer,
+      sourceExperienceRefs,
       ...admission,
     };
   }
@@ -78,6 +89,31 @@ function requirePending(candidate: MemoryCandidate): void {
   }
 }
 
+function mergeEvidenceRefs(
+  current: MemoryRevision["evidenceRefs"],
+  incoming: MemoryCandidate["evidenceRefs"],
+): MemoryRevision["evidenceRefs"] {
+  const refs = new Map<string, MemoryRevision["evidenceRefs"][number]>();
+  for (const ref of [...current, ...incoming]) {
+    refs.set(`${ref.sourceType}\u0000${ref.sourceRef}`, ref);
+  }
+  return [...refs.values()];
+}
+
+function mergeSourceExperienceRefs(
+  current: MemoryRevision["sourceExperienceRefs"],
+  incoming: MemoryCandidate["sourceExperienceRefs"],
+): MemoryRevision["sourceExperienceRefs"] {
+  const refs = new Map<string, MemoryRevision["sourceExperienceRefs"][number]>();
+  for (const ref of [...current, ...incoming]) {
+    refs.set(
+      `${ref.sourceType}\u0000${ref.sourceId}\u0000${ref.archiveRef ?? ""}\u0000${ref.checksum ?? ""}`,
+      ref,
+    );
+  }
+  return [...refs.values()];
+}
+
 function providerAdmissionStateFingerprint(candidate: MemoryCandidate): string | undefined {
   if (candidate.producer.kind !== "provider") return undefined;
 
@@ -87,12 +123,21 @@ function providerAdmissionStateFingerprint(candidate: MemoryCandidate): string |
       `Provider candidate ${candidate.candidateId} requires canonical admission proof`,
     );
   }
-  if (
-    proof.outcome !== "canonical_candidate" ||
-    proof.admissionPolicyVersion.trim().length === 0 ||
-    proof.curationProvider.trim().length === 0 ||
-    !proof.curationRecordId.startsWith("cur_")
-  ) {
+  const baseProofValid =
+    proof.admissionPolicyVersion.trim().length > 0 &&
+    proof.curationProvider.trim().length > 0 &&
+    proof.curationRecordId.startsWith("cur_");
+  const createProofValid =
+    proof.outcome === "canonical_candidate" && candidate.proposedOperation === "create";
+  const mergeProofValid =
+    proof.outcome === "canonical_merge" &&
+    candidate.proposedOperation === "merge" &&
+    proof.targetMemoryId === candidate.baseMemoryId &&
+    proof.semanticPolicyVersion !== undefined &&
+    proof.semanticPolicyVersion.trim().length > 0 &&
+    proof.semanticRelation !== undefined &&
+    semanticRelations.has(proof.semanticRelation);
+  if (!baseProofValid || (!createProofValid && !mergeProofValid)) {
     throw new ValidationError(
       `Provider candidate ${candidate.candidateId} has invalid canonical admission proof`,
     );
@@ -114,6 +159,9 @@ function providerAdmissionStateFingerprint(candidate: MemoryCandidate): string |
     candidateType: candidate.candidateType,
     memoryClass: candidate.memoryClass,
     memoryKind: candidate.memoryKind,
+    memoryType: candidate.memoryType,
+    speakerProvenance: candidate.speakerProvenance,
+    semanticKey: candidate.semanticKey,
     proposedContent: candidate.proposedContent,
     epistemicStatus: candidate.epistemicStatus,
     producer: candidate.producer,
@@ -219,10 +267,7 @@ export class CanonicalMemoryAuthority {
     requirePending(candidate);
     requireVerifiedProviderAdmissionState(candidate, verifiedAdmissionFingerprint);
 
-    if (
-      candidate.proposedOperation === "supersede" ||
-      candidate.proposedOperation === "merge"
-    ) {
+    if (candidate.proposedOperation === "supersede") {
       throw new UnsupportedOperationError(candidate.proposedOperation);
     }
 
@@ -238,8 +283,12 @@ export class CanonicalMemoryAuthority {
     let validUntil: string | undefined;
     let memoryClass = candidate.memoryClass;
     let memoryKind = candidate.memoryKind;
+    let memoryType = candidate.memoryType;
+    let speakerProvenance = candidate.speakerProvenance;
+    let semanticKey = candidate.semanticKey;
     let epistemicStatus = candidate.epistemicStatus;
     let producer = candidate.producer;
+    let evidenceRefs = candidate.evidenceRefs;
     let sourceExperienceRefs = candidate.sourceExperienceRefs;
     let semanticFingerprint = candidate.candidateFingerprint;
 
@@ -289,10 +338,12 @@ export class CanonicalMemoryAuthority {
 
       if (
         currentHead.memoryClass !== candidate.memoryClass ||
-        currentHead.memoryKind !== candidate.memoryKind
+        currentHead.memoryKind !== candidate.memoryKind ||
+        currentHead.memoryType !== candidate.memoryType ||
+        currentHead.semanticKey !== candidate.semanticKey
       ) {
         throw new ValidationError(
-          "update/tombstone/restore cannot change memoryClass or memoryKind",
+          "canonical mutation cannot change memoryClass, memoryKind, memoryType, or semanticKey",
         );
       }
 
@@ -312,6 +363,8 @@ export class CanonicalMemoryAuthority {
       headCreatedAt = currentHead.createdAt;
       memoryClass = currentHead.memoryClass;
       memoryKind = currentHead.memoryKind;
+      memoryType = currentHead.memoryType;
+      semanticKey = currentHead.semanticKey;
 
       switch (candidate.proposedOperation) {
         case "update":
@@ -326,6 +379,28 @@ export class CanonicalMemoryAuthority {
           validFrom = candidate.validFrom;
           validUntil = candidate.validUntil;
           break;
+        case "merge":
+          if (currentHead.status !== "active") {
+            throw new ValidationError(
+              `Cannot merge evidence into ${baseMemoryId} while status=${currentHead.status}`,
+            );
+          }
+          status = "active";
+          canonicalContent = currentRevision.canonicalContent;
+          observedAt = currentRevision.observedAt;
+          validFrom = currentRevision.validFrom;
+          validUntil = currentRevision.validUntil;
+          epistemicStatus = currentRevision.epistemicStatus;
+          speakerProvenance =
+            currentRevision.speakerProvenance === candidate.speakerProvenance
+              ? currentRevision.speakerProvenance
+              : "mixed";
+          evidenceRefs = mergeEvidenceRefs(currentRevision.evidenceRefs, candidate.evidenceRefs);
+          sourceExperienceRefs = mergeSourceExperienceRefs(
+            currentRevision.sourceExperienceRefs,
+            candidate.sourceExperienceRefs,
+          );
+          break;
         case "tombstone":
           if (currentHead.status === "tombstoned") {
             throw new ValidationError(`${baseMemoryId} is already tombstoned`);
@@ -338,6 +413,10 @@ export class CanonicalMemoryAuthority {
           epistemicStatus = currentRevision.epistemicStatus;
           producer = currentRevision.producer;
           sourceExperienceRefs = currentRevision.sourceExperienceRefs;
+          evidenceRefs = currentRevision.evidenceRefs;
+          speakerProvenance = currentRevision.speakerProvenance;
+          memoryType = currentRevision.memoryType;
+          semanticKey = currentRevision.semanticKey;
           semanticFingerprint = currentRevision.semanticFingerprint;
           break;
         case "restore":
@@ -354,6 +433,10 @@ export class CanonicalMemoryAuthority {
           epistemicStatus = currentRevision.epistemicStatus;
           producer = currentRevision.producer;
           sourceExperienceRefs = currentRevision.sourceExperienceRefs;
+          evidenceRefs = currentRevision.evidenceRefs;
+          speakerProvenance = currentRevision.speakerProvenance;
+          memoryType = currentRevision.memoryType;
+          semanticKey = currentRevision.semanticKey;
           semanticFingerprint = currentRevision.semanticFingerprint;
           break;
         default:
@@ -369,12 +452,15 @@ export class CanonicalMemoryAuthority {
       scope: candidate.scope,
       memoryClass,
       memoryKind,
+      memoryType,
+      speakerProvenance,
+      semanticKey,
       status,
       canonicalContent,
       contentHash,
       author: candidate.origin,
-      provenance: provenanceFor(candidate),
-      evidenceRefs: candidate.evidenceRefs,
+      provenance: provenanceFor(candidate, producer, sourceExperienceRefs),
+      evidenceRefs,
       epistemicStatus,
       producer,
       sourceExperienceRefs,
@@ -391,6 +477,8 @@ export class CanonicalMemoryAuthority {
       scope: candidate.scope,
       memoryClass,
       memoryKind,
+      memoryType,
+      semanticKey,
       currentRevision: newRevision,
       status,
       createdAt: headCreatedAt,
@@ -404,6 +492,9 @@ export class CanonicalMemoryAuthority {
       canonicalContent,
       contentHash,
       epistemicStatus,
+      memoryType,
+      speakerProvenance,
+      semanticKey,
       semanticFingerprint,
     });
 

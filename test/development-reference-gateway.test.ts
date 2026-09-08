@@ -75,6 +75,9 @@ function revision(
     commitSeq: 100 + revisionNumber,
     observedAt: "2026-09-06T03:00:00.000Z",
     ...overrides,
+    memoryType: overrides.memoryType ?? "event",
+    speakerProvenance: overrides.speakerProvenance ?? "unknown",
+    semanticKey: overrides.semanticKey ?? "event:gateway:navigation_practice",
   };
 }
 
@@ -89,6 +92,8 @@ function head(overrides: Partial<CanonicalMemoryHead> = {}): CanonicalMemoryHead
     createdAt: "2026-09-06T03:00:00.000Z",
     updatedAt: "2026-09-06T03:02:00.000Z",
     ...overrides,
+    memoryType: overrides.memoryType ?? "event",
+    semanticKey: overrides.semanticKey ?? "event:gateway:navigation_practice",
   };
 }
 

@@ -29,6 +29,7 @@ interface ReceiptRow {
   provider: string;
   provider_run_id: string | null;
   distillation_policy_version: string;
+  semantic_policy_version: string;
   canonicalization_policy_version: string;
   admission_policy_version: string;
   retention_policy_version: string;
@@ -72,6 +73,7 @@ function fromRow(row: ReceiptRow): DistillationReceipt {
     idempotencyKey: row.idempotency_key,
     provider: row.provider,
     distillationPolicyVersion: row.distillation_policy_version,
+    semanticPolicyVersion: row.semantic_policy_version,
     canonicalizationPolicyVersion: row.canonicalization_policy_version,
     admissionPolicyVersion: row.admission_policy_version,
     retentionPolicyVersion: row.retention_policy_version,
@@ -163,11 +165,11 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         curation_coverage_complete, admission_complete,
         candidate_ids, canonical_memory_ids, status, errors, warnings,
         canonicalization_outcome, retention_state, prune_eligible, attempts,
-        created_at, updated_at
+        created_at, updated_at, semantic_policy_version
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
         $21,$22,$23,$24,$25,$26,$27::jsonb,$28,$29,$30::text[],$31::text[],$32,
-        $33::jsonb,$34::jsonb,$35,$36,$37,$38,$39,$40
+        $33::jsonb,$34::jsonb,$35,$36,$37,$38,$39,$40,$41
       )
       ON CONFLICT (tenant_id, life_did, memory_namespace, idempotency_key)
       DO UPDATE SET
@@ -181,6 +183,7 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         provider=EXCLUDED.provider,
         provider_run_id=EXCLUDED.provider_run_id,
         distillation_policy_version=EXCLUDED.distillation_policy_version,
+        semantic_policy_version=EXCLUDED.semantic_policy_version,
         canonicalization_policy_version=EXCLUDED.canonicalization_policy_version,
         admission_policy_version=EXCLUDED.admission_policy_version,
         retention_policy_version=EXCLUDED.retention_policy_version,
@@ -284,6 +287,7 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         receipt.attempts,
         receipt.createdAt,
         receipt.updatedAt,
+        receipt.semanticPolicyVersion,
       ],
     );
   }
