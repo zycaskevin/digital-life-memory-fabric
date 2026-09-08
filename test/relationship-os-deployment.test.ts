@@ -36,7 +36,6 @@ DLMF_RELATIONSHIP_OS_BEARER_TOKEN=0123456789abcdef0123456789abcdef
 DLMF_RELATIONSHIP_OS_TENANT_ID=relationship-os-production
 DLMF_RELATIONSHIP_OS_LIFE_DID=did:arthurverse:nancy
 DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=http://127.0.0.1:8888
-DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY=abcdef0123456789abcdef0123456789
 OMNIHARNESS_DIR=/workspace/OmniHarness
 `;
 
@@ -48,6 +47,34 @@ test("Relationship OS DLMF deployment preflight accepts protected loopback produ
   assert.match(summary, /canonical_authority=dlmf/u);
   assert.equal(summary.includes("postgresql://dlmf:test"), false);
   assert.equal(summary.includes("0123456789abcdef"), false);
+});
+
+test("Relationship OS DLMF deployment preflight accepts loopback Hindsight without provider auth", () => {
+  const result = check(validEnv, { exists: allExpectedFilesExist });
+  assert.equal(result.ok, true, result.errors.join("\n"));
+  assert.match(result.publicSummary.join("\n"), /hindsight=loopback/u);
+});
+
+test("Relationship OS DLMF deployment preflight requires provider auth for remote Hindsight", () => {
+  const remoteWithoutKey = check(
+    validEnv.replace(
+      "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=http://127.0.0.1:8888",
+      "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=https://hindsight.example.test",
+    ),
+    { exists: allExpectedFilesExist },
+  );
+  assert.equal(remoteWithoutKey.ok, false);
+  assert.ok(remoteWithoutKey.errors.includes("dlmf_relationship_os_remote_hindsight_auth_required"));
+
+  const remoteWithKey = check(
+    `${validEnv.replace(
+      "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=http://127.0.0.1:8888",
+      "DLMF_RELATIONSHIP_OS_HINDSIGHT_URL=https://hindsight.example.test",
+    )}DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY=abcdef0123456789abcdef0123456789\n`,
+    { exists: allExpectedFilesExist },
+  );
+  assert.equal(remoteWithKey.ok, true, remoteWithKey.errors.join("\n"));
+  assert.match(remoteWithKey.publicSummary.join("\n"), /hindsight=authenticated/u);
 });
 
 test("Relationship OS DLMF deployment preflight rejects unsafe transport, archive, and placeholders", () => {

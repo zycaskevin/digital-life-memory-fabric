@@ -60,10 +60,16 @@ export function checkRelationshipOsIngressConfig(
   }
 
   const hindsightUrl = required("DLMF_RELATIONSHIP_OS_HINDSIGHT_URL");
-  if (!validServiceUrl(hindsightUrl)) errors.push("dlmf_relationship_os_hindsight_url_invalid");
-  const hindsightKey = required("DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY");
-  if (hindsightKey.length < 8 || hindsightKey.length > 1024 || /[\r\n\u0000]/u.test(hindsightKey)) {
+  const hindsightUrlShape = serviceUrlShape(hindsightUrl);
+  if (!hindsightUrlShape.valid) errors.push("dlmf_relationship_os_hindsight_url_invalid");
+  const hindsightKey = values.get("DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY")?.trim() || "";
+  if (hindsightKey && isPlaceholder(hindsightKey)) {
+    errors.push("dlmf_relationship_os_env_unresolved:DLMF_RELATIONSHIP_OS_HINDSIGHT_API_KEY");
+  } else if (hindsightKey && (hindsightKey.length < 8 || hindsightKey.length > 1024 || /[\r\n\u0000]/u.test(hindsightKey))) {
     errors.push("dlmf_relationship_os_hindsight_key_invalid");
+  }
+  if (hindsightUrlShape.valid && !hindsightUrlShape.loopback && !hindsightKey) {
+    errors.push("dlmf_relationship_os_remote_hindsight_auth_required");
   }
 
   const omniHarnessDir = required("OMNIHARNESS_DIR");
@@ -102,7 +108,7 @@ export function checkRelationshipOsIngressConfig(
       ? [
           "DLMF_RELATIONSHIP_OS_CONFIG_PREFLIGHT=PASS",
           `host=${host} port=${port} schema=${schema} namespace_prefix=relationship.private.`,
-          "database=postgresql archive=protected-path hindsight=authenticated canonical_authority=dlmf",
+          `database=postgresql archive=protected-path hindsight=${hindsightUrlShape.loopback ? "loopback" : "authenticated"} canonical_authority=dlmf`,
         ]
       : [],
   };
@@ -147,16 +153,17 @@ function validPostgresUrl(value) {
   }
 }
 
-function validServiceUrl(value) {
+function serviceUrlShape(value) {
   try {
     const url = new URL(value);
     const loopback = new Set(["127.0.0.1", "::1", "localhost"]).has(url.hostname);
-    return url.username === ""
+    const valid = url.username === ""
       && url.password === ""
       && url.search === ""
       && url.hash === ""
       && (url.protocol === "https:" || (loopback && url.protocol === "http:"));
+    return { valid, loopback };
   } catch {
-    return false;
+    return { valid: false, loopback: false };
   }
 }
