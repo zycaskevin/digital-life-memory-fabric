@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 
-**Status:** Production Pilot #2 validated role-aware admission recall but exposed synchronous Hindsight user-projection retain transport failures; async retain remediation locally tested; Pilot #3 pending
+**Status:** DLMF-SG-005 Production Pilot accepted through bounded reflection recovery; pruning and promotion remain frozen
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -377,7 +377,77 @@ admissionPolicyVersion     = pilot-admission-v1
 
 The admission policy version remains unchanged because the deterministic admission authority was not relaxed. Only source-role attribution and conservative proposal classification changed.
 
-Local remediation acceptance is `63 pass / 0 fail / 1 PostgreSQL runtime integration skip`. The skipped test requires a PostgreSQL runtime URL unavailable inside CatDesk; the production pg0 runtime remains independently verified by GB10 preflight.
+Semantic Governance Hardening advances only the execution identities used by the next Apply:
+
+```text
+distillationPolicyVersion = pilot-distill-v5-semantic-governance
+curationProviderVersion    = pilot-curation-v4-semantic-governance
+adapterVersion             = hindsight-production-pilot-v0.1.1-semantic-governance-v5
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v2
+```
+
+The report now includes `canonical_merge`, per-memory type/speaker/semantic fields, and persisted `ReflectiveInsight` governance fields. Semantic v2 adds multilingual concept identity, contradiction review, generalized token-subset subsumption, and bounded collision retry. The historical v2/v3 execution identities below remain audit evidence and are not rewritten.
+
+DLMF-SG-002 acceptance on the current main baseline is `102 tests / 102 pass / 0 fail / 0 skip` when run against a disposable PostgreSQL 16 database. This includes migration 0005, durable insight-promotion persistence, and a two-process semantic-key collision. Runs without `DLFM_TEST_DATABASE_URL` explicitly skip the two PostgreSQL tests.
+
+Production Pilot `pilot_20260909052810` then passed the machine execution gate but
+failed manual semantic-governance review. All 22 admitted candidates were classified
+as `preference/user_asserted/user`, including obvious technical facts, project state,
+transient game progress, and assistant-described events. The trigger was a combination
+of generic English `like`/`requires` matching, provider candidate-type precedence, and
+an unconditional `user_asserted` label on the user-source projection. Two English /
+Traditional Chinese 8B generation-routing preferences also retained distinct keys.
+No Hermes deletion or insight promotion occurred; the run remains preserved evidence.
+
+DLMF-SG-003 advances the next Apply identities so old Hindsight operations cannot be
+mistaken for the remediated execution:
+
+```text
+distillationPolicyVersion = pilot-distill-v6-epistemic-hardening
+curationProviderVersion    = pilot-curation-v5-epistemic-hardening
+adapterVersion             = hindsight-production-pilot-v0.1.1-epistemic-hardening-v6
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v3
+```
+
+Semantic v3 requires an actor-bound preference verb or an explicitly reviewed concept
+family, treats simile/example `like` as non-preference, lets technical/project/transient
+evidence override a mistaken provider preference type, and maps reviewed 8B generation
+routing phrasing in English and Traditional Chinese to one concept key. User-source
+projection metadata now records speaker provenance without asserting epistemic truth.
+The run inspector counts pending insights from `reflective_insights`, not legacy
+derived candidates. A new Production Apply still requires a reviewed Plan and explicit
+authorization; automatic pruning remains frozen.
+
+Authorized Production Pilot `pilot_20260909063253` reused the checksum-pinned five-session
+Plan and reached all five sources, but failed closed with seven `pending_review`
+decisions. Six rewrite-task/project-state descriptions and one genuine normative format
+preference had been assigned the Nancy commentary-placement semantic key. The semantic
+relation gate correctly refused to merge unrelated content; admission remained
+incomplete and reflection was skipped. Manual review also confirmed residual
+`preference/user_asserted` contamination in technical and long-project candidates.
+Hermes writes/deletes, production bank/namespace writes, pruning, and insight promotion
+all remained zero.
+
+DLMF-SG-004 narrows preference intent and advances the next Apply identities:
+
+```text
+distillationPolicyVersion = pilot-distill-v7-preference-boundary
+curationProviderVersion    = pilot-curation-v6-preference-boundary
+adapterVersion             = hindsight-production-pilot-v0.1.1-preference-boundary-v7
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v4
+```
+
+Semantic v4 shares one explicit preference-language boundary between the Hindsight
+adapter and DLMF policy, requires preference or normative intent for the Nancy family,
+and classifies task lifecycle, project state, transient state, and technical facts
+before falling back to an advisory provider type. The preserved failed-report replay
+found zero non-preference `user_asserted` rows. Disposable PostgreSQL verification
+passed migrations 0001–0005, the real multi-process collision retry, all 104 tests,
+typecheck, and build with zero failures or skips. This does not authorize another
+Apply; automatic pruning remains frozen.
 
 On the next Apply, `provider_units` may exceed 667 because each session can now produce units from both the unchanged full-transcript document and the additional user-only projection. Do not compare raw provider-unit count alone. Compare outcome distribution and manually review admitted canonical memories for precision, recall, epistemic correctness, durability, and duplicate/merge quality.
 
@@ -446,3 +516,30 @@ The full-transcript path remains epistemically conservative. The user-only proje
 Runtime `recall()` remains a separate path for short natural-language retrieval from
 the canonical projection plane. Document enumeration is bounded to 10,000 memory units
 per source; exceeding that bound fails closed and blocks prune eligibility.
+
+## DLMF-SG-005 reflection and retention completion
+
+Authorized run `pilot_20260909073110` completed all five pinned sessions: 1,195 curated units produced 15 candidates, 8 canonical memories, 7 merges, and zero pending receipts. It also produced zero non-preference `user_asserted` records. The run remained fail closed because reflection incorrectly depended on the designated inferred-insight session producing a canonical memory; epistemic hardening correctly made that session supporting evidence only. Retention evaluation also omitted `canonical_merge`, creating false `curation_outcome_count_mismatch` blockers for merge-bearing receipts.
+
+DLMF-SG-005 corrects both paths with fresh execution identities:
+
+```text
+distillationPolicyVersion = pilot-distill-v8-reflection-retention
+curationProviderVersion    = pilot-curation-v7-reflection-retention
+adapterVersion             = hindsight-production-pilot-v0.1.1-tool-grounded-reflection-v9
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v4
+reflectionPolicyVersion    = pilot-reflect-v3-tool-grounded
+```
+
+Reflection now prefers the designated session's canonical IDs and otherwise uses a bounded fallback from other canonical memories admitted in the same run. A merge is counted as a terminal curation outcome for preservation-complete retention. These changes do not enable pruning, insight promotion, or canonical writes by Hindsight. The authorized isolated Apply was consumed by `pilot_20260909075924`; no second full Apply was launched. All destructive and authority-expanding paths remain frozen.
+
+Run `pilot_20260909075924` passed all five session, admission, semantic, merge, and retention gates but Hindsight 0.9.2 rejected its reflection because the configured tool-capable model answered from supplied context without making the provider-required memory-tool call. The failed report and PostgreSQL schema are preserved. Do not re-run the five sessions. After the tool-grounded adapter is locally verified, recover only reflection with:
+
+```bash
+npm run pilot:memory-distillation:resume-reflection -- pilot_20260909075924
+```
+
+The command fails closed unless the original report and schema match, all receipts are complete and review-closed, safety counters are zero, and no reflective insight already exists. It requests Hindsight fact evidence, accepts the 0.9.2 structured `based_on.memories` shape, writes a separate mode-`0600` recovery report, and proves that no canonical row count changed. It never reprocesses source sessions, writes canonical projections, prunes Hermes, promotes an insight, or writes canonical memory.
+
+The reflection-only recovery completed at `2026-09-09T08:26:06.493Z` and produced one Hindsight-derived insight. Database inspection proved `pending=1`, `synthesized=1`, `eligible=0`, `evidenceClosed=0`, `canonicalWrites=0`, and non-empty supporting memory/evidence. The combined pilot therefore passed while keeping the insight pending and the original failed report immutable.

@@ -68,7 +68,7 @@ export class ConservativeMemoryCurationProvider implements MemoryCurationProvide
         outcome,
         epistemicAttribution: {
           status: unit.epistemicStatus,
-          basis: "provider_declared",
+          basis: unit.epistemicAttributionBasis ?? "provider_declared",
         },
         memoryWorthy: outcome === "canonical_candidate" || outcome === "pending_review",
         durability,

@@ -1,5 +1,8 @@
 import { Pool, type PoolClient } from "pg";
-import { ValidationError } from "../domain/errors.js";
+import {
+  SemanticIdentityConflictError,
+  ValidationError,
+} from "../domain/errors.js";
 import type {
   CanonicalAdmissionProof,
   CanonicalCommitResult,
@@ -24,7 +27,9 @@ import type {
   MemoryRevisionRef,
   MemoryScope,
   MemoryStatus,
+  MemoryType,
   ProviderMaterialization,
+  SpeakerProvenance,
   SourceExperienceRef,
 } from "../domain/types.js";
 import { scopeKey } from "../domain/utils.js";
@@ -54,6 +59,9 @@ interface CandidateRow {
   source_id: string | null;
   memory_class: MemoryClass;
   memory_kind: string;
+  memory_type: MemoryType;
+  speaker_provenance: SpeakerProvenance;
+  semantic_key: string;
   proposed_text: string;
   proposed_payload: Record<string, unknown> | null;
   evidence_refs: EvidenceRef[];
@@ -82,6 +90,8 @@ interface HeadRow {
   memory_namespace: string;
   memory_class: MemoryClass;
   memory_kind: string;
+  memory_type: MemoryType;
+  semantic_key: string;
   current_revision: number;
   status: MemoryStatus;
   created_at: Date | string;
@@ -100,6 +110,9 @@ interface RevisionRow {
   memory_namespace: string;
   memory_class: MemoryClass;
   memory_kind: string;
+  memory_type: MemoryType;
+  speaker_provenance: SpeakerProvenance;
+  semantic_key: string;
   status: MemoryStatus;
   canonical_text: string;
   canonical_payload: Record<string, unknown> | null;
@@ -270,6 +283,9 @@ function candidateFromRow(row: CandidateRow): MemoryCandidate {
     sourceType: row.source_type,
     memoryClass: row.memory_class,
     memoryKind: row.memory_kind,
+    memoryType: row.memory_type,
+    speakerProvenance: row.speaker_provenance,
+    semanticKey: row.semantic_key,
     proposedContent,
     evidenceRefs: row.evidence_refs,
     epistemicStatus: row.epistemic_status,
@@ -303,6 +319,8 @@ function headFromRow(row: HeadRow): CanonicalMemoryHead {
     scope: scopeFromRow(row),
     memoryClass: row.memory_class,
     memoryKind: row.memory_kind,
+    memoryType: row.memory_type,
+    semanticKey: row.semantic_key,
     currentRevision: row.current_revision,
     status: row.status,
     createdAt: iso(row.created_at),
@@ -414,6 +432,9 @@ function revisionFromRow(
     scope: scopeFromRow(row),
     memoryClass: row.memory_class,
     memoryKind: row.memory_kind,
+    memoryType: row.memory_type,
+    speakerProvenance: row.speaker_provenance,
+    semanticKey: row.semantic_key,
     status: row.status,
     canonicalContent: contentFromRow(row),
     contentHash: row.content_hash,
@@ -495,13 +516,14 @@ class PostgresTx implements CanonicalMemoryStoreTx {
       `INSERT INTO memory_candidates (
          candidate_id, tenant_id, life_did, memory_namespace, origin,
          candidate_type, source_type, source_id, memory_class, memory_kind,
+         memory_type, speaker_provenance, semantic_key,
          proposed_text, proposed_payload, evidence_refs, epistemic_status, confidence,
          producer, source_experience_refs, candidate_fingerprint,
          distillation_policy_version, provider_run_id, canonical_admission,
          proposed_operation, base_memory_id, base_revision, status, created_at,
          observed_at, valid_from, valid_until
        ) VALUES (
-         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,$16::jsonb,$17::jsonb,$18,$19,$20,$21::jsonb,$22,$23,$24,$25,$26,$27,$28,$29
+         $1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19::jsonb,$20::jsonb,$21,$22,$23,$24::jsonb,$25,$26,$27,$28,$29,$30,$31,$32
        )`,
       [
         candidate.candidateId,
@@ -514,6 +536,9 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         candidate.sourceId ?? null,
         candidate.memoryClass,
         candidate.memoryKind,
+        candidate.memoryType,
+        candidate.speakerProvenance,
+        candidate.semanticKey,
         candidate.proposedContent.text,
         candidate.proposedContent.payload === undefined
           ? null
@@ -563,9 +588,9 @@ class PostgresTx implements CanonicalMemoryStoreTx {
       const result = await this.client.query(
         `INSERT INTO memory_heads (
            memory_id, tenant_id, life_did, memory_namespace, memory_class,
-           memory_kind, current_revision, status, created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (memory_id) DO NOTHING`,
+           memory_kind, memory_type, semantic_key, current_revision, status, created_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT DO NOTHING`,
         [
           head.memoryId,
           head.scope.tenantId,
@@ -573,6 +598,8 @@ class PostgresTx implements CanonicalMemoryStoreTx {
           head.scope.memoryNamespace,
           head.memoryClass,
           head.memoryKind,
+          head.memoryType,
+          head.semanticKey,
           head.currentRevision,
           head.status,
           head.createdAt,
@@ -580,6 +607,21 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         ],
       );
       if (result.rowCount !== 1) {
+        const semanticCollision = await this.client.query<{ present: number }>(
+          `SELECT 1 AS present FROM memory_heads
+            WHERE tenant_id=$1 AND life_did=$2 AND memory_namespace=$3
+              AND semantic_key=$4
+            LIMIT 1`,
+          [
+            head.scope.tenantId,
+            head.scope.lifeDid,
+            head.scope.memoryNamespace,
+            head.semanticKey,
+          ],
+        );
+        if (semanticCollision.rows[0] !== undefined) {
+          throw new SemanticIdentityConflictError(head.scope, head.semanticKey);
+        }
         throw new ValidationError(`Canonical memory identity collision: ${head.memoryId}`);
       }
       return;
@@ -587,11 +629,12 @@ class PostgresTx implements CanonicalMemoryStoreTx {
 
     const result = await this.client.query(
       `UPDATE memory_heads
-          SET current_revision = $7, status = $8, updated_at = $10
+          SET current_revision = $9, status = $10, updated_at = $12
         WHERE memory_id = $1
           AND tenant_id = $2 AND life_did = $3 AND memory_namespace = $4
           AND memory_class = $5 AND memory_kind = $6
-          AND current_revision = $9`,
+          AND memory_type = $7 AND semantic_key = $8
+          AND current_revision = $11`,
       [
         head.memoryId,
         head.scope.tenantId,
@@ -599,6 +642,8 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         head.scope.memoryNamespace,
         head.memoryClass,
         head.memoryKind,
+        head.memoryType,
+        head.semanticKey,
         head.currentRevision,
         head.status,
         head.currentRevision - 1,
@@ -623,12 +668,13 @@ class PostgresTx implements CanonicalMemoryStoreTx {
     await this.client.query(
       `INSERT INTO memory_revisions (
          memory_id, revision, tenant_id, life_did, memory_namespace,
-         memory_class, memory_kind, status, canonical_text, canonical_payload,
+         memory_class, memory_kind, memory_type, speaker_provenance, semantic_key,
+         status, canonical_text, canonical_payload,
          content_hash, author, provenance, epistemic_status, producer,
          source_experience_refs, semantic_fingerprint,
          observed_at, valid_from, valid_until, committed_at, commit_seq
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,$21,$22
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15::jsonb,$16::jsonb,$17,$18::jsonb,$19::jsonb,$20,$21,$22,$23,$24,$25
        )`,
       [
         revision.memoryId,
@@ -638,6 +684,9 @@ class PostgresTx implements CanonicalMemoryStoreTx {
         revision.scope.memoryNamespace,
         revision.memoryClass,
         revision.memoryKind,
+        revision.memoryType,
+        revision.speakerProvenance,
+        revision.semanticKey,
         revision.status,
         revision.canonicalContent.text,
         revision.canonicalContent.payload === undefined
@@ -791,6 +840,8 @@ class PostgresTx implements CanonicalMemoryStoreTx {
       scope: currentHead.scope,
       memoryClass: currentHead.memoryClass,
       memoryKind: currentHead.memoryKind,
+      memoryType: currentHead.memoryType,
+      semanticKey: currentHead.semanticKey,
       currentRevision: change.newRevision,
       status: revision.status,
       createdAt: currentHead.createdAt,
@@ -909,6 +960,29 @@ export class PostgresCanonicalMemoryStore implements CentralOperationsStore {
         ORDER BY h.updated_at DESC
         LIMIT 1`,
       [scope.tenantId, scope.lifeDid, scope.memoryNamespace, semanticFingerprint],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    const client = await this.pool.connect();
+    try {
+      return await readRevision(client, row.memory_id as MemoryId, row.revision);
+    } finally {
+      client.release();
+    }
+  }
+
+  async findCurrentRevisionBySemanticKey(
+    scope: MemoryScope,
+    semanticKey: string,
+  ): Promise<MemoryRevision | undefined> {
+    const result = await this.pool.query<{ memory_id: string; revision: number }>(
+      `SELECT h.memory_id, h.current_revision AS revision
+         FROM memory_heads h
+        WHERE h.tenant_id = $1 AND h.life_did = $2 AND h.memory_namespace = $3
+          AND h.semantic_key = $4
+        ORDER BY h.updated_at DESC
+        LIMIT 1`,
+      [scope.tenantId, scope.lifeDid, scope.memoryNamespace, semanticKey],
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;

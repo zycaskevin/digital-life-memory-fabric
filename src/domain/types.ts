@@ -39,6 +39,34 @@ export type MemoryClass =
   | "preference"
   | "relationship_fact";
 
+/** Per-memory semantic type. This never inherits a transcript/session category. */
+export type MemoryType =
+  | "preference"
+  | "technical_fact"
+  | "transient_state"
+  | "project_state"
+  | "relationship"
+  | "event"
+  | "commitment"
+  | "habit"
+  | "general_fact";
+
+/** Source speaker provenance is evidence metadata, not an epistemic status. */
+export type SpeakerProvenance =
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool"
+  | "mixed"
+  | "unknown";
+
+export type SemanticRelation =
+  | "equivalent"
+  | "existing_subsumes_candidate"
+  | "candidate_subsumes_existing"
+  | "contradicts"
+  | "unrelated";
+
 export type CandidateStatus =
   | "PENDING"
   | "ACCEPTED"
@@ -79,7 +107,10 @@ export interface CanonicalAdmissionProof {
   curationProvider: string;
   curationProviderVersion?: string;
   curationRecordId: `cur_${string}`;
-  outcome: "canonical_candidate";
+  outcome: "canonical_candidate" | "canonical_merge";
+  semanticPolicyVersion?: string;
+  semanticRelation?: SemanticRelation;
+  targetMemoryId?: MemoryId;
 }
 
 export interface MemoryProvenance {
@@ -106,6 +137,9 @@ export interface MemoryCandidate {
   sourceId?: string;
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType: MemoryType;
+  speakerProvenance: SpeakerProvenance;
+  semanticKey: string;
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
   epistemicStatus: EpistemicStatus;
@@ -131,6 +165,8 @@ export interface CanonicalMemoryHead {
   scope: MemoryScope;
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType: MemoryType;
+  semanticKey: string;
   currentRevision: number;
   status: MemoryStatus;
   createdAt: string;
@@ -143,6 +179,9 @@ export interface MemoryRevision {
   scope: MemoryScope;
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType: MemoryType;
+  speakerProvenance: SpeakerProvenance;
+  semanticKey: string;
   status: MemoryStatus;
   canonicalContent: CanonicalContent;
   contentHash: string;
@@ -277,6 +316,9 @@ export interface CandidateInput {
   sourceId?: string;
   memoryClass: MemoryClass;
   memoryKind: string;
+  memoryType?: MemoryType;
+  speakerProvenance?: SpeakerProvenance;
+  semanticKey?: string;
   proposedContent: CanonicalContent;
   evidenceRefs: EvidenceRef[];
   epistemicStatus?: EpistemicStatus;

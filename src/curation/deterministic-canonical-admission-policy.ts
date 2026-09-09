@@ -30,6 +30,8 @@ function attributionValid(
   rawContent: string,
 ): boolean {
   switch (attribution.basis) {
+    case "dlmf_semantic_policy":
+      return attribution.status === providerStatus;
     case "provider_declared":
       return attribution.status === providerStatus;
     case "direct_source_quote":

@@ -2,6 +2,10 @@ import { ValidationError } from "../domain/errors.js";
 import type {
   CandidateInput,
   MemoryCandidate,
+  MemoryProducer,
+  MemoryType,
+  SemanticRelation,
+  SpeakerProvenance,
 } from "../domain/types.js";
 import {
   RandomIdFactory,
@@ -11,6 +15,12 @@ import {
   sha256,
 } from "../domain/utils.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
+
+const semanticRelations = new Set<SemanticRelation>([
+  "equivalent",
+  "existing_subsumes_candidate",
+  "candidate_subsumes_existing",
+]);
 
 function requireNonEmpty(value: string, field: string): void {
   if (value.trim().length === 0) {
@@ -24,12 +34,33 @@ function validateTimestamp(value: string | undefined, field: string): void {
   }
 }
 
+function defaultMemoryType(candidateType: string): MemoryType {
+  switch (candidateType) {
+    case "preference_candidate": return "preference";
+    case "relationship_candidate": return "relationship";
+    case "project_state_candidate": return "project_state";
+    case "commitment_candidate": return "commitment";
+    case "habit_candidate": return "habit";
+    case "event_candidate": return "event";
+    default: return "general_fact";
+  }
+}
+
+function defaultSpeakerProvenance(producer: MemoryProducer): SpeakerProvenance {
+  if (producer.kind === "user") return "user";
+  if (producer.kind === "system") return "system";
+  return "unknown";
+}
+
 export function candidateSemanticFingerprint(
   input: Pick<CandidateInput,
     | "scope"
     | "candidateType"
     | "memoryClass"
     | "memoryKind"
+    | "memoryType"
+    | "speakerProvenance"
+    | "semanticKey"
     | "proposedContent"
     | "observedAt"
     | "validFrom"
@@ -42,6 +73,9 @@ export function candidateSemanticFingerprint(
     candidateType: input.candidateType,
     memoryClass: input.memoryClass,
     memoryKind: input.memoryKind,
+    memoryType: input.memoryType ?? null,
+    speakerProvenance: input.speakerProvenance ?? null,
+    semanticKey: input.semanticKey ?? null,
     proposedText: input.proposedContent.text,
     epistemicStatus,
     observedAt: input.observedAt ?? null,
@@ -59,6 +93,9 @@ function validateInput(input: CandidateInput): void {
   requireNonEmpty(input.candidateType, "candidateType");
   requireNonEmpty(input.sourceType, "sourceType");
   requireNonEmpty(input.proposedContent.text, "proposedContent.text");
+  if (input.semanticKey !== undefined) {
+    requireNonEmpty(input.semanticKey, "semanticKey");
+  }
 
   if (input.origin.lifeDid !== input.scope.lifeDid) {
     throw new ValidationError("origin.lifeDid must match scope.lifeDid");
@@ -90,8 +127,19 @@ function validateInput(input: CandidateInput): void {
     if (!input.canonicalAdmission.curationRecordId.startsWith("cur_")) {
       throw new ValidationError("canonicalAdmission.curationRecordId must start with cur_");
     }
-    if (input.canonicalAdmission.outcome !== "canonical_candidate") {
-      throw new ValidationError("canonicalAdmission.outcome must be canonical_candidate");
+    if (input.canonicalAdmission.outcome === "canonical_merge") {
+      if (
+        input.proposedOperation !== "merge" ||
+        input.canonicalAdmission.targetMemoryId !== input.baseMemoryId ||
+        input.canonicalAdmission.semanticPolicyVersion === undefined ||
+        input.canonicalAdmission.semanticPolicyVersion.trim().length === 0 ||
+        input.canonicalAdmission.semanticRelation === undefined ||
+        !semanticRelations.has(input.canonicalAdmission.semanticRelation)
+      ) {
+        throw new ValidationError("canonical_merge proof must bind merge target, relation, and policy");
+      }
+    } else if (input.proposedOperation === "merge") {
+      throw new ValidationError("merge requires canonicalAdmission.outcome=canonical_merge");
     }
   }
   for (const [index, ref] of (input.sourceExperienceRefs ?? []).entries()) {
@@ -148,13 +196,34 @@ export class MemoryCandidateService {
       (input.sourceId === undefined
         ? []
         : [{ sourceType: input.sourceType, sourceId: input.sourceId }]);
-    const candidateFingerprint =
-      input.candidateFingerprint ?? candidateSemanticFingerprint(input, epistemicStatus);
+    const baseHead =
+      input.proposedOperation === "create" || input.baseMemoryId === undefined
+        ? undefined
+        : await this.store.getHead(input.baseMemoryId);
+    const memoryType =
+      input.memoryType ?? baseHead?.memoryType ?? defaultMemoryType(input.candidateType);
+    const speakerProvenance =
+      input.speakerProvenance ?? defaultSpeakerProvenance(producer);
+    const provisionalFingerprint = candidateSemanticFingerprint(
+      { ...input, memoryType, speakerProvenance },
+      epistemicStatus,
+    );
+    const semanticKey =
+      input.semanticKey ??
+      baseHead?.semanticKey ??
+      `exact:${provisionalFingerprint.slice("sha256:".length)}`;
+    const candidateFingerprint = input.candidateFingerprint ?? candidateSemanticFingerprint(
+      { ...input, memoryType, speakerProvenance, semanticKey },
+      epistemicStatus,
+    );
 
     const candidate: MemoryCandidate = {
       ...input,
       epistemicStatus,
       producer,
+      memoryType,
+      speakerProvenance,
+      semanticKey,
       sourceExperienceRefs,
       candidateFingerprint,
       candidateId: this.ids.candidateId(),

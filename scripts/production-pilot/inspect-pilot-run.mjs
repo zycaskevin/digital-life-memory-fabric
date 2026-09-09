@@ -146,21 +146,52 @@ try {
         (SELECT count(*)::int FROM memory_changes) AS changes,
         (SELECT count(*)::int FROM memory_distillation_receipts) AS receipts
     `);
-    const pendingReflective = await pool.query(`
-      SELECT count(*)::int AS count
-        FROM memory_candidates
-       WHERE candidate_type='derived_insight_candidate' AND status='PENDING'
-    `);
+    const reflectiveTable = await pool.query(`
+      SELECT EXISTS(
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema=$1 AND table_name='reflective_insights'
+      ) AS exists
+    `, [schema]);
+    const reflectiveBoundary = reflectiveTable.rows[0]?.exists
+      ? await pool.query(`
+          SELECT count(*)::int AS total,
+                 count(*) FILTER (WHERE status='pending')::int AS pending,
+                 count(*) FILTER (WHERE epistemic_status='synthesized')::int AS synthesized,
+                 count(*) FILTER (
+                   WHERE (promotion_eligibility->>'eligible')::boolean=true
+                 )::int AS eligible,
+                 count(*) FILTER (
+                   WHERE (promotion_eligibility->>'evidenceClosure')::boolean=true
+                 )::int AS evidence_closed,
+                 count(*) FILTER (WHERE canonical_write_performed=true)::int AS canonical_writes,
+                 count(*) FILTER (WHERE cardinality(supporting_memory_ids)>0)::int AS with_supporting_memory,
+                 count(*) FILTER (WHERE cardinality(supporting_evidence_ids)>0)::int AS with_supporting_evidence
+            FROM reflective_insights
+        `)
+      : await pool.query(`
+          SELECT count(*)::int AS total,
+                 count(*) FILTER (WHERE status='PENDING')::int AS pending,
+                 0::int AS synthesized,
+                 0::int AS eligible,
+                 0::int AS evidence_closed,
+                 0::int AS canonical_writes,
+                 0::int AS with_supporting_memory,
+                 0::int AS with_supporting_evidence
+            FROM memory_candidates
+           WHERE candidate_type='derived_insight_candidate' AND status='PENDING'
+        `);
     const curationTotals = md010
       ? await pool.query(`
           SELECT count(*)::int AS total,
                  count(*) FILTER (WHERE outcome='supporting_evidence_only')::int AS supporting_evidence_only,
                  count(*) FILTER (WHERE outcome='rejected')::int AS rejected,
                  count(*) FILTER (WHERE outcome='pending_review')::int AS pending_review,
-                 count(*) FILTER (WHERE outcome='canonical_candidate')::int AS canonical_candidate
+                 count(*) FILTER (WHERE outcome='canonical_candidate')::int AS canonical_candidate,
+                 count(*) FILTER (WHERE outcome='canonical_merge')::int AS canonical_merge
             FROM memory_curation_records
         `)
-      : { rows: [{ total: 0, supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0 }] };
+      : { rows: [{ total: 0, supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0, canonical_merge: 0 }] };
 
     console.log(`PILOT_RUN=${runId}`);
     console.log(`SCHEMA=${schema}`);
@@ -179,18 +210,22 @@ try {
     }
     const t = totals.rows[0] ?? {};
     const c = curationTotals.rows[0] ?? {};
+    const r = reflectiveBoundary.rows[0] ?? {};
     const providerUnits = receipts.rows.reduce(
       (sum, row) => sum + Number(row.provider_unit_count ?? 0),
       0,
     );
     console.log(
-      `TOTALS receipts=${t.receipts ?? 0} providerUnits=${providerUnits} curatedCandidates=${t.candidates ?? 0} canonical=${t.heads ?? 0} revisions=${t.revisions ?? 0} changes=${t.changes ?? 0} reflective_pending=${pendingReflective.rows[0]?.count ?? 0}`,
+      `TOTALS receipts=${t.receipts ?? 0} providerUnits=${providerUnits} curatedCandidates=${t.candidates ?? 0} canonical=${t.heads ?? 0} revisions=${t.revisions ?? 0} changes=${t.changes ?? 0} reflective_pending=${r.pending ?? 0}`,
     );
     if (md010) {
       console.log(
-        `CURATION total=${c.total ?? 0} supportingEvidenceOnly=${c.supporting_evidence_only ?? 0} rejected=${c.rejected ?? 0} pendingReview=${c.pending_review ?? 0} canonicalCandidate=${c.canonical_candidate ?? 0}`,
+        `CURATION total=${c.total ?? 0} supportingEvidenceOnly=${c.supporting_evidence_only ?? 0} rejected=${c.rejected ?? 0} pendingReview=${c.pending_review ?? 0} canonicalCandidate=${c.canonical_candidate ?? 0} canonicalMerge=${c.canonical_merge ?? 0}`,
       );
     }
+    console.log(
+      `REFLECTIVE total=${r.total ?? 0} pending=${r.pending ?? 0} synthesized=${r.synthesized ?? 0} eligible=${r.eligible ?? 0} evidenceClosed=${r.evidence_closed ?? 0} canonicalWrites=${r.canonical_writes ?? 0} withSupportingMemory=${r.with_supporting_memory ?? 0} withSupportingEvidence=${r.with_supporting_evidence ?? 0}`,
+    );
     console.log("AUTO_HERMES_PRUNE=FROZEN");
     console.log("HERMES_PRUNE_EXECUTED=false");
     console.log("PILOT_RUN_INSPECT=PASS");

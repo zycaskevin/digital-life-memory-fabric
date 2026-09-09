@@ -16,19 +16,32 @@ import {
   PostgresCanonicalMemoryStore,
   PostgresDistillationReceiptStore,
   PostgresMemoryCurationRecordStore,
+  PostgresReflectiveInsightStore,
   PreservationCompleteRetentionPolicy,
   PruneEligibilityService,
   ReflectiveMemoryService,
+  selectCanonicalReflectionSource,
   TranscriptDistillationService,
 } from "../../dist/index.js";
 
 const args = new Set(process.argv.slice(2));
 const APPLY = args.has("--apply");
 const PREFLIGHT = args.has("--preflight");
-const PLAN_ONLY = !APPLY && !PREFLIGHT;
+const RESUME_REFLECTION = args.has("--resume-reflection");
+const PLAN_ONLY = !APPLY && !PREFLIGHT && !RESUME_REFLECTION;
 const now = new Date();
-const runStamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
-const runId = `pilot_${runStamp}`;
+const requestedResumeRunId = RESUME_REFLECTION
+  ? process.argv.slice(2).find((arg) => /^pilot_\d{14}$/.test(arg))
+  : undefined;
+if (RESUME_REFLECTION && requestedResumeRunId === undefined) {
+  throw new Error("--resume-reflection requires pilot_YYYYMMDDhhmmss");
+}
+if ([APPLY, PREFLIGHT, RESUME_REFLECTION].filter(Boolean).length > 1) {
+  throw new Error("--apply, --preflight, and --resume-reflection are mutually exclusive");
+}
+const freshRunStamp = now.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+const runId = requestedResumeRunId ?? `pilot_${freshRunStamp}`;
+const runStamp = runId.slice("pilot_".length);
 
 const home = process.env.HOME || homedir();
 const pilotEnvFile = resolve(
@@ -50,6 +63,10 @@ const planManifestPath = process.env.DLMF_PILOT_PLAN_MANIFEST
   : undefined;
 const reportPath = resolve(
   process.env.DLMF_PILOT_REPORT || join(reportRoot, `${runId}-report.json`),
+);
+const reflectionResumeReportPath = resolve(
+  process.env.DLMF_PILOT_REFLECTION_RESUME_REPORT ||
+    join(reportRoot, `${runId}-reflection-resume-report.json`),
 );
 const namespace = process.env.DLMF_PILOT_NAMESPACE || "pilot.memory-distillation.v0.1.1";
 const lifeDid = process.env.DLMF_PILOT_LIFE_DID || "did:arthurverse:nancy";
@@ -968,10 +985,75 @@ async function createPilotPostgres(databaseUrl) {
     "migrations/0002_central_operations.sql",
     "migrations/0003_memory_distillation.sql",
     "migrations/0004_canonical_admission.sql",
+    "migrations/0005_semantic_governance.sql",
   ]) {
     await pool.query(await readFile(resolve(migration), "utf8"));
   }
   return pool;
+}
+
+async function openExistingPilotPostgres(databaseUrl) {
+  if (!nonEmptyString(databaseUrl)) {
+    throw new Error("DLMF_PILOT_DATABASE_URL is required with --resume-reflection.");
+  }
+  const admin = new Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    const result = await admin.query(
+      "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name=$1) AS exists",
+      [schema],
+    );
+    if (result.rows[0]?.exists !== true) throw new Error(`Pilot schema not found for ${runId}.`);
+  } finally {
+    await admin.end();
+  }
+  return new Pool({
+    connectionString: databaseUrl,
+    options: `-c search_path=${schema}`,
+  });
+}
+
+async function canonicalStateCounts(pool) {
+  const result = await pool.query(`
+    SELECT
+      (SELECT count(*)::int FROM memory_candidates) AS candidates,
+      (SELECT count(*)::int FROM memory_heads) AS heads,
+      (SELECT count(*)::int FROM memory_revisions) AS revisions,
+      (SELECT count(*)::int FROM memory_changes) AS changes
+  `);
+  return result.rows[0];
+}
+
+function serializedInsight(insight) {
+  return {
+    insightId: insight.insightId,
+    proposition: insight.proposition,
+    epistemicStatus: insight.epistemicStatus,
+    supportingMemoryIds: insight.supportingMemoryIds,
+    supportingEvidenceIds: insight.supportingEvidenceIds,
+    contradictingMemoryIds: insight.contradictingMemoryIds,
+    confidence: insight.confidence,
+    derivationProvider: insight.derivationProvider,
+    derivationModel: insight.derivationModel,
+    derivationRunId: insight.derivationRunId,
+    scope: insight.scope,
+    status: insight.status,
+    promotionEligibility: insight.promotionEligibility,
+    canonicalWritePerformed: insight.canonicalWritePerformed,
+  };
+}
+
+function assertPendingInsightBoundary(insights) {
+  if (insights.length === 0) throw new Error("Reflection produced no candidate insight.");
+  for (const insight of insights) {
+    if (
+      insight.epistemicStatus !== "synthesized" ||
+      insight.status !== "pending" ||
+      insight.promotionEligibility.eligible !== false ||
+      insight.canonicalWritePerformed !== false
+    ) {
+      throw new Error("Reflective insight crossed the pending-only authority boundary.");
+    }
+  }
 }
 
 async function projectCanonicalRevision(client, revision) {
@@ -992,6 +1074,187 @@ async function projectCanonicalRevision(client, revision) {
     throw new Error(`Canonical projection retain was not synchronously materialized for ${revision.memoryId}.`);
   }
   return response;
+}
+
+async function runReflectionResume() {
+  assertPilotSafety();
+  if (!existsSync(reportPath)) throw new Error(`Pilot report not found for ${runId}.`);
+  if (existsSync(reflectionResumeReportPath)) {
+    const existing = JSON.parse(await readFile(reflectionResumeReportPath, "utf8"));
+    if (
+      existing.reflectionRecovery?.status === "complete" &&
+      existing.reflection?.status === "complete" &&
+      Number(existing.reflection?.produced ?? 0) > 0
+    ) {
+      return { report: existing, reused: true };
+    }
+    throw new Error(`A non-complete reflection recovery report already exists for ${runId}.`);
+  }
+
+  const originalReport = JSON.parse(await readFile(reportPath, "utf8"));
+  if (
+    originalReport.runId !== runId ||
+    originalReport.environment?.postgresSchema !== schema ||
+    originalReport.planPinned !== true ||
+    originalReport.planRunId == null
+  ) {
+    throw new Error("Pilot report identity or pinned-plan evidence does not match the requested run.");
+  }
+  if (
+    !Array.isArray(originalReport.sessions) ||
+    originalReport.sessions.length !== CATEGORIES.length ||
+    originalReport.sessions.some(
+      (entry) =>
+        entry.receipt?.status !== "complete" ||
+        entry.receipt?.admissionComplete !== true ||
+        Number(entry.receipt?.curationOutcomes?.pending_review ?? 0) !== 0,
+    )
+  ) {
+    throw new Error("Reflection recovery requires five complete, admitted, review-closed session receipts.");
+  }
+  const safety = originalReport.finalSafety ?? {};
+  if (
+    safety.hermesWrites !== 0 ||
+    safety.hermesDeletes !== 0 ||
+    safety.productionHindsightBankWrites !== 0 ||
+    safety.productionCanonicalNamespaceWrites !== 0
+  ) {
+    throw new Error("Pilot safety counters are not zero; reflection recovery is forbidden.");
+  }
+
+  const databaseUrl = pilotDatabaseUrl();
+  const pool = await openExistingPilotPostgres(databaseUrl);
+  const canonicalStore = new PostgresCanonicalMemoryStore(pool);
+  const insightStore = new PostgresReflectiveInsightStore(pool);
+  let recoveryReport;
+  try {
+    const existingInsights = await pool.query(
+      "SELECT count(*)::int AS count FROM reflective_insights",
+    );
+    if (Number(existingInsights.rows[0]?.count ?? 0) !== 0) {
+      throw new Error("Reflective insights already exist; refusing a duplicate recovery inference.");
+    }
+
+    const canonicalMemoryIds = [
+      ...new Set(
+        originalReport.sessions.flatMap((entry) => entry.receipt?.canonicalMemoryIds ?? []),
+      ),
+    ];
+    const allCanonicalRevisions = [];
+    for (const memoryId of canonicalMemoryIds) {
+      const head = await canonicalStore.getHead(memoryId);
+      if (!head) throw new Error(`Canonical head missing during reflection recovery: ${memoryId}`);
+      const revision = await canonicalStore.getRevision(memoryId, head.currentRevision);
+      if (!revision) {
+        throw new Error(`Canonical revision missing during reflection recovery: ${memoryId}`);
+      }
+      allCanonicalRevisions.push(revision);
+    }
+    const inferenceSample = originalReport.sessions.find(
+      (entry) => entry.category === "inferred_insight",
+    );
+    const reflectionSource = selectCanonicalReflectionSource(
+      allCanonicalRevisions,
+      inferenceSample?.receipt?.canonicalMemoryIds ?? [],
+    );
+    if (reflectionSource.length === 0) {
+      throw new Error("No admitted canonical memories are available for reflection recovery.");
+    }
+
+    const hindsightConnection = await resolveHindsightConnection();
+    if (hindsightConnection.authHealthy !== true) {
+      throw new Error("Hindsight tenant authentication could not be validated by the read-only bank API.");
+    }
+    const HindsightClient = await loadHindsightClientConstructor();
+    const hindsightClient = new HindsightClient({
+      baseUrl: hindsightConnection.baseUrl,
+      userAgent: "dlmf-production-pilot/0.1.1",
+      ...(hindsightConnection.apiKey ? { apiKey: hindsightConnection.apiKey } : {}),
+    });
+    const hindsightVersion = await probeHindsight(
+      hindsightClient,
+      hindsightConnection.baseUrl,
+      hindsightConnection.apiKey,
+    );
+    const adapter = new HindsightMemoryAdapter({
+      client: createPilotHindsightPort(hindsightClient, hindsightConnection),
+      adapterVersion: "hindsight-production-pilot-v0.1.1-tool-grounded-reflection-v9",
+      providerVersion: String(hindsightVersion.api_version || hindsightVersion.version || "unknown"),
+      banks: {
+        distillationBankId: () => distillationBank,
+        projectionBankId: () => projectionBank,
+      },
+      recallBudget: "mid",
+      reflectBudget: "mid",
+    });
+
+    const canonicalBefore = await canonicalStateCounts(pool);
+    const reflective = new ReflectiveMemoryService(canonicalStore, adapter, insightStore);
+    const derived = await reflective.reflect({
+      scope: { tenantId, lifeDid, memoryNamespace: namespace },
+      origin: { lifeDid, agentId: "nancy", runtimeId: "hermes-gb10", deviceId: "gb10" },
+      context:
+        "Identify one useful pattern or hypothesis from these canonical memories. Treat it as an inference, not an observed fact.",
+      evidence: reflectionSource.map((revision) => ({
+        evidenceRef: {
+          sourceType: "canonical_memory",
+          sourceRef: `${revision.memoryId}@${revision.revision}`,
+        },
+        text: revision.canonicalContent.text,
+        sourceExperienceRefs: revision.sourceExperienceRefs,
+      })),
+      canonicalMemories: reflectionSource,
+      distillationPolicyVersion: "pilot-reflect-v3-tool-grounded",
+    });
+    assertPendingInsightBoundary(derived);
+    const canonicalAfter = await canonicalStateCounts(pool);
+    if (JSON.stringify(canonicalAfter) !== JSON.stringify(canonicalBefore)) {
+      throw new Error("Canonical state changed during reflection-only recovery.");
+    }
+
+    recoveryReport = {
+      ...originalReport,
+      reflection: {
+        status: "complete",
+        produced: derived.length,
+        insights: derived.map(serializedInsight),
+      },
+      reflectionRecovery: {
+        status: "complete",
+        resumedAt: new Date().toISOString(),
+        sourceRunId: runId,
+        sourceReport: reportPath,
+        adapterVersion: adapter.adapterVersion,
+        distillationPolicyVersion: "pilot-reflect-v3-tool-grounded",
+        sourceMemoryCount: reflectionSource.length,
+        canonicalStateUnchanged: true,
+        sessionsReprocessed: 0,
+        canonicalProjectionsWritten: 0,
+      },
+    };
+    await writePrivateJson(reflectionResumeReportPath, recoveryReport);
+    return { report: recoveryReport, reused: false };
+  } catch (error) {
+    recoveryReport = {
+      ...originalReport,
+      reflectionRecovery: {
+        status: "failed",
+        resumedAt: new Date().toISOString(),
+        sourceRunId: runId,
+        sourceReport: reportPath,
+        sessionsReprocessed: 0,
+        canonicalProjectionsWritten: 0,
+        error: {
+          name: error instanceof Error ? error.name : "Error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      },
+    };
+    await writePrivateJson(reflectionResumeReportPath, recoveryReport);
+    throw error;
+  } finally {
+    await canonicalStore.close();
+  }
 }
 
 async function runApply(selected, manifest) {
@@ -1036,14 +1299,15 @@ async function runApply(selected, manifest) {
   const canonicalStore = new PostgresCanonicalMemoryStore(pool);
   const receiptStore = new PostgresDistillationReceiptStore(pool);
   const curationStore = new PostgresMemoryCurationRecordStore(pool);
+  const insightStore = new PostgresReflectiveInsightStore(pool);
   const archive = new FilesystemRawExperienceArchiveProvider(archiveRoot);
   const governance = new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1");
-  const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v2-role-aware");
+  const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v7-reflection-retention");
   const admissionPolicy = new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1");
   const hindsightPort = createPilotHindsightPort(hindsightClient, hindsightConnection);
   const adapter = new HindsightMemoryAdapter({
     client: hindsightPort,
-    adapterVersion: "hindsight-production-pilot-v0.1.1-role-aware-async-v3",
+    adapterVersion: "hindsight-production-pilot-v0.1.1-tool-grounded-reflection-v9",
     providerVersion: String(hindsightVersion.api_version || hindsightVersion.version || "unknown"),
     banks: {
       distillationBankId: () => distillationBank,
@@ -1104,7 +1368,7 @@ async function runApply(selected, manifest) {
           messageCount: Number(session.message_count || 0),
         },
         sourceSegments: distillationSourceSegments(session.messages),
-        distillationPolicyVersion: "pilot-distill-v3-role-aware-async",
+        distillationPolicyVersion: "pilot-distill-v8-reflection-retention",
         canonicalizationPolicyVersion: governance.policyVersion,
         admissionPolicyVersion: admissionPolicy.policyVersion,
         retentionPolicyVersion: "pilot-retention-v1",
@@ -1120,6 +1384,11 @@ async function runApply(selected, manifest) {
             candidateType: candidate.candidateType,
             memoryClass: candidate.memoryClass,
             memoryKind: candidate.memoryKind,
+            memoryType: candidate.memoryType,
+            speakerProvenance: candidate.speakerProvenance,
+            semanticKey: candidate.semanticKey,
+            operation: candidate.proposedOperation,
+            baseMemoryId: candidate.baseMemoryId,
             text: candidate.proposedContent.text,
             epistemicStatus: candidate.epistemicStatus,
             confidence: candidate.confidence,
@@ -1141,6 +1410,9 @@ async function runApply(selected, manifest) {
           revision: revision.revision,
           text: revision.canonicalContent.text,
           epistemicStatus: revision.epistemicStatus,
+          memoryType: revision.memoryType,
+          speakerProvenance: revision.speakerProvenance,
+          semanticKey: revision.semanticKey,
           semanticFingerprint: revision.semanticFingerprint,
           evidenceRefs: revision.evidenceRefs,
         });
@@ -1166,6 +1438,7 @@ async function runApply(selected, manifest) {
           curationProvider: receipt.curationProvider,
           curationProviderVersion: receipt.curationProviderVersion,
           admissionPolicyVersion: receipt.admissionPolicyVersion,
+          semanticPolicyVersion: receipt.semanticPolicyVersion,
           providerUnitCount: receipt.providerUnitCount,
           curationDecisionCount: receipt.curationDecisionCount,
           curationOutcomes: receipt.curationOutcomes,
@@ -1180,6 +1453,12 @@ async function runApply(selected, manifest) {
           providerUnitRef: record.providerUnitRef,
           text: record.providerUnitText,
           providerEpistemicStatus: record.providerEpistemicStatus,
+          attributedEpistemicBasis: record.attributedEpistemicBasis,
+          memoryType: record.memoryType,
+          speakerProvenance: record.speakerProvenance,
+          semanticKey: record.semanticKey,
+          semanticPolicyVersion: record.semanticPolicyVersion,
+          semanticRelation: record.semanticRelation,
           outcome: record.outcome,
           attributedEpistemicStatus: record.attributedEpistemicStatus,
           durability: record.durability,
@@ -1198,17 +1477,22 @@ async function runApply(selected, manifest) {
 
     const inferenceSample = sessionReports.find((entry) => entry.category === "inferred_insight");
     const allSessionsComplete = sessionReports.length === CATEGORIES.length && sessionReports.every((entry) => entry.receipt.status === "complete");
+    const reflectionSource = selectCanonicalReflectionSource(
+      allCanonicalRevisions,
+      inferenceSample?.receipt.canonicalMemoryIds ?? [],
+    );
     let reflection = {
-      status: allSessionsComplete ? "not_run" : "skipped",
+      status: allSessionsComplete && reflectionSource.length === 0 ? "not_run" : "skipped",
       produced: 0,
-      candidates: [],
-      ...(allSessionsComplete ? {} : { reason: "session_failures_present" }),
+      insights: [],
+      ...(!allSessionsComplete
+        ? { reason: "session_failures_present" }
+        : reflectionSource.length === 0
+          ? { reason: "no_canonical_memories" }
+          : { reason: "reflection_pending_execution" }),
     };
-    if (allSessionsComplete && inferenceSample && inferenceSample.receipt.canonicalMemoryIds.length > 0) {
-      const relatedIds = new Set(inferenceSample.receipt.canonicalMemoryIds);
-      const related = allCanonicalRevisions.filter((revision) => relatedIds.has(revision.memoryId));
-      const reflectionSource = related.length > 0 ? related : allCanonicalRevisions.slice(0, 5);
-      const reflective = new ReflectiveMemoryService(canonicalStore, adapter);
+    if (allSessionsComplete && reflectionSource.length > 0) {
+      const reflective = new ReflectiveMemoryService(canonicalStore, adapter, insightStore);
       try {
         const derived = await reflective.reflect({
           scope,
@@ -1224,24 +1508,33 @@ async function runApply(selected, manifest) {
             sourceExperienceRefs: revision.sourceExperienceRefs,
           })),
           canonicalMemories: reflectionSource,
-          distillationPolicyVersion: "pilot-reflect-v1",
+          distillationPolicyVersion: "pilot-reflect-v3-tool-grounded",
         });
         reflection = {
           status: "complete",
           produced: derived.length,
-          candidates: derived.map((candidate) => ({
-            candidateId: candidate.candidateId,
-            text: candidate.proposedContent.text,
-            epistemicStatus: candidate.epistemicStatus,
-            status: candidate.status,
-            canonicalWritePerformed: false,
+          insights: derived.map((insight) => ({
+            insightId: insight.insightId,
+            proposition: insight.proposition,
+            epistemicStatus: insight.epistemicStatus,
+            supportingMemoryIds: insight.supportingMemoryIds,
+            supportingEvidenceIds: insight.supportingEvidenceIds,
+            contradictingMemoryIds: insight.contradictingMemoryIds,
+            confidence: insight.confidence,
+            derivationProvider: insight.derivationProvider,
+            derivationModel: insight.derivationModel,
+            derivationRunId: insight.derivationRunId,
+            scope: insight.scope,
+            status: insight.status,
+            promotionEligibility: insight.promotionEligibility,
+            canonicalWritePerformed: insight.canonicalWritePerformed,
           })),
         };
       } catch (error) {
         reflection = {
           status: "failed",
           produced: 0,
-          candidates: [],
+          insights: [],
           error: {
             name: error instanceof Error ? error.name : "Error",
             message: error instanceof Error ? error.message : String(error),
@@ -1281,6 +1574,26 @@ async function main() {
   if (PREFLIGHT) {
     const ready = await runPreflight();
     if (!ready) process.exitCode = 2;
+    return;
+  }
+
+  if (RESUME_REFLECTION) {
+    console.log(`DLMF Production Pilot REFLECTION RESUME run=${runId}`);
+    const { report, reused } = await runReflectionResume();
+    const insights = report.reflection?.insights ?? [];
+    if (report.reflection?.status !== "complete" || insights.length === 0) {
+      throw new Error("Reflection recovery did not produce a completed pending insight.");
+    }
+    console.log(`Report: ${reflectionResumeReportPath}`);
+    console.log(`reflection_resume_reused=${reused}`);
+    console.log(`reflection_status=${report.reflection.status}`);
+    console.log(`reflection_insights=${insights.length}`);
+    console.log(`canonical_state_unchanged=${report.reflectionRecovery?.canonicalStateUnchanged === true}`);
+    console.log("sessions_reprocessed=0");
+    console.log("AUTO_HERMES_PRUNE=FROZEN");
+    console.log("HERMES_PRUNE_EXECUTED=false");
+    console.log("PRODUCTION_PILOT_REFLECTION_RESUME=PASS");
+    console.log("PRODUCTION_PILOT=PASS");
     return;
   }
 
@@ -1340,12 +1653,12 @@ async function main() {
   const totalCanonical = report.sessions.reduce((sum, item) => sum + item.canonical.length, 0);
   const totalCurationOutcomes = report.sessions.reduce(
     (totals, item) => {
-      for (const key of ["supporting_evidence_only", "rejected", "pending_review", "canonical_candidate"]) {
+      for (const key of ["supporting_evidence_only", "rejected", "pending_review", "canonical_candidate", "canonical_merge"]) {
         totals[key] += Number(item.receipt.curationOutcomes?.[key] ?? 0);
       }
       return totals;
     },
-    { supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0 },
+    { supporting_evidence_only: 0, rejected: 0, pending_review: 0, canonical_candidate: 0, canonical_merge: 0 },
   );
   const reflectionCount = report.reflection?.produced ?? 0;
   const executionFailures = [];
@@ -1362,7 +1675,7 @@ async function main() {
   if (totalCandidates === 0) executionFailures.push("NO_CANDIDATES_PRODUCED");
   if (totalCanonical === 0) executionFailures.push("NO_CANONICAL_MEMORY_PRODUCED");
   if (report.reflection?.status === "failed") executionFailures.push("REFLECTION_FAILED");
-  if (reflectionCount === 0) executionFailures.push("NO_REFLECTIVE_CANDIDATE_PRODUCED");
+  if (reflectionCount === 0) executionFailures.push("NO_REFLECTIVE_INSIGHT_PRODUCED");
 
   console.log(`provider_units=${totalProviderUnits}`);
   console.log(`curated_candidates=${totalCandidates}`);
@@ -1371,8 +1684,9 @@ async function main() {
   console.log(`curation_rejected=${totalCurationOutcomes.rejected}`);
   console.log(`curation_pending_review=${totalCurationOutcomes.pending_review}`);
   console.log(`curation_canonical_candidate=${totalCurationOutcomes.canonical_candidate}`);
+  console.log(`curation_canonical_merge=${totalCurationOutcomes.canonical_merge}`);
   console.log(`reflection_status=${report.reflection?.status ?? "not_run"}`);
-  console.log(`reflection_candidates=${reflectionCount}`);
+  console.log(`reflection_insights=${reflectionCount}`);
   console.log("AUTO_HERMES_PRUNE=FROZEN");
   console.log("HERMES_PRUNE_EXECUTED=false");
   if (executionFailures.length > 0) {

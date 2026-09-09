@@ -8,15 +8,17 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 - Canonical baseline: v0.1 frozen at tag `v0.1.0`
 - Active canonical amendment: **v0.1.1 — Memory Distillation & Provider Boundary**
-- Current milestone: **DLMF-MD-001 through DLMF-MD-009 COMPLETE**
+- Current milestone: **DLMF v0.1.1 — Reviewed Semantic Concept Registry (DLMF-SG-006)**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
+
+Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md), [DLMF-SG-005 reflection and retention completion](docs/dlmf-sg-005-reflection-retention-completion.md), and [DLMF-SG-006 reviewed semantic concept registry](docs/dlmf-sg-006-reviewed-semantic-concept-registry.md).
 
 ## Architectural boundary
 
 Digital Life Memory Fabric owns:
 
-- `MemoryCandidate` with explicit epistemic status and provider-independent semantic fingerprint
+- `MemoryCandidate` with per-memory type, speaker provenance, explicit epistemic status, DLMF semantic key, and provider-independent fingerprint
 - provider-independent `memory_id`
 - Canonical Memory Authority
 - canonical content and immutable revisions
@@ -27,6 +29,8 @@ Digital Life Memory Fabric owns:
 - explainable prune-eligibility decisions (never Hermes deletion)
 - optimistic revision checks
 - tombstones
+- audited semantic equivalence/subsumption evidence merges
+- first-class reflective insights and an explicit, audited promotion workflow
 - namespace-scoped `commit_seq`
 - change log and transactional outbox
 - ordered change replay and device checkpoint acknowledgement
@@ -70,7 +74,7 @@ Enabled commit operations in DLFM-001:
 - `tombstone`
 - `restore`
 
-`supersede` and `merge` are reserved by the v0.1 domain contract but intentionally not enabled yet. They require the later multi-record lifecycle rules rather than an unsafe partial implementation.
+`merge` is enabled only for a DLMF-policy semantic-key match backed by an admitted curation record. It preserves the canonical memory ID/content and adds an immutable evidence-union revision. Provider/model-proposed fuzzy merges remain review-only. `supersede` remains disabled pending multi-record lifecycle rules.
 
 ## Commit ordering
 
@@ -247,6 +251,8 @@ Migration:
 migrations/0001_canonical_core.sql
 migrations/0002_central_operations.sql
 migrations/0003_memory_distillation.sql
+migrations/0004_canonical_admission.sql
+migrations/0005_semantic_governance.sql
 ```
 
 The PostgreSQL adapter uses:
@@ -254,6 +260,7 @@ The PostgreSQL adapter uses:
 - `SELECT ... FOR UPDATE` for canonical head mutation serialization
 - namespace-scoped transactional sequence rows
 - transaction advisory locks for idempotency keys
+- scope/semantic-key uniqueness with bounded loser-to-merge retry
 - immutable revision inserts
 - atomic change/outbox writes in the same transaction
 - partial indexes plus `SKIP LOCKED` for bounded outbox claims

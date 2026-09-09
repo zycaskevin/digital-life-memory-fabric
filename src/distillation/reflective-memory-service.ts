@@ -1,7 +1,11 @@
-import { MemoryCandidateService, candidateSemanticFingerprint } from "../candidates/memory-candidate-service.js";
+import { randomUUID } from "node:crypto";
 import { ValidationError } from "../domain/errors.js";
-import type { CandidateInput, MemoryCandidate } from "../domain/types.js";
+import type { MemoryId } from "../domain/types.js";
 import { SystemClock, type Clock } from "../domain/utils.js";
+import { InMemoryReflectiveInsightStore } from "../insights/in-memory-reflective-insight-store.js";
+import { ReflectiveInsightPromotionGate } from "../insights/reflective-insight-promotion-gate.js";
+import type { ReflectiveInsightStore } from "../insights/reflective-insight-store.js";
+import type { ReflectiveInsight } from "../insights/types.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
 import type { ReflectResult, ReflectiveDistillationInput } from "./types.js";
@@ -16,6 +20,18 @@ function validateReflectResult(result: ReflectResult, provider: MemoryDistillati
   for (const [index, candidate] of result.candidates.entries()) {
     if (candidate.candidateType !== "derived_insight_candidate") {
       throw new ValidationError(`reflect candidate[${index}] must be derived_insight_candidate`);
+    }
+    if (candidate.proposedContent.text.trim().length === 0) {
+      throw new ValidationError(`reflect candidate[${index}] proposition must not be empty`);
+    }
+    if (
+      candidate.confidence !== undefined &&
+      (!Number.isFinite(candidate.confidence) || candidate.confidence < 0 || candidate.confidence > 1)
+    ) {
+      throw new ValidationError(`reflect candidate[${index}] confidence must be between 0 and 1`);
+    }
+    if (candidate.derivationModel !== undefined && candidate.derivationModel.trim().length === 0) {
+      throw new ValidationError(`reflect candidate[${index}] derivationModel must not be empty`);
     }
     const epistemicStatus: string = candidate.epistemicStatus;
     if (
@@ -35,20 +51,19 @@ function validateReflectResult(result: ReflectResult, provider: MemoryDistillati
 }
 
 export class ReflectiveMemoryService {
-  private readonly candidateService: MemoryCandidateService;
   private readonly clock: Clock;
 
   constructor(
-    private readonly canonicalStore: CanonicalMemoryStore,
+    _canonicalStore: CanonicalMemoryStore,
     private readonly provider: MemoryDistillationProvider,
-    candidateService?: MemoryCandidateService,
+    private readonly insightStore: ReflectiveInsightStore = new InMemoryReflectiveInsightStore(),
+    private readonly promotionGate = new ReflectiveInsightPromotionGate(),
     clock: Clock = new SystemClock(),
   ) {
-    this.candidateService = candidateService ?? new MemoryCandidateService(canonicalStore);
     this.clock = clock;
   }
 
-  async reflect(input: ReflectiveDistillationInput): Promise<MemoryCandidate[]> {
+  async reflect(input: ReflectiveDistillationInput): Promise<ReflectiveInsight[]> {
     const result = await this.provider.reflect({
       scope: input.scope,
       context: input.context,
@@ -66,37 +81,54 @@ export class ReflectiveMemoryService {
     });
     validateReflectResult(result, this.provider);
 
-    const candidates: MemoryCandidate[] = [];
+    const knownMemoryIds = new Set(input.canonicalMemories.map((memory) => memory.memoryId));
+    const knownEvidenceIds = new Set([
+      ...input.evidence.map(
+        (evidence) => `${evidence.evidenceRef.sourceType}:${evidence.evidenceRef.sourceRef}`,
+      ),
+      ...input.canonicalMemories.flatMap((memory) =>
+        memory.evidenceRefs.map((evidence) => `${evidence.sourceType}:${evidence.sourceRef}`),
+      ),
+    ]);
+    const insights: ReflectiveInsight[] = [];
     for (const draft of result.candidates) {
-      const candidateInput: CandidateInput = {
+      const supportingMemoryIds = [...new Set(draft.supportingMemoryIds ?? [])]
+        .filter((memoryId): memoryId is MemoryId => knownMemoryIds.has(memoryId));
+      const supportingEvidenceIds = [...new Set(draft.supportingEvidenceIds ?? [])]
+        .filter((evidenceId) => knownEvidenceIds.has(evidenceId));
+      const contradictingMemoryIds = [...new Set(draft.contradictingMemoryIds ?? [])]
+        .filter((memoryId): memoryId is MemoryId => knownMemoryIds.has(memoryId));
+      const confidence = draft.confidence ?? 0;
+      const status = "pending" as const;
+      const promotionEligibility = this.promotionGate.assess({
+        supportingMemoryIds,
+        supportingEvidenceIds,
+        contradictingMemoryIds,
+        confidence,
+        status,
+      });
+      const timestamp = this.clock.now();
+      const insight: ReflectiveInsight = {
+        insightId: `insight_${randomUUID().replaceAll("-", "")}`,
         scope: input.scope,
-        origin: input.origin,
-        candidateType: draft.candidateType,
-        sourceType: "reflection",
-        sourceId: result.providerRunId,
-        memoryClass: draft.memoryClass,
-        memoryKind: draft.memoryKind,
-        proposedContent: draft.proposedContent,
-        evidenceRefs: draft.evidenceRefs,
+        proposition: draft.proposedContent.text,
         epistemicStatus: draft.epistemicStatus,
-        ...(draft.confidence === undefined ? {} : { confidence: draft.confidence }),
-        producer: draft.producer,
-        sourceExperienceRefs: draft.sourceExperienceRefs,
-        distillationPolicyVersion: input.distillationPolicyVersion,
-        providerRunId: result.providerRunId,
-        proposedOperation: "create",
+        supportingMemoryIds,
+        supportingEvidenceIds,
+        contradictingMemoryIds,
+        confidence,
+        derivationProvider: result.providerName,
+        derivationModel: draft.derivationModel ?? result.providerVersion ?? result.adapterVersion,
+        derivationRunId: result.providerRunId,
+        status,
+        promotionEligibility,
+        canonicalWritePerformed: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
       };
-      const fingerprint = candidateSemanticFingerprint(candidateInput, draft.epistemicStatus);
-      candidateInput.candidateFingerprint = fingerprint;
-      const current = await this.canonicalStore.findCurrentRevisionBySemanticFingerprint(
-        input.scope,
-        fingerprint,
-      );
-      // A canonical duplicate or governed tombstone blocks provider re-animation.
-      if (current !== undefined) continue;
-      const candidate = await this.candidateService.ingest(candidateInput);
-      candidates.push(candidate);
+      await this.insightStore.put(insight);
+      insights.push(insight);
     }
-    return candidates;
+    return insights;
   }
 }

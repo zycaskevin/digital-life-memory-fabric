@@ -96,6 +96,9 @@ async function hydrateChanges(
           canonicalContent: revision.canonicalContent,
           contentHash: revision.contentHash,
           epistemicStatus: revision.epistemicStatus,
+          memoryType: revision.memoryType,
+          speakerProvenance: revision.speakerProvenance,
+          semanticKey: revision.semanticKey,
           semanticFingerprint: revision.semanticFingerprint,
         })
     ) {

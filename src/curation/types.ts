@@ -5,6 +5,9 @@ import type {
   MemoryClass,
   MemoryId,
   MemoryScope,
+  MemoryType,
+  SemanticRelation,
+  SpeakerProvenance,
 } from "../domain/types.js";
 import type {
   MemoryCandidateType,
@@ -17,6 +20,8 @@ export type ProviderMemoryUnitOutcome =
   | "pending_review"
   | "canonical_candidate";
 
+export type CanonicalAdmissionOutcome = ProviderMemoryUnitOutcome | "canonical_merge";
+
 export type MemoryDurability =
   | "transient"
   | "session_scoped"
@@ -28,6 +33,7 @@ export type MemoryDurability =
 export type SemanticDisposition = "novel" | "duplicate" | "merge_required";
 
 export type EpistemicAttributionBasis =
+  | "dlmf_semantic_policy"
   | "provider_declared"
   | "direct_source_quote"
   | "system_record"
@@ -99,7 +105,7 @@ export interface CanonicalAdmissionInput {
 }
 
 export interface CanonicalAdmissionDecision {
-  outcome: ProviderMemoryUnitOutcome;
+  outcome: CanonicalAdmissionOutcome;
   epistemicStatus: EpistemicStatus;
   durability: MemoryDurability;
   memoryWorthy: boolean;
@@ -129,10 +135,16 @@ export interface MemoryCurationRecord {
   providerUnitText: string;
   providerUnitFingerprint: string;
   providerEpistemicStatus: EpistemicStatus;
+  attributedEpistemicBasis: EpistemicAttributionBasis;
+  memoryType: MemoryType;
+  speakerProvenance: SpeakerProvenance;
+  semanticKey: string;
+  semanticPolicyVersion: string;
+  semanticRelation?: SemanticRelation;
   curationProvider: string;
   curationProviderVersion?: string;
   admissionPolicyVersion: string;
-  outcome: ProviderMemoryUnitOutcome;
+  outcome: CanonicalAdmissionOutcome;
   attributedEpistemicStatus: EpistemicStatus;
   durability: MemoryDurability;
   memoryWorthy: boolean;
@@ -149,6 +161,7 @@ export interface CurationOutcomeCounts {
   rejected: number;
   pending_review: number;
   canonical_candidate: number;
+  canonical_merge: number;
 }
 
 export function emptyCurationOutcomeCounts(): CurationOutcomeCounts {
@@ -157,5 +170,6 @@ export function emptyCurationOutcomeCounts(): CurationOutcomeCounts {
     rejected: 0,
     pending_review: 0,
     canonical_candidate: 0,
+    canonical_merge: 0,
   };
 }

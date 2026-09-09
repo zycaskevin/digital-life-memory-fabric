@@ -14,6 +14,26 @@ import {
 } from "../domain/utils.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 
+const validMemoryTypes = new Set([
+  "preference",
+  "technical_fact",
+  "transient_state",
+  "project_state",
+  "relationship",
+  "event",
+  "commitment",
+  "habit",
+  "general_fact",
+]);
+const validSpeakerProvenance = new Set([
+  "user",
+  "assistant",
+  "system",
+  "tool",
+  "mixed",
+  "unknown",
+]);
+
 const validEpistemicStatuses = new Set([
   "observed",
   "user_asserted",
@@ -212,6 +232,11 @@ function verifyRevision(
     revision.status !== head.status ||
     revision.memoryClass !== head.memoryClass ||
     revision.memoryKind !== head.memoryKind ||
+    revision.memoryType !== head.memoryType ||
+    revision.semanticKey !== head.semanticKey ||
+    !validMemoryTypes.has(revision.memoryType) ||
+    !validSpeakerProvenance.has(revision.speakerProvenance) ||
+    revision.semanticKey.trim().length === 0 ||
     revision.contentHash !== sha256(revision.canonicalContent) ||
     !validEpistemicStatuses.has(revision.epistemicStatus) ||
     typeof revision.semanticFingerprint !== "string" ||

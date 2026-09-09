@@ -1,4 +1,4 @@
-import type { EventId, MemoryId, OutboxId } from "./types.js";
+import type { EventId, MemoryId, MemoryScope, OutboxId } from "./types.js";
 
 export class MemoryFabricError extends Error {
   constructor(
@@ -46,6 +46,18 @@ export class RevisionConflictError extends MemoryFabricError {
     super(
       "REVISION_CONFLICT",
       `Revision conflict for ${memoryId}: expected ${expectedRevision}, current ${currentRevision}`,
+    );
+  }
+}
+
+export class SemanticIdentityConflictError extends MemoryFabricError {
+  constructor(
+    public readonly scope: MemoryScope,
+    public readonly semanticKey: string,
+  ) {
+    super(
+      "SEMANTIC_IDENTITY_CONFLICT",
+      `Canonical semantic identity already exists in scope: ${semanticKey}`,
     );
   }
 }

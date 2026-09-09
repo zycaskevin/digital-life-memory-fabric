@@ -10,7 +10,7 @@ export function curationRecordBacksCanonicalAdmission(
   const proof = candidate.canonicalAdmission;
   if (record === undefined || proof === undefined || candidate.sourceId === undefined) return false;
   const producerName = candidate.producer.providerName ?? candidate.producer.id;
-  return (
+  const common =
     record.recordId === proof.curationRecordId &&
     record.candidateId === candidate.candidateId &&
     sameScope(record.scope, candidate.scope) &&
@@ -19,15 +19,38 @@ export function curationRecordBacksCanonicalAdmission(
     record.providerName === producerName &&
     candidate.providerRunId !== undefined &&
     record.providerRunId === candidate.providerRunId &&
+    record.memoryType === candidate.memoryType &&
+    record.speakerProvenance === candidate.speakerProvenance &&
+    record.semanticKey === candidate.semanticKey &&
+    record.admissionPolicyVersion === proof.admissionPolicyVersion &&
+    record.curationProvider === proof.curationProvider &&
+    (record.curationProviderVersion ?? null) === (proof.curationProviderVersion ?? null);
+  if (!common) return false;
+
+  if (proof.outcome === "canonical_merge") {
+    return (
+      candidate.proposedOperation === "merge" &&
+      candidate.baseMemoryId !== undefined &&
+      candidate.baseMemoryId === record.targetMemoryId &&
+      candidate.baseMemoryId === proof.targetMemoryId &&
+      proof.semanticPolicyVersion === record.semanticPolicyVersion &&
+      proof.semanticRelation === record.semanticRelation &&
+      record.outcome === "canonical_merge" &&
+      record.memoryWorthy === true &&
+      (record.durability === "durable" || record.durability === "identity_long_term") &&
+      record.semanticDisposition === "duplicate" &&
+      candidate.evidenceRefs.some((evidence) => evidence.sourceRef === record.providerUnitRef)
+    );
+  }
+
+  return (
+    candidate.proposedOperation === "create" &&
     record.providerUnitText === candidate.proposedContent.text &&
     record.outcome === "canonical_candidate" &&
     record.attributedEpistemicStatus === candidate.epistemicStatus &&
     record.memoryWorthy === true &&
     (record.durability === "durable" || record.durability === "identity_long_term") &&
-    record.semanticDisposition === "novel" &&
-    record.admissionPolicyVersion === proof.admissionPolicyVersion &&
-    record.curationProvider === proof.curationProvider &&
-    (record.curationProviderVersion ?? null) === (proof.curationProviderVersion ?? null)
+    record.semanticDisposition === "novel"
   );
 }
 

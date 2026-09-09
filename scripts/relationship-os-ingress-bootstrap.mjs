@@ -38,6 +38,7 @@ try {
       "migrations/0002_central_operations.sql",
       "migrations/0003_memory_distillation.sql",
       "migrations/0004_canonical_admission.sql",
+      "migrations/0005_semantic_governance.sql",
     ]) {
       await pool.query(await readFile(resolve(migration), "utf8"));
     }
