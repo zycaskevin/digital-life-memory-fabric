@@ -61,6 +61,14 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function receiptScope(receipt) {
+  return {
+    tenantId: receipt.tenant_id,
+    lifeDid: receipt.life_did,
+    memoryNamespace: receipt.memory_namespace,
+  };
+}
+
 function validateManifest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Semantic review decision manifest must be an object.");
@@ -148,7 +156,10 @@ async function main() {
       const manifest = validateManifest(JSON.parse(await readFile(resolve(decisionPath), "utf8")));
       const knownCases = new Map();
       for (const receipt of receiptsResult.rows) {
-        for (const reviewCase of await reviewStore.listByReceipt(receipt.receipt_id)) {
+        for (const reviewCase of await reviewStore.listByReceipt(
+          receiptScope(receipt),
+          receipt.receipt_id,
+        )) {
           knownCases.set(reviewCase.caseId, reviewCase);
         }
       }
@@ -175,8 +186,9 @@ async function main() {
     const gate = new SemanticCanaryGate();
     const receiptAssessments = [];
     for (const receipt of receiptsResult.rows) {
+      const scope = receiptScope(receipt);
       const records = await curationStore.listByReceipt(receipt.receipt_id);
-      const cases = await reviewStore.listByReceipt(receipt.receipt_id);
+      const cases = await reviewStore.listByReceipt(scope, receipt.receipt_id);
       const assessment = gate.assess({
         receiptId: receipt.receipt_id,
         records,
@@ -186,11 +198,7 @@ async function main() {
       });
       receiptAssessments.push({
         receiptId: receipt.receipt_id,
-        scope: {
-          tenantId: receipt.tenant_id,
-          lifeDid: receipt.life_did,
-          memoryNamespace: receipt.memory_namespace,
-        },
+        scope,
         cases: cases.map((reviewCase) => ({
           caseId: reviewCase.caseId,
           curationRecordId: reviewCase.curationRecordId,

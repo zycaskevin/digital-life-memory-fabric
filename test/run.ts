@@ -12,6 +12,7 @@ import "./insight-promotion.test.js";
 import "./semantic-review.test.js";
 import "./relationship-os-ingress.test.js";
 import "./relationship-os-deployment.test.js";
+import "./relationship-os-bootstrap.integration.test.js";
 import "./development-reference-gateway.test.js";
 import "./development-reference-gateway-audit.test.js";
 import "./postgres.integration.test.js";

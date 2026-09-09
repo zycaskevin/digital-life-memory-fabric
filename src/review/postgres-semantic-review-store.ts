@@ -9,6 +9,7 @@ import type {
 import { sameScope, stableStringify } from "../domain/utils.js";
 import type { CurationRecordId } from "../curation/types.js";
 import type { SemanticReviewStore } from "./semantic-review-store.js";
+import { normalizeSemanticReviewIdentifiers } from "./normalization.js";
 import type {
   SemanticReviewCase,
   SemanticReviewCaseId,
@@ -262,11 +263,13 @@ function validateResolutionBinding(
 
 async function readCase(
   client: Pool | PoolClient,
+  scope: MemoryScope,
   caseId: SemanticReviewCaseId,
 ): Promise<SemanticReviewCase | undefined> {
   const result = await client.query<ReviewCaseRow>(
-    `SELECT * FROM semantic_review_cases WHERE case_id=$1`,
-    [caseId],
+    `SELECT * FROM semantic_review_cases
+      WHERE case_id=$1 AND tenant_id=$2 AND life_did=$3 AND memory_namespace=$4`,
+    [caseId, scope.tenantId, scope.lifeDid, scope.memoryNamespace],
   );
   return result.rows[0] === undefined ? undefined : caseFrom(result.rows[0]);
 }
@@ -302,7 +305,8 @@ export class PostgresSemanticReviewStore implements SemanticReviewStore {
         source.semantic_policy_version !== reviewCase.semanticPolicyVersion ||
         source.memory_type !== reviewCase.memoryType ||
         source.semantic_relation !== (reviewCase.semanticRelation ?? null) ||
-        stableStringify(source.reason_codes) !== stableStringify(reviewCase.triggerReasonCodes)
+        stableStringify(normalizeSemanticReviewIdentifiers(source.reason_codes)) !==
+          stableStringify(normalizeSemanticReviewIdentifiers(reviewCase.triggerReasonCodes))
       ) {
         throw new ValidationError("semantic review case does not match its governed curation record");
       }
@@ -356,21 +360,23 @@ export class PostgresSemanticReviewStore implements SemanticReviewStore {
       await client.query("COMMIT");
       return existing;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
     }
   }
 
-  async get(caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined> {
-    return readCase(this.pool, caseId);
+  async get(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined> {
+    return readCase(this.pool, scope, caseId);
   }
 
-  async listByReceipt(receiptId: string): Promise<SemanticReviewCase[]> {
+  async listByReceipt(scope: MemoryScope, receiptId: string): Promise<SemanticReviewCase[]> {
     const result = await this.pool.query<ReviewCaseRow>(
-      `SELECT * FROM semantic_review_cases WHERE receipt_id=$1 ORDER BY case_id`,
-      [receiptId],
+      `SELECT * FROM semantic_review_cases
+        WHERE receipt_id=$1 AND tenant_id=$2 AND life_did=$3 AND memory_namespace=$4
+        ORDER BY case_id`,
+      [receiptId, scope.tenantId, scope.lifeDid, scope.memoryNamespace],
     );
     return result.rows.map(caseFrom);
   }
@@ -422,8 +428,10 @@ export class PostgresSemanticReviewStore implements SemanticReviewStore {
     try {
       await client.query("BEGIN");
       const currentResult = await client.query<ReviewCaseRow>(
-        `SELECT * FROM semantic_review_cases WHERE case_id=$1 FOR UPDATE`,
-        [caseId],
+        `SELECT * FROM semantic_review_cases
+          WHERE case_id=$1 AND tenant_id=$2 AND life_did=$3 AND memory_namespace=$4
+          FOR UPDATE`,
+        [caseId, next.scope.tenantId, next.scope.lifeDid, next.scope.memoryNamespace],
       );
       const row = currentResult.rows[0];
       if (row === undefined) throw new ValidationError(`semantic review case ${caseId} was not found`);
@@ -488,17 +496,19 @@ export class PostgresSemanticReviewStore implements SemanticReviewStore {
       await client.query("COMMIT");
       return next;
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => undefined);
       throw error;
     } finally {
       client.release();
     }
   }
 
-  async listEvents(caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]> {
+  async listEvents(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]> {
     const result = await this.pool.query<ReviewEventRow>(
-      `SELECT * FROM semantic_review_events WHERE case_id=$1 ORDER BY case_version`,
-      [caseId],
+      `SELECT * FROM semantic_review_events
+        WHERE case_id=$1 AND tenant_id=$2 AND life_did=$3 AND memory_namespace=$4
+        ORDER BY case_version`,
+      [caseId, scope.tenantId, scope.lifeDid, scope.memoryNamespace],
     );
     return result.rows.map(eventFrom);
   }

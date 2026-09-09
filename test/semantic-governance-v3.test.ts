@@ -279,7 +279,7 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
     assert.equal(negative?.semanticKey, positive?.semanticKey);
     assert.equal(negative?.semanticRelation, "contradicts");
     assert.equal(negative?.outcome, "pending_review");
-    const reviewCases = await reviewStore.listByReceipt(receipt.receiptId);
+    const reviewCases = await reviewStore.listByReceipt(scope, receipt.receiptId);
     assert.equal(reviewCases.length, 1);
     assert.equal(reviewCases[0]?.curationRecordId, negative?.recordId);
     assert.equal(reviewCases[0]?.trigger, "pending_review");

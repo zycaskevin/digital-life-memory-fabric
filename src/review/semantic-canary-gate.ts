@@ -2,6 +2,7 @@ import { ValidationError } from "../domain/errors.js";
 import { sameScope, stableStringify } from "../domain/utils.js";
 import type { MemoryCurationRecord } from "../curation/types.js";
 import type { SemanticCanaryAssessment, SemanticGovernanceTelemetry, SemanticReviewCase } from "./types.js";
+import { normalizeSemanticReviewIdentifiers } from "./normalization.js";
 
 function increment(counts: Record<string, number>, key: string): void {
   counts[key] = (counts[key] ?? 0) + 1;
@@ -84,7 +85,8 @@ export class SemanticCanaryGate {
           reviewCase.semanticPolicyVersion !== record.semanticPolicyVersion ||
           reviewCase.memoryType !== record.memoryType ||
           reviewCase.semanticRelation !== record.semanticRelation ||
-          stableStringify(reviewCase.triggerReasonCodes) !== stableStringify(record.reasonCodes) ||
+          stableStringify(normalizeSemanticReviewIdentifiers(reviewCase.triggerReasonCodes)) !==
+            stableStringify(normalizeSemanticReviewIdentifiers(record.reasonCodes)) ||
           (reviewCase.trigger === "pending_review") !== (record.outcome === "pending_review");
       })
     ) {

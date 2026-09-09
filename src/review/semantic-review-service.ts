@@ -4,6 +4,7 @@ import { ValidationError } from "../domain/errors.js";
 import type { MemoryAuthor } from "../domain/types.js";
 import { SystemClock, sameScope, sha256, stableStringify, type Clock } from "../domain/utils.js";
 import type { SemanticReviewStore } from "./semantic-review-store.js";
+import { normalizeSemanticReviewIdentifiers } from "./normalization.js";
 import type {
   SemanticReviewCase,
   SemanticReviewCaseId,
@@ -31,7 +32,7 @@ function digest(value: unknown): string {
 }
 
 function uniqueNonEmpty(values: readonly string[], field: string): string[] {
-  const normalized = [...new Set(values.map((value) => value.trim()))].filter(Boolean);
+  const normalized = normalizeSemanticReviewIdentifiers(values);
   if (normalized.length === 0) throw new ValidationError(`${field} must not be empty`);
   return normalized;
 }
@@ -70,9 +71,9 @@ function sameDecision(event: SemanticReviewEvent, request: SemanticReviewResolut
     decision.disposition === request.disposition &&
     stableStringify(decision.reviewer) === stableStringify(request.reviewer) &&
     stableStringify(decision.evidenceIds) ===
-      stableStringify([...new Set(request.evidenceIds.map((value) => value.trim()))].filter(Boolean)) &&
+      stableStringify(normalizeSemanticReviewIdentifiers(request.evidenceIds)) &&
     stableStringify(decision.reasonCodes) ===
-      stableStringify([...new Set(request.reasonCodes.map((value) => value.trim()))].filter(Boolean));
+      stableStringify(normalizeSemanticReviewIdentifiers(request.reasonCodes));
 }
 
 export class SemanticReviewQueueService {
@@ -167,7 +168,7 @@ export class SemanticReviewQueueService {
     const evidenceIds = uniqueNonEmpty(request.evidenceIds, "evidenceIds");
     const reasonCodes = uniqueNonEmpty(request.reasonCodes, "reasonCodes");
 
-    const current = await this.reviewStore.get(request.caseId);
+    const current = await this.reviewStore.get(request.scope, request.caseId);
     if (current === undefined) {
       throw new ValidationError(`semantic review case ${request.caseId} was not found`);
     }
@@ -185,7 +186,7 @@ export class SemanticReviewQueueService {
       if (!sameDecision(prior, { ...request, reviewer, evidenceIds, reasonCodes })) {
         throw new ValidationError("semantic review idempotency key was reused with different input");
       }
-      const replay = await this.reviewStore.get(request.caseId);
+      const replay = await this.reviewStore.get(request.scope, request.caseId);
       if (replay === undefined) throw new ValidationError("semantic review replay target is missing");
       return replay;
     }

@@ -1,5 +1,10 @@
 BEGIN;
 
+CREATE TABLE IF NOT EXISTS dlfm_schema_migrations (
+  migration_name text PRIMARY KEY CHECK (length(migration_name) > 0),
+  applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
 ALTER TABLE memory_distillation_receipts
   ADD CONSTRAINT memory_distillation_receipts_review_scope_key
   UNIQUE (receipt_id, tenant_id, life_did, memory_namespace);
@@ -169,5 +174,8 @@ $$;
 CREATE TRIGGER semantic_review_events_append_only
 BEFORE UPDATE OR DELETE ON semantic_review_events
 FOR EACH ROW EXECUTE FUNCTION reject_semantic_review_event_mutation();
+
+INSERT INTO dlfm_schema_migrations (migration_name)
+VALUES ('0006_semantic_review_queue.sql');
 
 COMMIT;

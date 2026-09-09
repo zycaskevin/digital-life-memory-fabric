@@ -8,8 +8,8 @@ import type {
 
 export interface SemanticReviewStore {
   enqueue(reviewCase: SemanticReviewCase, event: SemanticReviewEvent): Promise<SemanticReviewCase>;
-  get(caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined>;
-  listByReceipt(receiptId: string): Promise<SemanticReviewCase[]>;
+  get(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined>;
+  listByReceipt(scope: MemoryScope, receiptId: string): Promise<SemanticReviewCase[]>;
   list(scope: MemoryScope, options?: SemanticReviewListOptions): Promise<SemanticReviewCase[]>;
   getEventByIdempotencyKey(
     scope: MemoryScope,
@@ -21,5 +21,5 @@ export interface SemanticReviewStore {
     next: SemanticReviewCase,
     event: SemanticReviewEvent,
   ): Promise<SemanticReviewCase>;
-  listEvents(caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]>;
+  listEvents(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]>;
 }

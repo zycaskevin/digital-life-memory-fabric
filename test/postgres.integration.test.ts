@@ -172,7 +172,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       durability: "transient",
       memoryWorthy: false,
       semanticDisposition: "novel",
-      reasonCodes: ["postgres_roundtrip"],
+      reasonCodes: ["postgres_roundtrip", " postgres_roundtrip ", "postgres_roundtrip"],
       createdAt: "2026-09-03T02:00:02.500Z",
     });
     const loadedCuration = await curationRecords.listByReceipt("dist_pg_receipt_1");
@@ -211,8 +211,21 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(resolvedReview.status, "resolved");
     assert.equal(replayedReview.version, 2);
     assert.equal(
-      (await semanticReviewStore.listEvents(resolvedReview.caseId)).length,
+      (await semanticReviewStore.listEvents(scope, resolvedReview.caseId)).length,
       2,
+    );
+    const foreignReviewScope = { ...scope, tenantId: "tenant_pg_foreign" };
+    assert.equal(
+      await semanticReviewStore.get(foreignReviewScope, resolvedReview.caseId),
+      undefined,
+    );
+    assert.deepEqual(
+      await semanticReviewStore.listByReceipt(foreignReviewScope, "dist_pg_receipt_1"),
+      [],
+    );
+    assert.deepEqual(
+      await semanticReviewStore.listEvents(foreignReviewScope, resolvedReview.caseId),
+      [],
     );
     const canaryAssessment = new SemanticCanaryGate().assess({
       receiptId: "dist_pg_receipt_1",

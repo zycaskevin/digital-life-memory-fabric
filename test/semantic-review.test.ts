@@ -72,7 +72,13 @@ test("DLMF-SG-007 queues content-minimized pending and canary cases idempotently
   const reviewStore = new InMemorySemanticReviewStore();
   const queue = new SemanticReviewQueueService(curationStore, reviewStore, new AdvancingClock());
   const pending = record("pending", "pending_review");
-  const sample = record("sample", "canonical_merge");
+  const sample = record("sample", "canonical_merge", {
+    reasonCodes: [
+      "semantic:reviewed_equivalence",
+      " semantic:reviewed_equivalence ",
+      "semantic:reviewed_equivalence",
+    ],
+  });
   await curationStore.put(pending);
   await curationStore.put(sample);
 
@@ -91,8 +97,16 @@ test("DLMF-SG-007 queues content-minimized pending and canary cases idempotently
   assert.equal(first.find((item) => item.curationRecordId === sample.recordId)?.trigger, "canary_sample");
   assert.ok(first.every((item) => item.canonicalWritePerformed === false));
   assert.doesNotMatch(JSON.stringify(first), /private provider text/);
-  assert.equal((await reviewStore.listEvents(first[0]!.caseId)).length, 1);
-  assert.equal((await reviewStore.listEvents(first[1]!.caseId)).length, 1);
+  assert.equal((await reviewStore.listEvents(scope, first[0]!.caseId)).length, 1);
+  assert.equal((await reviewStore.listEvents(scope, first[1]!.caseId)).length, 1);
+  assert.deepEqual(
+    first.find((item) => item.curationRecordId === sample.recordId)?.triggerReasonCodes,
+    ["semantic:reviewed_equivalence"],
+  );
+  const foreignScope = { ...scope, tenantId: "tenant_foreign" };
+  assert.equal(await reviewStore.get(foreignScope, first[0]!.caseId), undefined);
+  assert.deepEqual(await reviewStore.listByReceipt(foreignScope, pending.receiptId), []);
+  assert.deepEqual(await reviewStore.listEvents(foreignScope, first[0]!.caseId), []);
 });
 
 test("DLMF-SG-007 enforces scoped decisions, replay safety, and optimistic versions", async () => {
@@ -171,7 +185,7 @@ test("DLMF-SG-007 enforces scoped decisions, replay safety, and optimistic versi
       evidenceIds: ["curation:cur_decision_sample"],
       reasonCodes: ["review:sample_approved"],
     }),
-    /scope mismatch/,
+    /was not found/,
   );
 
   const resolvedPending = await queue.resolve({
@@ -195,7 +209,7 @@ test("DLMF-SG-007 enforces scoped decisions, replay safety, and optimistic versi
   assert.equal(resolvedPending.status, "resolved");
   assert.equal(resolvedPending.version, 3);
   assert.equal(resolvedSample.status, "resolved");
-  assert.equal((await reviewStore.listEvents(pendingCase.caseId)).length, 3);
+  assert.equal((await reviewStore.listEvents(scope, pendingCase.caseId)).length, 3);
   assert.ok(
     (await reviewStore.list(scope, { status: "resolved" }))
       .every((item) => item.canonicalWritePerformed === false),

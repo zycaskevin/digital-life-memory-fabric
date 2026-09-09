@@ -100,14 +100,16 @@ export class InMemorySemanticReviewStore implements SemanticReviewStore {
     return clone(reviewCase);
   }
 
-  async get(caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined> {
+  async get(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewCase | undefined> {
     const value = this.cases.get(caseId);
-    return value === undefined ? undefined : clone(value);
+    return value === undefined || !sameScope(value.scope, scope) ? undefined : clone(value);
   }
 
-  async listByReceipt(receiptId: string): Promise<SemanticReviewCase[]> {
+  async listByReceipt(scope: MemoryScope, receiptId: string): Promise<SemanticReviewCase[]> {
     return [...this.cases.values()]
-      .filter((reviewCase) => reviewCase.receiptId === receiptId)
+      .filter((reviewCase) =>
+        reviewCase.receiptId === receiptId && sameScope(reviewCase.scope, scope),
+      )
       .sort((left, right) => left.caseId.localeCompare(right.caseId))
       .map(clone);
   }
@@ -195,7 +197,9 @@ export class InMemorySemanticReviewStore implements SemanticReviewStore {
     return clone(next);
   }
 
-  async listEvents(caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]> {
+  async listEvents(scope: MemoryScope, caseId: SemanticReviewCaseId): Promise<SemanticReviewEvent[]> {
+    const reviewCase = this.cases.get(caseId);
+    if (reviewCase === undefined || !sameScope(reviewCase.scope, scope)) return [];
     return (this.events.get(caseId) ?? [])
       .slice()
       .sort((left, right) => left.caseVersion - right.caseVersion)

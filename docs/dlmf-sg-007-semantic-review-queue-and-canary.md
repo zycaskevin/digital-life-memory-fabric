@@ -1,6 +1,6 @@
 # DLMF-SG-007 — Semantic Review Queue and Canary Gate
 
-**Date:** 2026-09-09
+**Date:** 2026-09-10
 **Status:** Implemented and locally verified
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-006
@@ -58,6 +58,9 @@ needs-more-evidence dispositions. Canary samples allow approved-as-classified,
 misclassified, or needs-more-evidence. A review decision never mutates its curation
 record or Canonical Memory.
 
+All case, receipt, and event reads require the complete memory scope. A foreign scope
+is hidden as not found and cannot enumerate review metadata.
+
 ### DR-SG-030 — Migration 0006 binds the full source scope
 
 `0006_semantic_review_queue.sql` creates `semantic_review_cases` and
@@ -68,6 +71,12 @@ checks require the status/decision shape and permanently require
 
 The PostgreSQL store additionally verifies semantic key, policy version, memory type,
 relation, trigger, and reason codes against the governed curation row before enqueue.
+
+Reason-code identity is whitespace-normalized and de-duplicated at both the queue and
+gate boundaries, so equivalent source and review metadata cannot collide only because
+one path has already normalized it. Migration 0006 records its own application in a
+schema ledger. Relationship OS bootstrap upgrades a complete pre-0006 schema exactly
+once and refuses partial, tracked-but-missing, or untracked-existing review schemas.
 
 ### DR-SG-031 — Production sampling is deterministic and manual
 
@@ -143,18 +152,21 @@ creating a syntactically valid file is not evidence that review occurred.
 5. Migration 0006 applies after 0001–0005 and enforces full-scope foreign keys and the
    no-canonical-write check.
 6. PostgreSQL queue enqueue, resolution, replay, event history, and read-only canary
-   assessment round-trip.
+   assessment round-trip without exposing cross-scope cases or events.
 7. The existing two-process semantic-key loser still retries as a governed merge.
 8. Production Apply emits deterministic manual samples and keeps Hermes pruning and
    automatic insight promotion frozen.
+9. Relationship OS bootstrap upgrades a complete 0001–0005 schema once, records 0006,
+   and a second bootstrap is a verified no-op.
 
 ## Verification record
 
-On 2026-09-09, the implementation ran against an isolated PostgreSQL 16 container
+On 2026-09-10, the final reviewed implementation ran against an isolated PostgreSQL 16 container
 whose data directory was mounted on tmpfs. Migrations `0001` through `0006`, strict
 typecheck, the full unit/integration suite, the multi-process semantic collision test,
-and the production build completed with `116/116` tests passing, zero failures, and
-zero skips. The disposable database container was then removed.
+the pre-0006 bootstrap upgrade/replay test, and the production build completed with
+`117/117` tests passing, zero failures, and zero skips. The disposable database
+container was then removed.
 
 The repository has no separate lint script; strict TypeScript compilation is its
 declared static gate.
