@@ -7,6 +7,10 @@ import type {
 } from "../domain/types.js";
 import { sha256 } from "../domain/utils.js";
 import type { ProviderMemoryUnit } from "../distillation/types.js";
+import {
+  hasExplicitPreferenceAssertion,
+  isNancyInlinePreferenceFamily,
+} from "./memory-language-signals.js";
 
 export type SemanticPolarity = "affirmative" | "negative" | "unknown";
 
@@ -31,15 +35,11 @@ interface RecognizedConcept {
   key: string;
 }
 
-const technicalPattern = /\b(?:api|database|function|script|service|tool|https|shell|floating[- ]point|error|bug|code|session\.py|review found)\b|技術|程式|服務|資料庫|浮點|錯誤|審查/i;
+const technicalPattern = /\b(?:api|database|function|script|service|tool|https|shell|floating[- ]point|error|bug|code|session\.py|review|schema|json|permissions?|polic(?:y|ies)|token|credential)\b|技術|程式|服務|資料庫|浮點|錯誤|審查|權限|規範|憑證|金鑰|密碼/i;
 const transientPattern = /\b(?:currently|current progress|score|moves?|in progress|right now)\b|目前|當前|進度|分數|步數/i;
-const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed|deferred|scope boundary|stage (?:is |was )?(?:strictly )?defined)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞|延後|範圍邊界/i;
+const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed|deferred|updated?|implemented|fixed|rewrit(?:e|es|ing|ten)|task (?:was )?initiated|initiated a task|needs? revision|not yet implemented|scope boundary|stage (?:is |was )?(?:strictly )?defined)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞|延後|範圍邊界|已修正|尚未實作|未結案|更新|實施|修補|改寫|重寫|執行[^。！？\n]{0,40}任務/i;
 const eventPattern = /\b(?:demonstrated|performed|executed|ran|showed)\b|展示|執行|進行/i;
-const preferencePattern = /\b(?:prefers?|preference|dislikes?|would rather)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望/i;
-const liveCommentaryPattern = /nancy|live|stream|commentary|實況|直播|操作|吐槽|反應/i;
-const inlinePattern = /inline|interleav|threaded|interspers|within|directly|穿插|交錯|直接/i;
-const narrativePattern = /story|stories|narrative|novel|episode|section|故事|小說|情節|段落/i;
-const positiveInlinePreferencePattern = /\b(?:prefers?|requires?|must)\b[^.!?]{0,220}(?:inline|interleav|threaded|interspers)|(?:偏好|要求|必須)[^。！？]{0,220}(?:穿插|交錯|直接)/i;
+const positiveInlinePreferencePattern = /\b(?:prefers?|requires?|must|should)\b[^.!?]{0,220}(?:inline|interleav|threaded|interspers|directly|within)|(?:偏好|要求|必須|應該|需要)[^。！？]{0,220}(?:穿插|交錯|直接|正文)/i;
 const negativeInlinePreferencePattern = /\b(?:dislikes?|hates?|avoids?|rejects?)\b[^.!?]{0,48}(?:inline|interleav|threaded|interspers)|不(?:喜歡|要|應該)[^。！？]{0,24}(?:穿插|交錯|直接)/i;
 const generalNegativePattern = /\b(?:does not prefer|doesn't prefer|dislikes?|hates?|avoids?|rejects?|must not|should not|not)\b|不喜歡|不偏好|不要|反對|不得|不應/i;
 const generalPositivePattern = /\b(?:prefers?|must|should)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|喜歡|要求|希望|必須|應該/i;
@@ -88,24 +88,14 @@ function semanticTokens(value: string): Set<string> {
   );
 }
 
-function isNancyInlinePreferenceFamily(text: string): boolean {
-  return (
-    liveCommentaryPattern.test(text) &&
-    inlinePattern.test(text) &&
-    narrativePattern.test(text)
-  );
-}
-
 function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
   const text = unit.proposedContent.text;
-  if (unit.candidateType === "preference_candidate") {
-    if (preferencePattern.test(text) || isNancyInlinePreferenceFamily(text)) return "preference";
-    if (transientPattern.test(text)) return "transient_state";
-    if (technicalPattern.test(text)) return "technical_fact";
-    if (projectPattern.test(text)) return "project_state";
-    if (eventPattern.test(text)) return "event";
-    return "general_fact";
+  if (hasExplicitPreferenceAssertion(text) || isNancyInlinePreferenceFamily(text)) {
+    return "preference";
   }
+  if (transientPattern.test(text)) return "transient_state";
+  if (projectPattern.test(text)) return "project_state";
+  if (technicalPattern.test(text)) return "technical_fact";
 
   switch (unit.candidateType) {
     case "relationship_candidate":
@@ -122,11 +112,7 @@ function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
       break;
   }
 
-  if (transientPattern.test(text)) return "transient_state";
-  if (technicalPattern.test(text)) return "technical_fact";
-  if (projectPattern.test(text)) return "project_state";
   if (eventPattern.test(text)) return "event";
-  if (preferencePattern.test(text)) return "preference";
   return "general_fact";
 }
 
@@ -218,7 +204,7 @@ function isSubset(left: Set<string>, right: Set<string>): boolean {
 }
 
 export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGovernance {
-  constructor(readonly policyVersion = "dlmf-semantic-v3") {}
+  constructor(readonly policyVersion = "dlmf-semantic-v4") {}
 
   classify(unit: ProviderMemoryUnit): SemanticClassification {
     const memoryType = inferredMemoryType(unit);

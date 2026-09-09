@@ -1,7 +1,7 @@
 # DLMF-SG-003 — Production Pilot Epistemic Remediation
 
 **Date:** 2026-09-09
-**Status:** Implemented and locally verified; Production Pilot rerun pending authorization
+**Status:** Implemented; Production Pilot rerun failed manual review and is superseded by DLMF-SG-004
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-002
 

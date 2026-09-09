@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 
-**Status:** Production Pilot #2 validated role-aware admission recall but exposed synchronous Hindsight user-projection retain transport failures; async retain remediation locally tested; Pilot #3 pending
+**Status:** Latest authorized Apply failed closed on preference-family precision; DLMF-SG-004 locally verified; next Apply requires authorization
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -419,6 +419,35 @@ projection metadata now records speaker provenance without asserting epistemic t
 The run inspector counts pending insights from `reflective_insights`, not legacy
 derived candidates. A new Production Apply still requires a reviewed Plan and explicit
 authorization; automatic pruning remains frozen.
+
+Authorized Production Pilot `pilot_20260909063253` reused the checksum-pinned five-session
+Plan and reached all five sources, but failed closed with seven `pending_review`
+decisions. Six rewrite-task/project-state descriptions and one genuine normative format
+preference had been assigned the Nancy commentary-placement semantic key. The semantic
+relation gate correctly refused to merge unrelated content; admission remained
+incomplete and reflection was skipped. Manual review also confirmed residual
+`preference/user_asserted` contamination in technical and long-project candidates.
+Hermes writes/deletes, production bank/namespace writes, pruning, and insight promotion
+all remained zero.
+
+DLMF-SG-004 narrows preference intent and advances the next Apply identities:
+
+```text
+distillationPolicyVersion = pilot-distill-v7-preference-boundary
+curationProviderVersion    = pilot-curation-v6-preference-boundary
+adapterVersion             = hindsight-production-pilot-v0.1.1-preference-boundary-v7
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v4
+```
+
+Semantic v4 shares one explicit preference-language boundary between the Hindsight
+adapter and DLMF policy, requires preference or normative intent for the Nancy family,
+and classifies task lifecycle, project state, transient state, and technical facts
+before falling back to an advisory provider type. The preserved failed-report replay
+found zero non-preference `user_asserted` rows. Disposable PostgreSQL verification
+passed migrations 0001–0005, the real multi-process collision retry, all 104 tests,
+typecheck, and build with zero failures or skips. This does not authorize another
+Apply; automatic pruning remains frozen.
 
 On the next Apply, `provider_units` may exceed 667 because each session can now produce units from both the unchanged full-transcript document and the additional user-only projection. Do not compare raw provider-unit count alone. Compare outcome distribution and manually review admitted canonical memories for precision, recall, epistemic correctness, durability, and duplicate/merge quality.
 

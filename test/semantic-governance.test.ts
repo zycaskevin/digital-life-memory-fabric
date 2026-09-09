@@ -43,6 +43,41 @@ const nancyPreferenceParaphrases = [
   "User clarified that live content must be interleaved within the story rather than separated as an end-of-section layer.",
 ] as const;
 
+const productionPilotNancyTaskDescriptions = [
+  "The `SOUL.md` narrator rules contain strict anti-spoiler and anti-fabricated-co-play rules, but need revision from '實況層' to inline interleaving. | Involving: user | To align with new narrative style requirements",
+  "A task was initiated to rewrite the 'Sorcerer' novel by processing raw logs into a complete interleaved live-stream serialization. | Involving: user",
+  "針對 905 小說品質的批評，已修正「假共玩」與「前置破梗」問題，但尚未實作使用者提出的「正文穿插實況」新格式，風格調整尚未結案。 | Involving: user",
+  "執行 novel-rewriter 任務，改寫 Sorcerer 驗證連載第 2 集。 | Involving: assistant | 基於 walkthrough 協助進行交錯式直播小說改寫，不使用章末實況欄",
+  "User initiated a task to rewrite the novel 'sorcerer' using the novel-rewriter role, following the specified interleaved commentary style. | Involving: user",
+  "執行 novel-rewriter 任務，改寫 Sorcerer 驗證連載第 3 集。 | Involving: assistant | 基於 walkthrough 協助進行交錯式直播小說改寫，不使用章末實況欄",
+] as const;
+
+const productionPilotNancyPreference =
+  "The novel format must integrate Nancy's actual gameplay, failures, complaints, and reactions directly into the story text, rather than as a separate post-story log. | Involving: Nancy | To follow the user's latest definition of the storytelling style.";
+
+const productionPilotCrossCategoryCases = [
+  {
+    text: "執行 deleg_f5196abf 任務，第二輪 review 指出 root authority 分裂與 journal hardlink/phase 清理疑慮，要求再次修補。 | Involving: user",
+    memoryType: "project_state",
+  },
+  {
+    text: "更新設計文件 `specs/daily-dual-strategy/requirements.md`，加入 R-4 歷史資料新條件與 R-13 布林/欄位完整性要求。 | Involving: assistant",
+    memoryType: "project_state",
+  },
+  {
+    text: "實施 blocker 修補措施：`deviation()` 改用 8 位四捨五入，`validate_state` 要求 `positions_confirmed` 為必填 JSON boolean，並加入 schema guard。 | Involving: assistant",
+    memoryType: "project_state",
+  },
+  {
+    text: "策略輸出規範：若資料不完整，僅顯示指標與等待訊息；嚴禁輸出任何憑證、金鑰、API token、密碼或連線字串。 | Involving: user",
+    memoryType: "technical_fact",
+  },
+  {
+    text: "使用者指定 `agent_id: laptop-codex` 並要求將 SSH key 相關內容交付給 Arthur。 | Involving: user",
+    memoryType: "general_fact",
+  },
+] as const;
+
 class PilotFixtureProvider implements MemoryDistillationProvider {
   readonly name = "hindsight";
   readonly adapterVersion = "pilot-fixture-v1";
@@ -178,7 +213,7 @@ test("DLMF-SG-001 pilot fixture merges five Nancy preference paraphrases into on
     assert.equal(receipt.curationOutcomes.canonical_merge, 4);
     assert.equal(receipt.canonicalMemoryIds.length, 1);
     assert.equal(new Set(receipt.canonicalMemoryIds).size, 1);
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v3");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v4");
 
     const memoryId = receipt.canonicalMemoryIds[0];
     assert.ok(memoryId);
@@ -205,9 +240,107 @@ test("DLMF-SG-001 pilot fixture merges five Nancy preference paraphrases into on
     assert.equal(records.filter((record) => record.outcome === "canonical_merge").length, 4);
     assert.equal(new Set(records.map((record) => record.semanticKey)).size, 1);
     assert.equal(
-      records.every((record) => record.semanticPolicyVersion === "dlmf-semantic-v3"),
+      records.every((record) => record.semanticPolicyVersion === "dlmf-semantic-v4"),
       true,
     );
+  });
+});
+
+test("DLMF-SG-004 keeps Nancy task lifecycle statements outside the preference family", async () => {
+  const policy = new DeterministicSemanticMemoryGovernance();
+  for (const [index, text] of productionPilotNancyTaskDescriptions.entries()) {
+    const classified = policy.classify(providerUnit(
+      `hs_nancy_task_${index + 1}`,
+      text,
+      "preference_candidate",
+      "preference",
+      "story_stream_structure",
+    ));
+    assert.equal(classified.memoryType, "project_state");
+    assert.equal(classified.epistemicStatus, "uncertain");
+    assert.notEqual(
+      classified.semanticKey,
+      "preference:user:story_stream_structure:nancy_live_commentary_placement",
+    );
+  }
+
+  for (const [index, fixture] of productionPilotCrossCategoryCases.entries()) {
+    const classified = policy.classify(providerUnit(
+      `hs_cross_category_${index + 1}`,
+      fixture.text,
+      "preference_candidate",
+      "preference",
+      "provider_declared_preference",
+    ));
+    assert.equal(classified.memoryType, fixture.memoryType);
+    assert.equal(classified.speakerProvenance, "user");
+    assert.equal(classified.epistemicStatus, "uncertain");
+  }
+
+  const actualPreference = policy.classify(providerUnit(
+    "hs_nancy_format_rule",
+    productionPilotNancyPreference,
+    "preference_candidate",
+    "preference",
+    "story_stream_structure",
+  ));
+  assert.equal(actualPreference.memoryType, "preference");
+  assert.equal(actualPreference.epistemicStatus, "user_asserted");
+  assert.equal(actualPreference.semanticPolarity, "affirmative");
+  assert.equal(
+    actualPreference.semanticKey,
+    "preference:user:story_stream_structure:nancy_live_commentary_placement",
+  );
+
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const units = [
+      ...nancyPreferenceParaphrases.map((text, index) =>
+        providerUnit(
+          `hs_nancy_inline_sg4_${index + 1}`,
+          text,
+          "preference_candidate",
+          "preference",
+          "story_stream_structure",
+        )),
+      ...productionPilotNancyTaskDescriptions.map((text, index) =>
+        providerUnit(
+          `hs_nancy_task_sg4_${index + 1}`,
+          text,
+          "preference_candidate",
+          "preference",
+          "story_stream_structure",
+        )),
+      providerUnit(
+        "hs_nancy_format_rule_sg4",
+        productionPilotNancyPreference,
+        "preference_candidate",
+        "preference",
+        "story_stream_structure",
+      ),
+    ];
+
+    const receipt = await service(archive, store, curationStore, units).run(
+      input("20260828_174230_77857c-sg-004"),
+    );
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.canonicalizationOutcome, "committed");
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.canonical_merge, 5);
+    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 6);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(receipt.canonicalMemoryIds.length, 1);
+
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    for (let index = 0; index < productionPilotNancyTaskDescriptions.length; index += 1) {
+      const record = records.find(
+        (item) => item.providerUnitRef === `hs_nancy_task_sg4_${index + 1}`,
+      );
+      assert.equal(record?.memoryType, "project_state");
+      assert.equal(record?.attributedEpistemicStatus, "uncertain");
+      assert.equal(record?.outcome, "supporting_evidence_only");
+    }
   });
 });
 
@@ -342,7 +475,7 @@ test("DLMF-SG-001 rejects an unbacked provider semantic-merge proof", async () =
       curationProvider: "forged-curator",
       curationRecordId: "cur_forged",
       outcome: "canonical_merge",
-      semanticPolicyVersion: "dlmf-semantic-v3",
+      semanticPolicyVersion: "dlmf-semantic-v4",
       semanticRelation: "equivalent",
       targetMemoryId: seeded.head.memoryId,
     },

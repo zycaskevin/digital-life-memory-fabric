@@ -503,8 +503,24 @@ test("SG-003: user projection separates source actor from epistemic status and r
           document_id: userDocumentId,
           metadata: sourceMetadata,
         },
+        {
+          id: "hs-nancy-task-description",
+          bank_id: "nancy:distillation",
+          text: "User initiated a task to rewrite the Sorcerer novel, following the specified interleaved Nancy commentary style.",
+          type: "world",
+          document_id: userDocumentId,
+          metadata: sourceMetadata,
+        },
+        {
+          id: "hs-nancy-project-status",
+          bank_id: "nancy:distillation",
+          text: "針對 905 小說品質的批評，已修正假共玩問題，但尚未實作使用者提出的正文穿插實況格式。",
+          type: "world",
+          document_id: userDocumentId,
+          metadata: sourceMetadata,
+        },
       ],
-      total: 9,
+      total: 11,
       limit: 1000,
       offset: 0,
     };
@@ -530,12 +546,12 @@ test("SG-003: user projection separates source actor from epistemic status and r
 
     const receipt = await service.run(input);
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.providerUnitCount, 9);
+    assert.equal(receipt.providerUnitCount, 11);
     assert.equal(receipt.curationOutcomes.canonical_candidate, 2);
     assert.equal(receipt.curationOutcomes.canonical_merge, 1);
-    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 6);
+    assert.equal(receipt.curationOutcomes.supporting_evidence_only, 8);
     assert.equal(receipt.canonicalMemoryIds.length, 2);
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v3");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v4");
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     const record = (providerUnitRef: string) =>
@@ -555,6 +571,8 @@ test("SG-003: user projection separates source actor from epistemic status and r
     assert.equal(record("hs-event-like")?.memoryType, "event");
     assert.equal(record("hs-policy-requires")?.memoryType, "technical_fact");
     assert.equal(record("hs-scope-like")?.memoryType, "project_state");
+    assert.equal(record("hs-nancy-task-description")?.memoryType, "project_state");
+    assert.equal(record("hs-nancy-project-status")?.memoryType, "project_state");
     for (const providerUnitRef of [
       "hs-tool-like",
       "hs-project-like",
@@ -562,6 +580,8 @@ test("SG-003: user projection separates source actor from epistemic status and r
       "hs-event-like",
       "hs-policy-requires",
       "hs-scope-like",
+      "hs-nancy-task-description",
+      "hs-nancy-project-status",
     ]) {
       assert.equal(record(providerUnitRef)?.speakerProvenance, "user");
       assert.equal(record(providerUnitRef)?.providerEpistemicStatus, "uncertain");

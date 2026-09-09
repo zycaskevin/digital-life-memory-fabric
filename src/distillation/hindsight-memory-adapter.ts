@@ -19,6 +19,10 @@ import type {
   ReflectRequest,
   ReflectResult,
 } from "./types.js";
+import {
+  hasExplicitPreferenceAssertion,
+  isNancyInlinePreferenceFamily,
+} from "../semantic/memory-language-signals.js";
 
 export type HindsightBudget = "low" | "mid" | "high";
 export type HindsightFactType = "world" | "experience" | "observation";
@@ -193,16 +197,7 @@ function parseConfidence(metadata: Record<string, string> | null | undefined): n
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 }
 
-const preferencePattern = /\b(?:prefers?|preference|dislikes?|would rather)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望/i;
 const habitPattern = /\b(?:usually|typically|habit(?:ually)?|often)\b|通常|習慣|經常|常常/i;
-
-function isNancyInlinePreferenceFamily(text: string): boolean {
-  return (
-    /nancy|live|stream|commentary|實況|直播|操作|吐槽|反應/i.test(text) &&
-    /inline|interleav|threaded|interspers|within|directly|穿插|交錯|直接/i.test(text) &&
-    /story|stories|narrative|novel|episode|section|故事|小說|情節|段落/i.test(text)
-  );
-}
 
 function mappedType(result: HindsightRecallResult): {
   candidateType: MemoryCandidateType;
@@ -228,7 +223,7 @@ function mappedType(result: HindsightRecallResult): {
   }
 
   if (result.type === "world" || result.type == null) {
-    if (preferencePattern.test(result.text) || isNancyInlinePreferenceFamily(result.text)) {
+    if (hasExplicitPreferenceAssertion(result.text) || isNancyInlinePreferenceFamily(result.text)) {
       return {
         candidateType: "preference_candidate",
         memoryClass: "preference",
@@ -272,7 +267,7 @@ function mappedEpistemicStatus(
   ) {
     if (
       mapped.candidateType === "preference_candidate" &&
-      (preferencePattern.test(result.text) || isNancyInlinePreferenceFamily(result.text))
+      (hasExplicitPreferenceAssertion(result.text) || isNancyInlinePreferenceFamily(result.text))
     ) {
       return "user_asserted";
     }
