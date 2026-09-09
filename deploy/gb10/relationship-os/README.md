@@ -66,7 +66,7 @@ npm ci
 npm run check
 ```
 
-Do not install a service from a different checkout than the reviewed candidate.
+Do not install a service from a different checkout than the reviewed candidate. The systemd unit keeps the home filesystem read-only (`ProtectHome=read-only`) so a reviewed runtime, Node binary, or Hindsight client under the service user's home can be executed/read without granting the service write access to `/home`.
 
 ## 3. Bootstrap the dedicated schema and raw archive
 
@@ -116,7 +116,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dlmf-relationship-os.service
 ```
 
-The rendered unit uses the exact checked-out repository path from `pwd -P`; it does not assume `/workspace`. CatDesk's workspace shell is not proof of the GB10 host systemd state. Run these commands from the real host shell.
+The rendered unit uses the exact checked-out repository path from `pwd -P`; it does not assume `/workspace`. `ProtectHome=read-only` permits the service to read a reviewed runtime or Node binary under the service user's home while preventing writes there; durable DLMF writes remain restricted to `/var/lib/dlmf`. CatDesk's workspace shell is not proof of the GB10 host systemd state. Run these commands from the real host shell.
 
 ## 5. Local service acceptance
 

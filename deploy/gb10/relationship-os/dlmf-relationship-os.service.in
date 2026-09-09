@@ -19,7 +19,7 @@ KillSignal=SIGTERM
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/var/lib/dlmf
 
 [Install]

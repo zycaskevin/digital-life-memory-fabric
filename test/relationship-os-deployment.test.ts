@@ -121,6 +121,8 @@ test("Relationship OS DLMF systemd template does not assume a workspace reposito
   );
   assert.match(template, /WorkingDirectory=REPLACE_WITH_DLMF_REPO/u);
   assert.match(template, /REPLACE_WITH_DLMF_REPO\/scripts\/relationship-os-ingress-server\.mjs/u);
+  assert.match(template, /^ProtectHome=read-only$/mu);
+  assert.equal(template.includes("ProtectHome=true"), false);
   assert.equal(template.includes("/workspace/digital-life-memory-fabric"), false);
 });
 
