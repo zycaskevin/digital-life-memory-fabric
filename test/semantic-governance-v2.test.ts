@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  CanonicalVerifier,
   ConservativeMemoryCurationProvider,
   DeterministicCanonicalAdmissionPolicy,
   EvidenceBoundMemoryGovernance,
@@ -181,6 +182,14 @@ test("DLMF-SG-002 merges English and Traditional Chinese concepts and records su
     const memoryId = receipt.canonicalMemoryIds[0];
     assert.ok(memoryId);
     assert.equal((await store.getHead(memoryId))?.currentRevision, 3);
+    const verified = await new CanonicalVerifier(store).verify(memoryId, scope);
+    assert.equal(verified.decision, "ALLOW");
+    if (verified.decision === "ALLOW") {
+      assert.deepEqual(
+        verified.revision.provenance.sourceExperienceRefs,
+        verified.revision.sourceExperienceRefs,
+      );
+    }
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     assert.equal(
@@ -245,6 +254,56 @@ test("DLMF-SG-002 retries a create collision across independent service instance
       true,
     );
 
+    const candidates = await Promise.all(
+      receipts.flatMap((receipt) => receipt.candidateIds).map((id) => store.getCandidate(id)),
+    );
+    assert.equal(candidates.filter((candidate) => candidate?.status === "CONFLICT").length, 1);
+    assert.equal(candidates.filter((candidate) => candidate?.status === "ACCEPTED").length, 2);
+  });
+});
+
+test("DLMF-SG-002 retries concurrent merges and terminates the superseded candidate", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const seed = await service(archive, store, curationStore, [
+      unit("merge_seed", "User prefers dark mode."),
+    ]).run(input("semantic-merge-seed"));
+    const memoryId = seed.canonicalMemoryIds[0];
+    assert.ok(memoryId);
+
+    const originalLookup = store.findCurrentRevisionBySemanticKey.bind(store);
+    let arrivals = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    store.findCurrentRevisionBySemanticKey = async (lookupScope, semanticKey) => {
+      const snapshot = await originalLookup(lookupScope, semanticKey);
+      if (arrivals < 2) {
+        arrivals += 1;
+        if (arrivals === 2) release();
+        await gate;
+      }
+      return snapshot;
+    };
+
+    const receipts = await Promise.all([
+      service(archive, store, curationStore, [
+        unit("merge_mobile", "User prefers dark mode on mobile devices."),
+      ]).run(input("semantic-merge-race-a")),
+      service(archive, store, curationStore, [
+        unit("merge_desktop", "User prefers dark mode on desktop devices."),
+      ]).run(input("semantic-merge-race-b")),
+    ]);
+
+    assert.equal((await store.getHead(memoryId))?.currentRevision, 3);
+    assert.equal(
+      receipts.some((receipt) => receipt.warnings.some((warning) =>
+        warning.startsWith("admission:semantic_revision_collision_retry:"),
+      )),
+      true,
+    );
     const candidates = await Promise.all(
       receipts.flatMap((receipt) => receipt.candidateIds).map((id) => store.getCandidate(id)),
     );

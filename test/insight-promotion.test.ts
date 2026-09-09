@@ -131,6 +131,30 @@ test("DLMF-SG-002 explicitly accepted evidence-closed insight promotes through D
   );
 });
 
+test("DLMF-SG-002 reflective insight stores allow governed status changes but reject immutable drift", async () => {
+  const store = new InMemoryReflectiveInsightStore();
+  const insight = pendingInsight("mem_store_contract");
+  await store.put(insight);
+
+  const accepted = {
+    ...insight,
+    status: "accepted" as const,
+    promotionEligibility: new ReflectiveInsightPromotionGate().assess({
+      ...insight,
+      status: "accepted",
+    }),
+    updatedAt: "2026-09-09T00:01:00.000Z",
+  };
+  await store.put(accepted);
+  assert.equal((await store.get(insight.insightId))?.status, "accepted");
+
+  await assert.rejects(
+    store.put({ ...accepted, proposition: "A changed proposition must use a new insight id." }),
+    /reflective insight write changed immutable fields/,
+  );
+  assert.equal((await store.get(insight.insightId))?.proposition, insight.proposition);
+});
+
 test("DLMF-SG-002 rejects an insight when canonical evidence closure cannot be revalidated", async () => {
   const canonicalStore = new InMemoryCanonicalMemoryStore();
   const support = await seedSupport(canonicalStore);

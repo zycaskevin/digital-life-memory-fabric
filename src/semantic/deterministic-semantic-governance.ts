@@ -5,6 +5,7 @@ import type {
   SemanticRelation,
   SpeakerProvenance,
 } from "../domain/types.js";
+import { ValidationError } from "../domain/errors.js";
 import { sha256 } from "../domain/utils.js";
 import type { ProviderMemoryUnit } from "../distillation/types.js";
 import {
@@ -242,7 +243,7 @@ export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGove
 
   relate(unit: ProviderMemoryUnit, current: MemoryRevision): SemanticRelation {
     if (unit.semanticKey !== current.semanticKey) {
-      throw new Error("semantic relation requires an identical DLMF semantic key");
+      throw new ValidationError("semantic relation requires an identical DLMF semantic key");
     }
     const candidateType = unit.memoryType ?? inferredMemoryType(unit);
     const candidateSpeaker = unit.speakerProvenance ?? inferredSpeaker(unit);

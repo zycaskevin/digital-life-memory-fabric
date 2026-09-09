@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  CanonicalMemoryAuthority,
   ConservativeMemoryCurationProvider,
   DeterministicCanonicalAdmissionPolicy,
   DeterministicSemanticMemoryGovernance,
@@ -13,7 +14,9 @@ import {
   InMemoryCanonicalMemoryStore,
   InMemoryDistillationReceiptStore,
   InMemoryMemoryCurationRecordStore,
+  MemoryCandidateService,
   TranscriptDistillationService,
+  ValidationError,
   reviewedSemanticConceptIds,
   type DistillationRequest,
   type DistillationResult,
@@ -201,6 +204,17 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
     ),
   );
   assert.equal(normativeNegative.semanticPolarity, "negative");
+  const preferNoInline = policy.classify(
+    unit(
+      "nancy_prefer_no_inline",
+      "User prefers no inline Nancy commentary within the story.",
+    ),
+  );
+  assert.equal(
+    preferNoInline.semanticKey,
+    "preference:user:story_stream_structure:nancy_live_commentary_placement",
+  );
+  assert.equal(preferNoInline.semanticPolarity, "negative");
 
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();
@@ -219,6 +233,26 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
         ?.semanticRelation,
       "equivalent",
     );
+  });
+
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const receipt = await service(archive, store, curationStore, [
+      unit(
+        "nancy_inline_positive",
+        "User prefers inline Nancy commentary within the story.",
+      ),
+      unit(
+        "nancy_inline_prefer_no",
+        "User prefers no inline Nancy commentary within the story.",
+      ),
+    ]).run(input("prefer-no-inline-contradiction"));
+
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.canonical_merge, 0);
+    assert.equal(receipt.curationOutcomes.pending_review, 1);
   });
 
   await withArchive(async (archive) => {
@@ -333,5 +367,97 @@ test("DLMF-SG-006 never grants a provider or non-user speaker a reviewed user co
   assert.equal(
     classified.reasonCodes.some((reason) => reason.startsWith("semantic:concept:")),
     false,
+  );
+
+  const nounOnly = policy.classify(
+    unit("ui_stored_preference", "The UI stores a dark mode preference."),
+  );
+  assert.equal(nounOnly.memoryType, "general_fact");
+  assert.equal(nounOnly.epistemicStatus, "uncertain");
+  assert.match(nounOnly.semanticKey, /^semantic:[0-9a-f]{64}$/);
+  assert.equal(
+    nounOnly.reasonCodes.some((reason) => reason === "semantic:concept:dark_mode"),
+    false,
+  );
+});
+
+test("DLMF-SG-006 ignores a fingerprint hit whose DLMF semantic key does not match", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const candidates = new MemoryCandidateService(store);
+    const poison = await candidates.ingest({
+      scope,
+      origin: { lifeDid: scope.lifeDid, agentId: "review-fixture" },
+      candidateType: "fact_candidate",
+      sourceType: "review_fixture",
+      sourceId: "fingerprint-poison",
+      memoryClass: "semantic_assertion",
+      memoryKind: "review_fixture",
+      memoryType: "general_fact",
+      speakerProvenance: "system",
+      semanticKey: "review:unrelated-semantic-key",
+      proposedContent: { text: "Unrelated reviewed fixture." },
+      evidenceRefs: [{ sourceType: "review", sourceRef: "fingerprint-poison" }],
+      epistemicStatus: "system_observed",
+      producer: { kind: "system", id: "review-fixture" },
+      sourceExperienceRefs: [{ sourceType: "review_fixture", sourceId: "fingerprint-poison" }],
+      proposedOperation: "create",
+    });
+    const poisonedRevision = (await new CanonicalMemoryAuthority(store).commit({
+      candidateId: poison.candidateId,
+      idempotencyKey: "fingerprint-poison",
+    })).revision;
+    store.findCurrentRevisionBySemanticFingerprint = async () =>
+      structuredClone(poisonedRevision);
+
+    const receipt = await service(
+      archive,
+      store,
+      new InMemoryMemoryCurationRecordStore(),
+      [unit("safe_dark_mode", "User prefers dark mode.")],
+    ).run(input("fingerprint-key-mismatch"));
+
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(receipt.canonicalMemoryIds.length, 1);
+    assert.notEqual(receipt.canonicalMemoryIds[0], poisonedRevision.memoryId);
+  });
+
+  const policy = new DeterministicSemanticMemoryGovernance();
+  const classified = policy.classify(unit("mismatch", "User prefers dark mode."));
+  assert.throws(
+    () => policy.relate(
+      { ...unit("mismatch", "User prefers dark mode."), semanticKey: classified.semanticKey },
+      {
+        memoryId: "mem_mismatch",
+        revision: 1,
+        scope,
+        memoryClass: "preference",
+        memoryKind: "user_preference",
+        memoryType: "preference",
+        speakerProvenance: "user",
+        semanticKey: "preference:user:other",
+        status: "active",
+        canonicalContent: { text: "User prefers dark mode." },
+        contentHash: "sha256:test",
+        author: { lifeDid: scope.lifeDid },
+        provenance: {
+          sourceType: "test",
+          candidateId: "cand_test",
+          candidateFingerprint: "sha256:test",
+          producer: { kind: "user", id: "test" },
+          sourceExperienceRefs: [],
+        },
+        evidenceRefs: [{ sourceType: "test", sourceRef: "test" }],
+        epistemicStatus: "user_asserted",
+        producer: { kind: "user", id: "test" },
+        sourceExperienceRefs: [],
+        semanticFingerprint: "sha256:test",
+        committedAt: "2026-09-09T00:00:00.000Z",
+        commitSeq: 1,
+      },
+    ),
+    ValidationError,
   );
 });

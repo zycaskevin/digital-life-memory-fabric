@@ -202,6 +202,28 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(loadedInsight?.status, "pending");
     assert.equal(loadedInsight?.promotionEligibility.eligible, false);
     assert.equal(loadedInsight?.canonicalWritePerformed, false);
+    assert.ok(loadedInsight);
+    const rejectedInsight = {
+      ...loadedInsight,
+      status: "rejected" as const,
+      updatedAt: "2026-09-03T02:00:02.700Z",
+    };
+    await insightStore.put(rejectedInsight);
+    assert.equal(
+      (await insightStore.get("insight_pg_phase_leakage_1"))?.status,
+      "rejected",
+    );
+    await assert.rejects(
+      insightStore.put({
+        ...rejectedInsight,
+        proposition: "A divergent proposition cannot replace the stored insight.",
+      }),
+      /reflective insight write changed immutable fields/,
+    );
+    assert.equal(
+      (await insightStore.get("insight_pg_phase_leakage_1"))?.proposition,
+      loadedInsight.proposition,
+    );
 
     const createCandidate = await candidates.ingest({
       scope,

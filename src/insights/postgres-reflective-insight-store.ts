@@ -68,7 +68,7 @@ export class PostgresReflectiveInsightStore implements ReflectiveInsightStore {
     if (insight.canonicalWritePerformed !== false) {
       throw new ValidationError("reflective insights cannot perform canonical writes");
     }
-    await this.pool.query(
+    const result = await this.pool.query(
       `INSERT INTO reflective_insights (
          insight_id, tenant_id, life_did, memory_namespace, proposition,
          epistemic_status, supporting_memory_ids, supporting_evidence_ids,
@@ -81,7 +81,21 @@ export class PostgresReflectiveInsightStore implements ReflectiveInsightStore {
        ON CONFLICT (insight_id) DO UPDATE SET
          status=EXCLUDED.status,
          promotion_eligibility=EXCLUDED.promotion_eligibility,
-         updated_at=EXCLUDED.updated_at`,
+         updated_at=EXCLUDED.updated_at
+       WHERE reflective_insights.tenant_id=EXCLUDED.tenant_id
+         AND reflective_insights.life_did=EXCLUDED.life_did
+         AND reflective_insights.memory_namespace=EXCLUDED.memory_namespace
+         AND reflective_insights.proposition=EXCLUDED.proposition
+         AND reflective_insights.epistemic_status=EXCLUDED.epistemic_status
+         AND reflective_insights.supporting_memory_ids=EXCLUDED.supporting_memory_ids
+         AND reflective_insights.supporting_evidence_ids=EXCLUDED.supporting_evidence_ids
+         AND reflective_insights.contradicting_memory_ids=EXCLUDED.contradicting_memory_ids
+         AND reflective_insights.confidence=EXCLUDED.confidence
+         AND reflective_insights.derivation_provider=EXCLUDED.derivation_provider
+         AND reflective_insights.derivation_model=EXCLUDED.derivation_model
+         AND reflective_insights.derivation_run_id=EXCLUDED.derivation_run_id
+         AND reflective_insights.canonical_write_performed=EXCLUDED.canonical_write_performed
+         AND reflective_insights.created_at=EXCLUDED.created_at`,
       [
         insight.insightId,
         insight.scope.tenantId,
@@ -103,6 +117,9 @@ export class PostgresReflectiveInsightStore implements ReflectiveInsightStore {
         insight.updatedAt,
       ],
     );
+    if (result.rowCount !== 1) {
+      throw new ValidationError("reflective insight write changed immutable fields");
+    }
   }
 
   async get(insightId: ReflectiveInsightId): Promise<ReflectiveInsight | undefined> {

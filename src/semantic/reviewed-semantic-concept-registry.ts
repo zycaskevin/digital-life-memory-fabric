@@ -27,18 +27,18 @@ interface ConceptDefinition extends ReviewedSemanticConcept {
 }
 
 const explicitNegativePreferencePattern =
-  /\b(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b|\b(?:dislikes?|rejects?|avoids?)\b|不偏好|不喜歡|不要|拒絕|反對/i;
+  /\b(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b|\b(?:prefers?|wants?|requires?)\b[^.!?]{0,60}\b(?:no|without)\b|\b(?:dislikes?|rejects?|avoids?)\b|不偏好|不喜歡|不要|拒絕|反對/i;
 const explicitPositivePreferencePattern =
-  /\b(?:prefers?|likes?|requires?|wants?)\b|偏好|喜歡|要求|希望/i;
+  /\b(?:prefers?|preference|likes?|requires?|wants?)\b|偏好|喜歡|要求|希望/i;
 const negatedPreferenceExpression =
-  /\b(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b|不偏好|不喜歡|不要/giu;
+  /\b(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b|\b(?:prefers?|wants?|requires?)\b[^.!?]{0,60}\b(?:no|without)\b|不偏好|不喜歡|不要/giu;
 const qualifierExceptionPattern =
   /\b(?:but|however|except|excluding)\b|但|可是|不過|除了|排除/i;
 
 const positiveInlinePreferencePattern =
   /\b(?:prefers?|requires?|must|should)\b[^.!?]{0,220}(?:inline|interleav|threaded|interspers|directly|within)|(?:偏好|要求|必須|應該|需要)[^。！？]{0,220}(?:穿插|交錯|直接|正文)/i;
 const negativeInlinePreferencePattern =
-  /\b(?:dislikes?|hates?|avoids?|rejects?)\b[^.!?]{0,80}(?:inline|interleav|threaded|interspers)|不(?:喜歡|要|應該)[^。！？]{0,48}(?:穿插|交錯|直接)/i;
+  /\b(?:dislikes?|hates?|avoids?|rejects?)\b[^.!?]{0,80}(?:inline|interleav|threaded|interspers)|\b(?:prefers?|wants?|requires?)\b[^.!?]{0,80}\b(?:no|without)\b[^.!?]{0,80}(?:inline|interleav|threaded|interspers)|不(?:喜歡|要|應該)[^。！？]{0,48}(?:穿插|交錯|直接)/i;
 const normativeNegativeInlinePattern =
   /\b(?:(?:must|should)(?:\s+not|n't)|can\s+not|cannot|can't)\b[^.!?]{0,120}(?:inline|interleav|threaded|interspers)|(?:不得|不應該|不應|不可)[^。！？]{0,120}(?:穿插|交錯|直接)/i;
 const explicitSeparatePreferencePattern =
@@ -57,14 +57,15 @@ function genericPreferencePolarity(text: string): SemanticPolarity {
 }
 
 function nancyPlacementPolarity(text: string): SemanticPolarity {
+  if (qualifierExceptionPattern.test(text)) return "unknown";
   const positive = positiveInlinePreferencePattern.test(text);
   const negativeInline = negativeInlinePreferencePattern.test(text);
   if (normativeNegativeInlinePattern.test(text)) return "negative";
+  if (negativeInline) return "negative";
   const separate = explicitSeparatePreferencePattern.test(text);
-  if (positive && negativeInline) return "unknown";
   if (positive && separate && !placementContrastPattern.test(text)) return "unknown";
   if (positive) return "affirmative";
-  if (negativeInline || separate) return "negative";
+  if (separate) return "negative";
   return "unknown";
 }
 

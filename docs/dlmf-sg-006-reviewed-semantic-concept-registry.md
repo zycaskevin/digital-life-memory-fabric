@@ -87,6 +87,34 @@ SG-006 changes policy behavior and test coverage without changing persisted shap
 A synthetic `0006` migration would create no safety or compatibility value and is
 therefore intentionally absent.
 
+### DR-SG-026 — Hosted-review hardening remains fail closed
+
+The PR review identified boundary cases around semantic identity, provenance,
+reflection evidence, and persistence. The implemented disposition is:
+
+- a semantic-fingerprint lookup is usable only when its persisted semantic key
+  equals the DLMF-classified key; otherwise the service falls back to the scoped
+  semantic-key lookup;
+- merge revisions bind provenance to the merged producer and complete merged
+  source-experience set, so canonical verification does not suppress valid merges;
+- both semantic create and revision collision retries terminate superseded
+  candidates as `CONFLICT` before retrying;
+- malformed Hindsight `based_on` entries are ignored, and a
+  `canonical_memory` evidence reference must exactly equal a supporting memory ID;
+- reflective insight identity, scope, proposition, epistemic/evidence fields,
+  derivation, confidence, creation time, and the no-canonical-write flag are
+  immutable in both store implementations. Only governed status, derived
+  promotion eligibility, and update time may change under the same insight ID;
+- a pending insight may be evidence-closed while still being ineligible. The pilot
+  boundary therefore asserts synthesized + pending + ineligible + no canonical
+  write, without conflating evidence closure with acceptance;
+- preference nouns require an actor-bound expression, and reviewed `prefer no` /
+  `without` placement statements are negative rather than merge-eligible positives;
+- a positional pilot run ID is accepted only by reflection-recovery mode, preventing
+  plan/apply from reusing an existing run manifest accidentally.
+
+These checks do not grant Hindsight promotion or canonical authority.
+
 ## Executable acceptance
 
 1. English and Traditional Chinese forms of interaction language, third-person
@@ -102,6 +130,12 @@ therefore intentionally absent.
 6. The original Nancy and 8B regressions remain green under policy v5.
 7. Migrations `0001` through `0005`, both PostgreSQL integrations, strict typecheck,
    full tests, and build pass in a disposable PostgreSQL instance.
+8. A semantic fingerprint/key mismatch cannot select an unrelated merge target;
+   concurrent revision collisions retry with no orphaned pending candidate.
+9. Malformed reflection facts and lookalike canonical-memory references do not close
+   evidence, and immutable insight fields cannot drift between store implementations.
+10. Noun-only UI state is not attributed as a user preference; “prefer no inline”
+    contradicts the positive Nancy placement preference and requires review.
 
 ## Verification record
 
@@ -109,7 +143,9 @@ On 2026-09-09, the final candidate ran against a fresh PostgreSQL 16 container w
 its data directory on tmpfs. The integration path applied migrations `0001` through
 `0005`, exercised the two-process semantic-key collision and governed loser retry,
 and completed strict typecheck, build, and all 110 tests with zero failures and zero
-skips. The disposable container was then stopped and automatically removed. The
+skips. After hosted review, the exact updated tree repeated that gate with all 113
+tests passing, zero failures, and zero skips. The disposable container was then
+stopped and automatically removed. The
 repository declares no separate lint script; strict TypeScript compilation is the
 available static gate.
 

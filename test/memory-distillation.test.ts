@@ -1411,9 +1411,10 @@ test("MD-008: reflect produces a pending first-class insight and cannot directly
           text: seeded.revision.canonicalContent.text,
           type: "world",
         },
+        { id: "hs_malformed", text: null },
       ],
     },
-  };
+  } as unknown as HindsightReflectResponse;
   const insightStore = new InMemoryReflectiveInsightStore();
   const reflective = new ReflectiveMemoryService(store, createAdapter(client), insightStore);
   const derived = await reflective.reflect({
@@ -1424,6 +1425,14 @@ test("MD-008: reflect produces a pending first-class insight and cannot directly
       {
         evidenceRef: { sourceType: "canonical_memory", sourceRef: seeded.head.memoryId },
         text: seeded.revision.canonicalContent.text,
+        sourceExperienceRefs: seeded.revision.sourceExperienceRefs,
+      },
+      {
+        evidenceRef: {
+          sourceType: "canonical_memory",
+          sourceRef: `${seeded.head.memoryId}_lookalike`,
+        },
+        text: "A caller-controlled lookalike reference must not close evidence.",
         sourceExperienceRefs: seeded.revision.sourceExperienceRefs,
       },
     ],

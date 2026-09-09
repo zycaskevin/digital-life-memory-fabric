@@ -2,10 +2,10 @@ const englishActorPreferencePattern =
   /\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:(?:explicitly|clearly|really)\s+)?(?:prefers?|dislikes?|likes?|requires?|wants?)\b/i;
 const englishActorNegativePreferencePattern =
   /\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:(?:explicitly|clearly|really)\s+)?(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b/i;
-const englishPreferenceNounPattern = /\b(?:preference|would rather)\b/i;
+const englishActorPreferenceNounPattern =
+  /\b(?:(?:my|our|your|their|his|her)\s+preference|(?:user|arthur|nancy)(?:'s)?\s+preference|(?:i|we|you|they|he|she|user|arthur|nancy)\s+would\s+rather)\b/i;
 const chineseActorPreferencePattern =
-  /(?:用戶|使用者|我|我們|Nancy)\s*(?:明確|清楚|最新|現在)?\s*(?:偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望)/i;
-const chinesePreferenceWordPattern = /偏好|比較喜歡|更喜歡|不喜歡|喜歡/i;
+  /(?:用戶|使用者|我|我們|Nancy)\s*(?:的)?\s*(?:明確|清楚|最新|現在)?\s*(?:偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望)/i;
 
 const liveCommentaryPattern = /nancy|live|stream|commentary|實況|直播|操作|吐槽|反應/i;
 const placementPattern = /inline|interleav|threaded|interspers|within|directly|separate|end[- ]of[- ](?:episode|section)|穿插|交錯|直接|分段|章末/i;
@@ -23,9 +23,8 @@ export function hasExplicitPreferenceAssertion(text: string): boolean {
   return (
     englishActorPreferencePattern.test(text) ||
     englishActorNegativePreferencePattern.test(text) ||
-    englishPreferenceNounPattern.test(text) ||
-    chineseActorPreferencePattern.test(text) ||
-    chinesePreferenceWordPattern.test(text)
+    englishActorPreferenceNounPattern.test(text) ||
+    chineseActorPreferencePattern.test(text)
   );
 }
 

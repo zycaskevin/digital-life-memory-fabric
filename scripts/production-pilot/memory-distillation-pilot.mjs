@@ -30,7 +30,9 @@ const PREFLIGHT = args.has("--preflight");
 const RESUME_REFLECTION = args.has("--resume-reflection");
 const PLAN_ONLY = !APPLY && !PREFLIGHT && !RESUME_REFLECTION;
 const now = new Date();
-const requestedResumeRunId = process.argv.slice(2).find((arg) => /^pilot_\d{14}$/.test(arg));
+const requestedResumeRunId = RESUME_REFLECTION
+  ? process.argv.slice(2).find((arg) => /^pilot_\d{14}$/.test(arg))
+  : undefined;
 if (RESUME_REFLECTION && requestedResumeRunId === undefined) {
   throw new Error("--resume-reflection requires pilot_YYYYMMDDhhmmss");
 }
@@ -1046,7 +1048,6 @@ function assertPendingInsightBoundary(insights) {
     if (
       insight.epistemicStatus !== "synthesized" ||
       insight.status !== "pending" ||
-      insight.promotionEligibility.evidenceClosure !== false ||
       insight.promotionEligibility.eligible !== false ||
       insight.canonicalWritePerformed !== false
     ) {

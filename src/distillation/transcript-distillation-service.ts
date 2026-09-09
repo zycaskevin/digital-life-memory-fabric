@@ -568,11 +568,12 @@ export class TranscriptDistillationService {
               provisionalFingerprint,
             );
           const current =
-            exactCurrent ??
-            (await this.options.canonicalStore.findCurrentRevisionBySemanticKey(
+            exactCurrent?.semanticKey === semanticKey
+              ? exactCurrent
+              : await this.options.canonicalStore.findCurrentRevisionBySemanticKey(
               input.scope,
               semanticKey,
-            ));
+            );
 
           if (current?.status === "tombstoned") {
             exactDuplicates += 1;
@@ -761,11 +762,13 @@ export class TranscriptDistillationService {
                   error instanceof RevisionConflictError;
                 if (!retryable) throw error;
 
-                if (error instanceof SemanticIdentityConflictError) {
-                  await this.options.canonicalStore.transaction(async (tx) => {
-                    await tx.setCandidateStatus(candidate.candidateId, "CONFLICT");
-                  });
-                }
+                // CanonicalMemoryAuthority already records revision conflicts, but
+                // this service also supports an injected authority. The retry
+                // boundary therefore guarantees every superseded candidate reaches
+                // a terminal state for either retryable collision class.
+                await this.options.canonicalStore.transaction(async (tx) => {
+                  await tx.setCandidateStatus(candidate.candidateId, "CONFLICT");
+                });
                 if (semanticAttempt === maxSemanticAttempts) {
                   throw new ValidationError(
                     `semantic canonicalization retry limit exceeded for ${semanticKey}`,

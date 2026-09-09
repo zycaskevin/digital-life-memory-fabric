@@ -77,8 +77,8 @@ function provenanceFor(
     sourceId: candidate.sourceId,
     candidateId: candidate.candidateId,
     candidateFingerprint: candidate.candidateFingerprint,
-    producer: candidate.producer,
-    sourceExperienceRefs: candidate.sourceExperienceRefs,
+    producer,
+    sourceExperienceRefs,
     ...admission,
   };
 }

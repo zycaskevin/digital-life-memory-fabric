@@ -3,6 +3,7 @@ import { ValidationError } from "../domain/errors.js";
 import type {
   EpistemicStatus,
   MemoryClass,
+  MemoryId,
   MemoryProducer,
   MemoryScope,
   SourceExperienceRef,
@@ -76,6 +77,14 @@ export interface HindsightReflectResponse {
   based_on?: HindsightReflectFact[] | { memories?: HindsightReflectFact[] } | null;
   confidence?: number | null;
   model?: string | null;
+}
+
+function isHindsightReflectFact(value: unknown): value is HindsightReflectFact {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { text?: unknown }).text === "string"
+  );
 }
 
 export interface HindsightRetainResponse {
@@ -628,12 +637,14 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
 
     const candidates: DerivedMemoryCandidateDraft[] = [];
     if (response.text.trim().length > 0) {
-      const basedOn = Array.isArray(response.based_on)
+      const basedOn = (Array.isArray(response.based_on)
         ? response.based_on
-        : response.based_on?.memories ?? [];
+        : response.based_on?.memories ?? []).filter(isHindsightReflectFact);
       const providerEvidence = basedOn
-        .filter((fact) => fact.id != null)
-        .map((fact) => ({ sourceType: "hindsight", sourceRef: fact.id as string }));
+        .filter((fact): fact is HindsightReflectFact & { id: string } =>
+          typeof fact.id === "string" && fact.id.trim().length > 0,
+        )
+        .map((fact) => ({ sourceType: "hindsight", sourceRef: fact.id }));
       const callerEvidence = request.evidence.map((evidence) => evidence.evidenceRef);
       const normalizedBasedOnText = new Set(
         basedOn.map((fact) => fact.text.normalize("NFKC").trim().toLocaleLowerCase("en-US")),
@@ -649,7 +660,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
         ...callerEvidence
           .filter((evidence) =>
             evidence.sourceType === "canonical_memory" &&
-            [...supportingMemoryIdSet].some((memoryId) => evidence.sourceRef.includes(memoryId)),
+            supportingMemoryIdSet.has(evidence.sourceRef as MemoryId),
           )
           .map((evidence) => `${evidence.sourceType}:${evidence.sourceRef}`),
       ];
