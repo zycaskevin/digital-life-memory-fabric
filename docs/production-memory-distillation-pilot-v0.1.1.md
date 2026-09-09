@@ -391,6 +391,35 @@ The report now includes `canonical_merge`, per-memory type/speaker/semantic fiel
 
 DLMF-SG-002 acceptance on the current main baseline is `102 tests / 102 pass / 0 fail / 0 skip` when run against a disposable PostgreSQL 16 database. This includes migration 0005, durable insight-promotion persistence, and a two-process semantic-key collision. Runs without `DLFM_TEST_DATABASE_URL` explicitly skip the two PostgreSQL tests.
 
+Production Pilot `pilot_20260909052810` then passed the machine execution gate but
+failed manual semantic-governance review. All 22 admitted candidates were classified
+as `preference/user_asserted/user`, including obvious technical facts, project state,
+transient game progress, and assistant-described events. The trigger was a combination
+of generic English `like`/`requires` matching, provider candidate-type precedence, and
+an unconditional `user_asserted` label on the user-source projection. Two English /
+Traditional Chinese 8B generation-routing preferences also retained distinct keys.
+No Hermes deletion or insight promotion occurred; the run remains preserved evidence.
+
+DLMF-SG-003 advances the next Apply identities so old Hindsight operations cannot be
+mistaken for the remediated execution:
+
+```text
+distillationPolicyVersion = pilot-distill-v6-epistemic-hardening
+curationProviderVersion    = pilot-curation-v5-epistemic-hardening
+adapterVersion             = hindsight-production-pilot-v0.1.1-epistemic-hardening-v6
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v3
+```
+
+Semantic v3 requires an actor-bound preference verb or an explicitly reviewed concept
+family, treats simile/example `like` as non-preference, lets technical/project/transient
+evidence override a mistaken provider preference type, and maps reviewed 8B generation
+routing phrasing in English and Traditional Chinese to one concept key. User-source
+projection metadata now records speaker provenance without asserting epistemic truth.
+The run inspector counts pending insights from `reflective_insights`, not legacy
+derived candidates. A new Production Apply still requires a reviewed Plan and explicit
+authorization; automatic pruning remains frozen.
+
 On the next Apply, `provider_units` may exceed 667 because each session can now produce units from both the unchanged full-transcript document and the additional user-only projection. Do not compare raw provider-unit count alone. Compare outcome distribution and manually review admitted canonical memories for precision, recall, epistemic correctness, durability, and duplicate/merge quality.
 
 ## Inspect a failed apply

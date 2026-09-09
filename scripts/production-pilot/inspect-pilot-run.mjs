@@ -146,11 +146,24 @@ try {
         (SELECT count(*)::int FROM memory_changes) AS changes,
         (SELECT count(*)::int FROM memory_distillation_receipts) AS receipts
     `);
-    const pendingReflective = await pool.query(`
-      SELECT count(*)::int AS count
-        FROM memory_candidates
-       WHERE candidate_type='derived_insight_candidate' AND status='PENDING'
-    `);
+    const reflectiveTable = await pool.query(`
+      SELECT EXISTS(
+        SELECT 1
+          FROM information_schema.tables
+         WHERE table_schema=$1 AND table_name='reflective_insights'
+      ) AS exists
+    `, [schema]);
+    const pendingReflective = reflectiveTable.rows[0]?.exists
+      ? await pool.query(`
+          SELECT count(*)::int AS count
+            FROM reflective_insights
+           WHERE status='pending' AND canonical_write_performed=false
+        `)
+      : await pool.query(`
+          SELECT count(*)::int AS count
+            FROM memory_candidates
+           WHERE candidate_type='derived_insight_candidate' AND status='PENDING'
+        `);
     const curationTotals = md010
       ? await pool.query(`
           SELECT count(*)::int AS total,

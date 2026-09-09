@@ -33,15 +33,16 @@ interface RecognizedConcept {
 
 const technicalPattern = /\b(?:api|database|function|script|service|tool|https|shell|floating[- ]point|error|bug|code|session\.py|review found)\b|技術|程式|服務|資料庫|浮點|錯誤|審查/i;
 const transientPattern = /\b(?:currently|current progress|score|moves?|in progress|right now)\b|目前|當前|進度|分數|步數/i;
-const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞/i;
-const preferencePattern = /\b(?:prefers?|preference|likes?|dislikes?|would rather|requires?|wants?)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望/i;
+const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed|deferred|scope boundary|stage (?:is |was )?(?:strictly )?defined)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞|延後|範圍邊界/i;
+const eventPattern = /\b(?:demonstrated|performed|executed|ran|showed)\b|展示|執行|進行/i;
+const preferencePattern = /\b(?:prefers?|preference|dislikes?|would rather)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望/i;
 const liveCommentaryPattern = /nancy|live|stream|commentary|實況|直播|操作|吐槽|反應/i;
 const inlinePattern = /inline|interleav|threaded|interspers|within|directly|穿插|交錯|直接/i;
 const narrativePattern = /story|stories|narrative|novel|episode|section|故事|小說|情節|段落/i;
 const positiveInlinePreferencePattern = /\b(?:prefers?|requires?|must)\b[^.!?]{0,220}(?:inline|interleav|threaded|interspers)|(?:偏好|要求|必須)[^。！？]{0,220}(?:穿插|交錯|直接)/i;
 const negativeInlinePreferencePattern = /\b(?:dislikes?|hates?|avoids?|rejects?)\b[^.!?]{0,48}(?:inline|interleav|threaded|interspers)|不(?:喜歡|要|應該)[^。！？]{0,24}(?:穿插|交錯|直接)/i;
 const generalNegativePattern = /\b(?:does not prefer|doesn't prefer|dislikes?|hates?|avoids?|rejects?|must not|should not|not)\b|不喜歡|不偏好|不要|反對|不得|不應/i;
-const generalPositivePattern = /\b(?:prefers?|likes?|requires?|wants?|must|should)\b|偏好|喜歡|要求|希望|必須|應該/i;
+const generalPositivePattern = /\b(?:prefers?|must|should)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|喜歡|要求|希望|必須|應該/i;
 
 const aliases: ReadonlyArray<readonly [RegExp, string]> = [
   [/深色模式|暗色模式|dark\s+mode/giu, " dark_mode "],
@@ -54,7 +55,8 @@ const aliases: ReadonlyArray<readonly [RegExp, string]> = [
   [/分段|separate[ds]?|end[- ]of[- ](?:episode|section)/giu, " separated "],
   [/用戶|使用者|user/giu, " "],
   [/偏好|比較喜歡|更喜歡|喜歡|不喜歡|要求|希望/giu, " "],
-  [/prefers?|preference|likes?|dislikes?|requires?|wants?/giu, " "],
+  [/\b(?:i|we|you|they|he|she|arthur|nancy)\s+(?:really\s+)?likes?\b/giu, " "],
+  [/prefers?|preference|dislikes?|requires?|wants?/giu, " "],
 ];
 
 const stopTokens = new Set([
@@ -86,10 +88,26 @@ function semanticTokens(value: string): Set<string> {
   );
 }
 
+function isNancyInlinePreferenceFamily(text: string): boolean {
+  return (
+    liveCommentaryPattern.test(text) &&
+    inlinePattern.test(text) &&
+    narrativePattern.test(text)
+  );
+}
+
 function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
+  const text = unit.proposedContent.text;
+  if (unit.candidateType === "preference_candidate") {
+    if (preferencePattern.test(text) || isNancyInlinePreferenceFamily(text)) return "preference";
+    if (transientPattern.test(text)) return "transient_state";
+    if (technicalPattern.test(text)) return "technical_fact";
+    if (projectPattern.test(text)) return "project_state";
+    if (eventPattern.test(text)) return "event";
+    return "general_fact";
+  }
+
   switch (unit.candidateType) {
-    case "preference_candidate":
-      return "preference";
     case "relationship_candidate":
       return "relationship";
     case "project_state_candidate":
@@ -104,10 +122,10 @@ function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
       break;
   }
 
-  const text = unit.proposedContent.text;
   if (transientPattern.test(text)) return "transient_state";
   if (technicalPattern.test(text)) return "technical_fact";
   if (projectPattern.test(text)) return "project_state";
+  if (eventPattern.test(text)) return "event";
   if (preferencePattern.test(text)) return "preference";
   return "general_fact";
 }
@@ -144,15 +162,17 @@ function recognizedConcept(
   speakerProvenance: SpeakerProvenance,
 ): RecognizedConcept | undefined {
   if (memoryType !== "preference" || speakerProvenance !== "user") return undefined;
-  if (
-    liveCommentaryPattern.test(text) &&
-    inlinePattern.test(text) &&
-    narrativePattern.test(text)
-  ) {
+  if (isNancyInlinePreferenceFamily(text)) {
     return {
       id: "nancy_live_commentary_placement",
       key: "preference:user:story_stream_structure:nancy_live_commentary_placement",
     };
+  }
+  if (
+    /\b8b\b/i.test(text) &&
+    /generation(?:\s+rout(?:e|ing)|\s*路由)|生成(?:模型)?路由|生成.*路由/i.test(text)
+  ) {
+    return { id: "generation_routing_8b", key: "preference:user:model_routing:generation:8b" };
   }
   if (/dark\s+mode|深色模式|暗色模式/i.test(text)) {
     return { id: "dark_mode", key: "preference:user:display:dark_mode" };
@@ -198,7 +218,7 @@ function isSubset(left: Set<string>, right: Set<string>): boolean {
 }
 
 export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGovernance {
-  constructor(readonly policyVersion = "dlmf-semantic-v2") {}
+  constructor(readonly policyVersion = "dlmf-semantic-v3") {}
 
   classify(unit: ProviderMemoryUnit): SemanticClassification {
     const memoryType = inferredMemoryType(unit);

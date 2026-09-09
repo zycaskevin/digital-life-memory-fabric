@@ -193,8 +193,16 @@ function parseConfidence(metadata: Record<string, string> | null | undefined): n
   return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
 }
 
-const preferencePattern = /\b(?:prefers?|preference|likes?|dislikes?|would rather)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡/i;
+const preferencePattern = /\b(?:prefers?|preference|dislikes?|would rather)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望/i;
 const habitPattern = /\b(?:usually|typically|habit(?:ually)?|often)\b|通常|習慣|經常|常常/i;
+
+function isNancyInlinePreferenceFamily(text: string): boolean {
+  return (
+    /nancy|live|stream|commentary|實況|直播|操作|吐槽|反應/i.test(text) &&
+    /inline|interleav|threaded|interspers|within|directly|穿插|交錯|直接/i.test(text) &&
+    /story|stories|narrative|novel|episode|section|故事|小說|情節|段落/i.test(text)
+  );
+}
 
 function mappedType(result: HindsightRecallResult): {
   candidateType: MemoryCandidateType;
@@ -220,7 +228,7 @@ function mappedType(result: HindsightRecallResult): {
   }
 
   if (result.type === "world" || result.type == null) {
-    if (preferencePattern.test(result.text)) {
+    if (preferencePattern.test(result.text) || isNancyInlinePreferenceFamily(result.text)) {
       return {
         candidateType: "preference_candidate",
         memoryClass: "preference",
@@ -250,11 +258,29 @@ function mappedType(result: HindsightRecallResult): {
   };
 }
 
-function mappedEpistemicStatus(result: HindsightRecallResult): EpistemicStatus {
+function mappedEpistemicStatus(
+  result: HindsightRecallResult,
+  mapped: ReturnType<typeof mappedType>,
+): EpistemicStatus {
   // Hindsight observations are consolidation/synthesis outputs even when the
   // underlying document came from a direct actor projection. They must never
   // inherit a direct-source epistemic label automatically.
   if (result.type === "observation") return "synthesized";
+  if (
+    result.metadata?.dlmf_projection_kind === "source_actor" &&
+    result.metadata?.dlmf_source_actor === "user"
+  ) {
+    if (
+      mapped.candidateType === "preference_candidate" &&
+      (preferencePattern.test(result.text) || isNancyInlinePreferenceFamily(result.text))
+    ) {
+      return "user_asserted";
+    }
+    if (mapped.candidateType === "habit_candidate" && habitPattern.test(result.text)) {
+      return "user_asserted";
+    }
+    return "uncertain";
+  }
   const declared = result.metadata?.dlmf_epistemic_status as EpistemicStatus | undefined;
   return declared !== undefined && epistemicStatuses.has(declared) ? declared : "synthesized";
 }
@@ -467,7 +493,6 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
           ...commonMetadata,
           dlmf_projection_kind: "source_actor",
           dlmf_source_actor: "user",
-          dlmf_epistemic_status: "user_asserted",
           dlmf_projection_segment_count: String(userSegments.length),
         },
       });
@@ -532,7 +557,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
               sourceRef: request.experience.sourceId,
             },
           ],
-          epistemicStatus: mappedEpistemicStatus(result),
+          epistemicStatus: mappedEpistemicStatus(result, mapped),
           speakerProvenance: mappedSpeakerProvenance(result),
           ...(confidence === undefined ? {} : { confidence }),
           producer: producerBase,
