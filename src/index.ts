@@ -40,6 +40,7 @@ export * from "./curation/memory-curation-record-store.js";
 export * from "./curation/in-memory-memory-curation-record-store.js";
 export * from "./curation/postgres-memory-curation-record-store.js";
 export * from "./semantic/deterministic-semantic-governance.js";
+export * from "./semantic/reviewed-semantic-concept-registry.js";
 export * from "./insights/types.js";
 export * from "./insights/reflective-insight-store.js";
 export * from "./insights/in-memory-reflective-insight-store.js";

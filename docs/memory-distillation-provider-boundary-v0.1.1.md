@@ -14,6 +14,8 @@
 > **MD-010 admission amendment — 2026-09-04:** Hindsight distillation output is now explicitly `ProviderMemoryUnit`, not a DLMF `MemoryCandidate`. Every provider unit must pass a replaceable curation-proposal seam and DLMF-owned deterministic canonical admission policy before candidate creation. Derived/uncertain epistemic states cannot auto-canonicalize, and prune eligibility requires complete admission. See `docs/dlmf-md-010-canonical-admission-curation-gate.md`.
 >
 > **Semantic Governance Hardening — 2026-09-08:** DLMF now owns per-memory classification, speaker-versus-epistemic attribution, deterministic semantic identity, audited equivalence/subsumption evidence merge, and first-class reflective-insight promotion eligibility. This does not grant Hindsight or a curator canonical authority. See `docs/dlmf-sg-001-semantic-governance-hardening.md`.
+>
+> **Reviewed Semantic Registry — 2026-09-09:** Semantic policy v5 moves automatic multilingual identity, polarity, and qualifier subsumption into a DLMF-owned reviewed allow-list. Unknown, ambiguous, contradictory, and incomparable content fails closed to exact identity or review. This does not grant Hindsight semantic-rule or canonical authority. See `docs/dlmf-sg-006-reviewed-semantic-concept-registry.md`.
 
 ## 1. Executive decision
 

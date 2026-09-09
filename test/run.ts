@@ -7,6 +7,7 @@ import "./verified-retrieval.test.js";
 import "./memory-distillation.test.js";
 import "./semantic-governance.test.js";
 import "./semantic-governance-v2.test.js";
+import "./semantic-governance-v3.test.js";
 import "./insight-promotion.test.js";
 import "./relationship-os-ingress.test.js";
 import "./relationship-os-deployment.test.js";

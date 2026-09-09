@@ -215,7 +215,7 @@ test("DLMF-SG-001 pilot fixture merges five Nancy preference paraphrases into on
     assert.equal(receipt.curationOutcomes.canonical_merge, 4);
     assert.equal(receipt.canonicalMemoryIds.length, 1);
     assert.equal(new Set(receipt.canonicalMemoryIds).size, 1);
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v4");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v5");
 
     const memoryId = receipt.canonicalMemoryIds[0];
     assert.ok(memoryId);
@@ -242,7 +242,7 @@ test("DLMF-SG-001 pilot fixture merges five Nancy preference paraphrases into on
     assert.equal(records.filter((record) => record.outcome === "canonical_merge").length, 4);
     assert.equal(new Set(records.map((record) => record.semanticKey)).size, 1);
     assert.equal(
-      records.every((record) => record.semanticPolicyVersion === "dlmf-semantic-v4"),
+      records.every((record) => record.semanticPolicyVersion === "dlmf-semantic-v5"),
       true,
     );
   });
