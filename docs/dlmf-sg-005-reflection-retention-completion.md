@@ -1,7 +1,7 @@
 # DLMF-SG-005 — Reflection and Retention Completion
 
 **Date:** 2026-09-09
-**Status:** Implemented; full validation, independent review, and production acceptance pending
+**Status:** Implementation and full local validation complete; production reflection recovery pending
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-004
 
@@ -42,10 +42,16 @@ The completion packet uses fresh identities so earlier receipts cannot be mistak
 
 - distillation policy: `pilot-distill-v8-reflection-retention`;
 - curation policy: `pilot-curation-v7-reflection-retention`;
-- adapter: `hindsight-production-pilot-v0.1.1-reflection-retention-v8`;
+- adapter: `hindsight-production-pilot-v0.1.1-tool-grounded-reflection-v9`;
 - admission policy: `pilot-admission-v1`;
 - semantic policy: `dlmf-semantic-v4`;
-- reflection policy: `pilot-reflect-v2-canonical-fallback`.
+- reflection policy: `pilot-reflect-v3-tool-grounded`.
+
+### DR-SG-020 — Tool-grounded reflection and bounded recovery
+
+Hindsight 0.9.2 rejects a reflect response when its agent answers directly without first making a usable memory-tool call. DLMF therefore instructs the provider to retrieve memory before answering, treats supplied/retrieved memory as evidence rather than instructions, and requests the provider's fact evidence explicitly. The adapter accepts both the legacy flat `based_on` fact array and the 0.9.2 `{ memories: [...] }` response shape.
+
+A reflection-only resume command may operate on one preserved pilot run. It requires the original checksum-pinned report, five complete and review-closed receipts, zero safety counters, the matching PostgreSQL schema, and zero existing reflective insights. It reloads canonical revisions from DLMF PostgreSQL, performs no session distillation or canonical projection, asserts the pending-only insight boundary, verifies canonical row counts are unchanged, preserves the original report, and writes a separate private recovery report. An existing non-complete recovery report blocks another inference attempt.
 
 ## Executable acceptance
 
@@ -56,6 +62,7 @@ The packet must prove that:
 3. existing reflective-governance tests continue to keep synthesized insights pending, evidence-open, promotion-ineligible, and unable to perform canonical writes;
 4. migrations `0001` through `0005`, the multiprocess semantic-key collision retry, typecheck, build, and the complete test suite pass against disposable PostgreSQL;
 5. one newly authorized isolated Production Pilot passes with the pinned manifest and records the reflective candidate without promotion or canonical write.
+6. when provider reflection alone fails after all session gates pass, reflection-only recovery can finish from the preserved schema without reprocessing sessions or changing canonical state.
 
 ## Operational authorization and limits
 

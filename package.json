@@ -16,6 +16,7 @@
     "e2e:verified-retrieval": "bash scripts/run-live-verified-retrieval-local.sh",
     "pilot:memory-distillation": "npm run build && node scripts/production-pilot/memory-distillation-pilot.mjs",
     "pilot:memory-distillation:preflight": "npm run build && node scripts/production-pilot/memory-distillation-pilot.mjs --preflight",
+    "pilot:memory-distillation:resume-reflection": "npm run build && node scripts/production-pilot/memory-distillation-pilot.mjs --resume-reflection",
     "pilot:memory-distillation:bootstrap-postgres": "bash scripts/production-pilot/bootstrap-dlmf-pg0.sh",
     "pilot:memory-distillation:postgres-service:install": "bash scripts/production-pilot/install-dlmf-pg0-systemd.sh",
     "pilot:memory-distillation:inspect": "node scripts/production-pilot/inspect-memory-distillation-report.mjs",
