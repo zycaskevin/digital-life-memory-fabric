@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 
-**Status:** DLMF-SG-005 full local validation passed; authorized canonical/retention run preserved for reflection-only recovery; pruning remains frozen
+**Status:** DLMF-SG-005 Production Pilot accepted through bounded reflection recovery; pruning and promotion remain frozen
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -532,7 +532,7 @@ semanticPolicyVersion      = dlmf-semantic-v4
 reflectionPolicyVersion    = pilot-reflect-v3-tool-grounded
 ```
 
-Reflection now prefers the designated session's canonical IDs and otherwise uses a bounded fallback from other canonical memories admitted in the same run. A merge is counted as a terminal curation outcome for preservation-complete retention. These changes do not enable pruning, insight promotion, or canonical writes by Hindsight. One new isolated Apply is authorized for completion acceptance; all destructive and authority-expanding paths remain frozen.
+Reflection now prefers the designated session's canonical IDs and otherwise uses a bounded fallback from other canonical memories admitted in the same run. A merge is counted as a terminal curation outcome for preservation-complete retention. These changes do not enable pruning, insight promotion, or canonical writes by Hindsight. The authorized isolated Apply was consumed by `pilot_20260909075924`; no second full Apply was launched. All destructive and authority-expanding paths remain frozen.
 
 Run `pilot_20260909075924` passed all five session, admission, semantic, merge, and retention gates but Hindsight 0.9.2 rejected its reflection because the configured tool-capable model answered from supplied context without making the provider-required memory-tool call. The failed report and PostgreSQL schema are preserved. Do not re-run the five sessions. After the tool-grounded adapter is locally verified, recover only reflection with:
 
@@ -541,3 +541,5 @@ npm run pilot:memory-distillation:resume-reflection -- pilot_20260909075924
 ```
 
 The command fails closed unless the original report and schema match, all receipts are complete and review-closed, safety counters are zero, and no reflective insight already exists. It requests Hindsight fact evidence, accepts the 0.9.2 structured `based_on.memories` shape, writes a separate mode-`0600` recovery report, and proves that no canonical row count changed. It never reprocesses source sessions, writes canonical projections, prunes Hermes, promotes an insight, or writes canonical memory.
+
+The reflection-only recovery completed at `2026-09-09T08:26:06.493Z` and produced one Hindsight-derived insight. Database inspection proved `pending=1`, `synthesized=1`, `eligible=0`, `evidenceClosed=0`, `canonicalWrites=0`, and non-empty supporting memory/evidence. The combined pilot therefore passed while keeping the insight pending and the original failed report immutable.

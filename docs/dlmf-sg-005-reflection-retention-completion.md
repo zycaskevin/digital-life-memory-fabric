@@ -1,7 +1,7 @@
 # DLMF-SG-005 — Reflection and Retention Completion
 
 **Date:** 2026-09-09
-**Status:** Implementation and full local validation complete; production reflection recovery pending
+**Status:** Implemented, fully locally verified, and Production Pilot accepted; pruning and promotion remain frozen
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-004
 
@@ -67,3 +67,22 @@ The packet must prove that:
 ## Operational authorization and limits
 
 The owner authorized completing implementation, review, and one isolated Production Pilot Apply without repeated approval prompts. This does not authorize automatic pruning, insight promotion, writes to a formal canonical production namespace, push, merge, deployment, or activation of any live runtime.
+
+## Verification and production acceptance
+
+Three clean disposable PostgreSQL 16 gates were run during SG-005, including a final post-review gate after tool-grounded reflection support. Each applied migrations `0001` through `0005`, exercised the real multiprocess semantic-key loser retry, typechecked, built, and passed all 104 tests with zero failures and zero skips. The repository declares no separate lint command; strict TypeScript compilation and script syntax checks are the available static gates.
+
+Local structured review found and fixed a duplicate/stale revision risk in fallback reflection sources: selection now retains only the latest revision per canonical identity. CodeRabbit CLI 0.7.6 was installed and authenticated, but the host security reviewer rejected uploading the private uncommitted diff to the external service. No CodeRabbit findings or successful external review are claimed.
+
+Authorized Apply `pilot_20260909075924` used pinned Plan `pilot_20260903061930` and produced:
+
+- five complete and admission-closed receipts;
+- 1,195 curated provider units, 15 candidates, 8 canonical memories, and 7 merges;
+- zero pending-review outcomes;
+- all five retention decisions eligible, with no pruning executed;
+- seven Nancy inline-commentary preference units converged to one canonical identity through one creation and six merges;
+- zero non-preference memories attributed as `user_asserted`.
+
+The Apply initially failed closed only because Hindsight's configured tool-capable model answered without the provider-required tool call. Reflection-only recovery then completed from the preserved schema with zero sessions reprocessed and zero canonical projections written. PostgreSQL contains exactly one reflective insight with `epistemicStatus=synthesized`, `status=pending`, supporting memory and evidence, `evidenceClosure=false`, `eligible=false`, and `canonicalWritePerformed=false`. Canonical candidates, heads, revisions, and changes were unchanged across recovery.
+
+Private mode-`0600` evidence is retained as `pilot_20260909075924-report.json` and `pilot_20260909075924-reflection-resume-report.json`; the immutable pinned manifest remains `pilot_20260903061930-manifest.json` with SHA-256 `ae379999c5bccd8f90047a0df0b0965fe3151282020bff2dd335f0293aba36cc`.
