@@ -22,6 +22,8 @@ import {
 import { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import { PostgresCanonicalMemoryStore } from "../store/postgres-canonical-memory-store.js";
 import { CanonicalVerifier } from "../verification/canonical-verifier.js";
+import { PostgresSemanticReviewStore } from "../review/postgres-semantic-review-store.js";
+import { SemanticReviewQueueService } from "../review/semantic-review-service.js";
 
 export interface RelationshipOsDlmfRuntimeOptions {
   pool: Pool;
@@ -60,6 +62,10 @@ export function createRelationshipOsDlmfRuntime(
   const store = new PostgresCanonicalMemoryStore(options.pool);
   const receiptStore = new PostgresDistillationReceiptStore(options.pool);
   const curationStore = new PostgresMemoryCurationRecordStore(options.pool);
+  const semanticReviewQueue = new SemanticReviewQueueService(
+    curationStore,
+    new PostgresSemanticReviewStore(options.pool),
+  );
   const archive = new FilesystemRawExperienceArchiveProvider(options.archiveRoot);
   const governance = new EvidenceBoundMemoryGovernance(
     options.policies.canonicalizationPolicyVersion,
@@ -90,6 +96,7 @@ export function createRelationshipOsDlmfRuntime(
     curationStore,
     admissionPolicy,
     governance,
+    semanticReviewQueue,
   });
   const projection = new HindsightCanonicalProjectionPort({
     client: options.hindsightClient,

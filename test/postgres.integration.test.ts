@@ -17,9 +17,12 @@ import {
   PostgresInsightPromotionRecordStore,
   PostgresMemoryCurationRecordStore,
   PostgresReflectiveInsightStore,
+  PostgresSemanticReviewStore,
   ReflectiveInsightPromotionGate,
   ReflectiveInsightPromotionService,
   RevisionConflictError,
+  SemanticCanaryGate,
+  SemanticReviewQueueService,
   VerifiedRetrievalService,
   type MemoryFabricMaterializationEvent,
   type MemoryMaterializationDeliveryPort,
@@ -63,11 +66,16 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0005_semantic_governance.sql",
       "utf8",
     );
+    const semanticReviewMigration = await readFile(
+      "migrations/0006_semantic_review_queue.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
     await pool.query(admissionMigration);
     await pool.query(semanticGovernanceMigration);
+    await pool.query(semanticReviewMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -173,6 +181,65 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(loadedCuration[0]?.admissionPolicyVersion, "admission-v1");
     assert.equal(loadedCuration[0]?.memoryType, "transient_state");
     assert.equal(loadedCuration[0]?.attributedEpistemicBasis, "system_record");
+
+    const semanticReviewStore = new PostgresSemanticReviewStore(pool);
+    const semanticReviewQueue = new SemanticReviewQueueService(
+      curationRecords,
+      semanticReviewStore,
+    );
+    const queuedReviews = await semanticReviewQueue.enqueueReceipt({
+      receiptId: "dist_pg_receipt_1",
+      canarySampleRecordIds: ["cur_pg_receipt_1"],
+    });
+    assert.equal(queuedReviews.length, 1);
+    assert.equal(queuedReviews[0]?.trigger, "canary_sample");
+    assert.doesNotMatch(JSON.stringify(queuedReviews), /Temporary supporting context/);
+    const reviewRequest = {
+      caseId: queuedReviews[0]!.caseId,
+      scope,
+      expectedVersion: 1,
+      idempotencyKey: "pg-semantic-review-sample-v1",
+      disposition: "approved_as_classified" as const,
+      reviewer: { lifeDid: scope.lifeDid, agentId: "postgres-reviewer" },
+      evidenceIds: ["curation:cur_pg_receipt_1"],
+      reasonCodes: ["review:postgres_sample_approved"],
+    };
+    const [resolvedReview, replayedReview] = await Promise.all([
+      semanticReviewQueue.resolve(reviewRequest),
+      semanticReviewQueue.resolve(reviewRequest),
+    ]);
+    assert.equal(resolvedReview.status, "resolved");
+    assert.equal(replayedReview.version, 2);
+    assert.equal(
+      (await semanticReviewStore.listEvents(resolvedReview.caseId)).length,
+      2,
+    );
+    const canaryAssessment = new SemanticCanaryGate().assess({
+      receiptId: "dist_pg_receipt_1",
+      records: loadedCuration,
+      reviewCases: [resolvedReview],
+      expectedRecordCount: 1,
+      expectedSemanticPolicyVersion: "test-semantic-v1",
+    });
+    assert.equal(canaryAssessment.eligibleForExpandedManualCanary, true);
+    assert.equal(canaryAssessment.automaticPruningEnabled, false);
+    assert.equal(canaryAssessment.automaticPromotionEnabled, false);
+    assert.equal(canaryAssessment.canonicalWritePerformed, false);
+    await assert.rejects(
+      pool.query(
+        `UPDATE semantic_review_cases SET canonical_write_performed=true WHERE case_id=$1`,
+        [resolvedReview.caseId],
+      ),
+      /semantic_review_cases_canonical_write_performed_check/,
+    );
+    await assert.rejects(
+      pool.query(
+        `UPDATE semantic_review_events SET reason_codes=ARRAY['review:tampered']::text[]
+          WHERE case_id=$1 AND case_version=2`,
+        [resolvedReview.caseId],
+      ),
+      /semantic review events are append-only/,
+    );
 
     const insightStore = new PostgresReflectiveInsightStore(pool);
     await insightStore.put({

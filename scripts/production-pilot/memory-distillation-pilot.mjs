@@ -17,9 +17,12 @@ import {
   PostgresDistillationReceiptStore,
   PostgresMemoryCurationRecordStore,
   PostgresReflectiveInsightStore,
+  PostgresSemanticReviewStore,
   PreservationCompleteRetentionPolicy,
   PruneEligibilityService,
   ReflectiveMemoryService,
+  SemanticCanaryGate,
+  SemanticReviewQueueService,
   selectCanonicalReflectionSource,
   TranscriptDistillationService,
 } from "../../dist/index.js";
@@ -986,6 +989,7 @@ async function createPilotPostgres(databaseUrl) {
     "migrations/0003_memory_distillation.sql",
     "migrations/0004_canonical_admission.sql",
     "migrations/0005_semantic_governance.sql",
+    "migrations/0006_semantic_review_queue.sql",
   ]) {
     await pool.query(await readFile(resolve(migration), "utf8"));
   }
@@ -1300,6 +1304,12 @@ async function runApply(selected, manifest) {
   const receiptStore = new PostgresDistillationReceiptStore(pool);
   const curationStore = new PostgresMemoryCurationRecordStore(pool);
   const insightStore = new PostgresReflectiveInsightStore(pool);
+  const semanticReviewStore = new PostgresSemanticReviewStore(pool);
+  const semanticReviewQueue = new SemanticReviewQueueService(
+    curationStore,
+    semanticReviewStore,
+  );
+  const semanticCanaryGate = new SemanticCanaryGate();
   const archive = new FilesystemRawExperienceArchiveProvider(archiveRoot);
   const governance = new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1");
   const curationProvider = new ConservativeMemoryCurationProvider("pilot-curation-v7-reflection-retention");
@@ -1325,6 +1335,7 @@ async function runApply(selected, manifest) {
     curationStore,
     admissionPolicy,
     governance,
+    semanticReviewQueue,
   });
   const eligibility = new PruneEligibilityService(
     receiptStore,
@@ -1375,6 +1386,23 @@ async function runApply(selected, manifest) {
       });
 
       const curationRecords = await curationStore.listByReceipt(receipt.receiptId);
+      const canarySample =
+        curationRecords.find((record) =>
+          record.outcome === "canonical_candidate" || record.outcome === "canonical_merge",
+        ) ?? curationRecords.find((record) => record.outcome !== "pending_review");
+      const semanticReviewCases = await semanticReviewQueue.enqueueReceipt({
+        receiptId: receipt.receiptId,
+        ...(canarySample === undefined
+          ? {}
+          : { canarySampleRecordIds: [canarySample.recordId] }),
+      });
+      const semanticCanaryAssessment = semanticCanaryGate.assess({
+        receiptId: receipt.receiptId,
+        records: curationRecords,
+        reviewCases: semanticReviewCases,
+        expectedRecordCount: receipt.providerUnitCount,
+        expectedSemanticPolicyVersion: receipt.semanticPolicyVersion,
+      });
       const candidates = [];
       for (const candidateId of receipt.candidateIds) {
         const candidate = await canonicalStore.getCandidate(candidateId);
@@ -1468,6 +1496,23 @@ async function runApply(selected, manifest) {
           candidateId: record.candidateId,
           canonicalMemoryId: record.canonicalMemoryId,
         })),
+        semanticReview: {
+          cases: semanticReviewCases.map((reviewCase) => ({
+            caseId: reviewCase.caseId,
+            curationRecordId: reviewCase.curationRecordId,
+            trigger: reviewCase.trigger,
+            semanticKey: reviewCase.semanticKey,
+            semanticPolicyVersion: reviewCase.semanticPolicyVersion,
+            memoryType: reviewCase.memoryType,
+            semanticRelation: reviewCase.semanticRelation,
+            triggerReasonCodes: reviewCase.triggerReasonCodes,
+            status: reviewCase.status,
+            version: reviewCase.version,
+            latestDecision: reviewCase.latestDecision,
+            canonicalWritePerformed: reviewCase.canonicalWritePerformed,
+          })),
+          canaryAssessment: semanticCanaryAssessment,
+        },
         candidates,
         canonical,
         pruneEligibility: pruneDecision,
@@ -1561,6 +1606,9 @@ async function runApply(selected, manifest) {
         productionHindsightBankWrites: 0,
         productionCanonicalNamespaceWrites: 0,
         pilotPostgresSchemaPreservedForReview: true,
+        semanticReviewCanonicalWrites: 0,
+        automaticSemanticPruningEnabled: false,
+        automaticInsightPromotionEnabled: false,
       },
     };
     await writePrivateJson(reportPath, report);
@@ -1651,6 +1699,13 @@ async function main() {
   );
   const totalCandidates = report.sessions.reduce((sum, item) => sum + item.candidates.length, 0);
   const totalCanonical = report.sessions.reduce((sum, item) => sum + item.canonical.length, 0);
+  const totalSemanticReviewCases = report.sessions.reduce(
+    (sum, item) => sum + Number(item.semanticReview?.cases?.length ?? 0),
+    0,
+  );
+  const manualCanaryEligible = report.sessions.filter(
+    (item) => item.semanticReview?.canaryAssessment?.eligibleForExpandedManualCanary === true,
+  ).length;
   const totalCurationOutcomes = report.sessions.reduce(
     (totals, item) => {
       for (const key of ["supporting_evidence_only", "rejected", "pending_review", "canonical_candidate", "canonical_merge"]) {
@@ -1680,6 +1735,8 @@ async function main() {
   console.log(`provider_units=${totalProviderUnits}`);
   console.log(`curated_candidates=${totalCandidates}`);
   console.log(`canonical_memories=${totalCanonical}`);
+  console.log(`semantic_review_cases=${totalSemanticReviewCases}`);
+  console.log(`manual_canary_eligible_sessions=${manualCanaryEligible}/${report.sessions.length}`);
   console.log(`curation_supporting_evidence_only=${totalCurationOutcomes.supporting_evidence_only}`);
   console.log(`curation_rejected=${totalCurationOutcomes.rejected}`);
   console.log(`curation_pending_review=${totalCurationOutcomes.pending_review}`);

@@ -70,6 +70,13 @@ export class DeterministicDistillationReceiptIdFactory
   }
 }
 
+export interface PendingSemanticReviewQueue {
+  enqueueRecord(
+    record: MemoryCurationRecord,
+    trigger: "pending_review",
+  ): Promise<unknown>;
+}
+
 export interface TranscriptDistillationServiceOptions {
   canonicalStore: CanonicalMemoryStore;
   receiptStore: DistillationReceiptStore;
@@ -82,6 +89,7 @@ export interface TranscriptDistillationServiceOptions {
   candidateService?: MemoryCandidateService;
   canonicalAuthority?: CanonicalMemoryAuthority;
   semanticGovernance?: SemanticMemoryGovernance;
+  semanticReviewQueue?: PendingSemanticReviewQueue;
   clock?: Clock;
   receiptIds?: DistillationReceiptIdFactory;
 }
@@ -858,6 +866,9 @@ export class TranscriptDistillationService {
           createdAt: this.clock.now(),
         };
         await this.options.curationStore.put(record);
+        if (record.outcome === "pending_review") {
+          await this.options.semanticReviewQueue?.enqueueRecord(record, "pending_review");
+        }
       }
 
       const coverageComplete =
