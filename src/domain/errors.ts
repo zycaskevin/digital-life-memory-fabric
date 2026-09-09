@@ -62,6 +62,19 @@ export class SemanticIdentityConflictError extends MemoryFabricError {
   }
 }
 
+export class SemanticReviewConflictError extends MemoryFabricError {
+  constructor(
+    public readonly caseId: string,
+    public readonly expectedVersion: number,
+    public readonly currentVersion: number,
+  ) {
+    super(
+      "SEMANTIC_REVIEW_CONFLICT",
+      `Semantic review conflict for ${caseId}: expected ${expectedVersion}, current ${currentVersion}`,
+    );
+  }
+}
+
 export class ChangeSequenceGapError extends MemoryFabricError {
   constructor(
     public readonly expectedCommitSeq: number,

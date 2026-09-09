@@ -96,10 +96,14 @@ async function assertSchemaReady(targetPool) {
   const result = await targetPool.query(
     `SELECT to_regclass('memory_heads') AS memory_heads,
             to_regclass('memory_distillation_receipts') AS receipts,
-            to_regclass('memory_curation_records') AS curation`,
+            to_regclass('memory_curation_records') AS curation,
+            to_regclass('semantic_review_cases') AS semantic_review_cases`,
   );
   const row = result.rows[0];
-  if (!row || row.memory_heads == null || row.receipts == null || row.curation == null) {
+  if (
+    !row || row.memory_heads == null || row.receipts == null || row.curation == null ||
+    row.semantic_review_cases == null
+  ) {
     throw new Error("DLMF Relationship OS schema is not bootstrapped");
   }
 }

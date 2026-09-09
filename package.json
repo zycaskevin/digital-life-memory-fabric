@@ -21,6 +21,7 @@
     "pilot:memory-distillation:postgres-service:install": "bash scripts/production-pilot/install-dlmf-pg0-systemd.sh",
     "pilot:memory-distillation:inspect": "node scripts/production-pilot/inspect-memory-distillation-report.mjs",
     "pilot:memory-distillation:inspect-run": "node scripts/production-pilot/inspect-pilot-run.mjs",
+    "pilot:semantic-review": "npm run build && node scripts/production-pilot/semantic-review-canary.mjs",
     "relationship-os:bootstrap": "node scripts/relationship-os-ingress-bootstrap.mjs",
     "relationship-os:serve": "npm run build && node scripts/relationship-os-ingress-server.mjs",
     "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs"

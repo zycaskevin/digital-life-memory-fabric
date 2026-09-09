@@ -14,7 +14,9 @@ import {
   InMemoryCanonicalMemoryStore,
   InMemoryDistillationReceiptStore,
   InMemoryMemoryCurationRecordStore,
+  InMemorySemanticReviewStore,
   MemoryCandidateService,
+  SemanticReviewQueueService,
   TranscriptDistillationService,
   ValidationError,
   reviewedSemanticConceptIds,
@@ -117,6 +119,7 @@ function service(
   store: InMemoryCanonicalMemoryStore,
   curationStore: InMemoryMemoryCurationRecordStore,
   units: ProviderMemoryUnit[],
+  semanticReviewQueue?: SemanticReviewQueueService,
 ): TranscriptDistillationService {
   return new TranscriptDistillationService({
     canonicalStore: store,
@@ -127,6 +130,7 @@ function service(
     curationStore,
     admissionPolicy: new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1"),
     governance: new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1"),
+    ...(semanticReviewQueue === undefined ? {} : { semanticReviewQueue }),
   });
 }
 
@@ -258,10 +262,12 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();
     const curationStore = new InMemoryMemoryCurationRecordStore();
+    const reviewStore = new InMemorySemanticReviewStore();
+    const semanticReviewQueue = new SemanticReviewQueueService(curationStore, reviewStore);
     const receipt = await service(archive, store, curationStore, [
       unit("notifications_positive", "User prefers notifications."),
       unit("notifications_negative", "使用者不喜歡通知。"),
-    ]).run(input("generalized-contradiction"));
+    ], semanticReviewQueue).run(input("generalized-contradiction"));
 
     assert.equal(receipt.status, "awaiting_review");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
@@ -273,6 +279,11 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
     assert.equal(negative?.semanticKey, positive?.semanticKey);
     assert.equal(negative?.semanticRelation, "contradicts");
     assert.equal(negative?.outcome, "pending_review");
+    const reviewCases = await reviewStore.listByReceipt(scope, receipt.receiptId);
+    assert.equal(reviewCases.length, 1);
+    assert.equal(reviewCases[0]?.curationRecordId, negative?.recordId);
+    assert.equal(reviewCases[0]?.trigger, "pending_review");
+    assert.equal(reviewCases[0]?.canonicalWritePerformed, false);
   });
 });
 
