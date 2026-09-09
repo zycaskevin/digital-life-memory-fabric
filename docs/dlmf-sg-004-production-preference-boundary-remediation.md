@@ -1,7 +1,7 @@
 # DLMF-SG-004 — Production Preference-Boundary Remediation
 
 **Date:** 2026-09-09
-**Status:** Implemented and locally verified; Production Pilot rerun not authorized
+**Status:** Implemented; Production Pilot semantic quality passed and superseded by DLMF-SG-005
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-003
 

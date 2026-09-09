@@ -49,3 +49,4 @@ export * from "./insights/insight-promotion-record-store.js";
 export * from "./insights/in-memory-insight-promotion-record-store.js";
 export * from "./insights/postgres-insight-promotion-record-store.js";
 export * from "./insights/reflective-insight-promotion-service.js";
+export * from "./insights/reflection-source-policy.js";

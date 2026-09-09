@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-05
 
-**Status:** Latest authorized Apply failed closed on preference-family precision; DLMF-SG-004 locally verified; next Apply requires authorization
+**Status:** DLMF-SG-005 implementation and review in progress after semantic quality passed; pruning remains frozen
 
 **Scope:** The same pinned five real completed Nancy/Hermes sessions
 
@@ -516,3 +516,20 @@ The full-transcript path remains epistemically conservative. The user-only proje
 Runtime `recall()` remains a separate path for short natural-language retrieval from
 the canonical projection plane. Document enumeration is bounded to 10,000 memory units
 per source; exceeding that bound fails closed and blocks prune eligibility.
+
+## DLMF-SG-005 reflection and retention completion
+
+Authorized run `pilot_20260909073110` completed all five pinned sessions: 1,195 curated units produced 15 candidates, 8 canonical memories, 7 merges, and zero pending receipts. It also produced zero non-preference `user_asserted` records. The run remained fail closed because reflection incorrectly depended on the designated inferred-insight session producing a canonical memory; epistemic hardening correctly made that session supporting evidence only. Retention evaluation also omitted `canonical_merge`, creating false `curation_outcome_count_mismatch` blockers for merge-bearing receipts.
+
+DLMF-SG-005 corrects both paths with fresh execution identities:
+
+```text
+distillationPolicyVersion = pilot-distill-v8-reflection-retention
+curationProviderVersion    = pilot-curation-v7-reflection-retention
+adapterVersion             = hindsight-production-pilot-v0.1.1-reflection-retention-v8
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v4
+reflectionPolicyVersion    = pilot-reflect-v2-canonical-fallback
+```
+
+Reflection now prefers the designated session's canonical IDs and otherwise uses a bounded fallback from other canonical memories admitted in the same run. A merge is counted as a terminal curation outcome for preservation-complete retention. These changes do not enable pruning, insight promotion, or canonical writes by Hindsight. One new isolated Apply is authorized for completion acceptance; all destructive and authority-expanding paths remain frozen.

@@ -20,7 +20,8 @@ function curationOutcomeTotal(receipt: DistillationReceipt): number {
     receipt.curationOutcomes.supporting_evidence_only +
     receipt.curationOutcomes.rejected +
     receipt.curationOutcomes.pending_review +
-    receipt.curationOutcomes.canonical_candidate
+    receipt.curationOutcomes.canonical_candidate +
+    receipt.curationOutcomes.canonical_merge
   );
 }
 

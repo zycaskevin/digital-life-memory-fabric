@@ -8,11 +8,11 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 - Canonical baseline: v0.1 frozen at tag `v0.1.0`
 - Active canonical amendment: **v0.1.1 — Memory Distillation & Provider Boundary**
-- Current milestone: **DLMF v0.1.1 — Production Preference-Boundary Remediation (DLMF-SG-004)**
+- Current milestone: **DLMF v0.1.1 — Reflection & Retention Completion (DLMF-SG-005)**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
-Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), and [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md).
+Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md), and [DLMF-SG-005 reflection and retention completion](docs/dlmf-sg-005-reflection-retention-completion.md).
 
 ## Architectural boundary
 

@@ -16,6 +16,8 @@ import {
   InMemoryDistillationReceiptStore,
   InMemoryMemoryCurationRecordStore,
   MemoryCandidateService,
+  PreservationCompleteRetentionPolicy,
+  selectCanonicalReflectionSource,
   TranscriptDistillationService,
   type DistillationRequest,
   type DistillationResult,
@@ -331,6 +333,41 @@ test("DLMF-SG-004 keeps Nancy task lifecycle statements outside the preference f
     assert.equal(receipt.curationOutcomes.supporting_evidence_only, 6);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
     assert.equal(receipt.canonicalMemoryIds.length, 1);
+
+    const retention = await new PreservationCompleteRetentionPolicy(
+      "pilot-retention-v1",
+      "pilot-admission-v1",
+    ).evaluate(receipt);
+    assert.equal(retention.satisfied, true);
+    assert.deepEqual(retention.blockingReasons, []);
+
+    const memoryId = receipt.canonicalMemoryIds[0];
+    assert.ok(memoryId);
+    const head = await store.getHead(memoryId);
+    assert.ok(head);
+    const revision = await store.getRevision(memoryId, head.currentRevision);
+    assert.ok(revision);
+    const alternate = {
+      ...revision,
+      memoryId: "mem_bbbbbbbbbbbbbbbb" as typeof memoryId,
+      revision: 1,
+    };
+    const stale = { ...revision, revision: Math.max(0, revision.revision - 1) };
+    assert.deepEqual(
+      selectCanonicalReflectionSource([stale, alternate, revision], [], 1),
+      [revision],
+      "fallback must be bounded and deduplicate a memory to its latest revision",
+    );
+    assert.deepEqual(
+      selectCanonicalReflectionSource([revision, alternate], [alternate.memoryId]),
+      [alternate],
+      "designated canonical memories take precedence over fallback evidence",
+    );
+    assert.deepEqual(selectCanonicalReflectionSource([], []), []);
+    assert.throws(
+      () => selectCanonicalReflectionSource([revision], [], 0),
+      /reflection source limit must be a positive integer/,
+    );
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     for (let index = 0; index < productionPilotNancyTaskDescriptions.length; index += 1) {
