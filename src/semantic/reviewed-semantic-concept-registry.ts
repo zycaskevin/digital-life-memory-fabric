@@ -89,7 +89,7 @@ const definitions: readonly ConceptDefinition[] = [
   {
     id: "generation_routing_8b",
     key: "preference:user:model_routing:generation:8b",
-    allowIncomparableEquivalent: false,
+    allowIncomparableEquivalent: true,
     matches: (text) => explicitPreferenceWith(
       text,
       /\b8b\b[\s\S]{0,100}(?:generation\s*(?:route|routing|路由)|生成(?:模型)?路由)|(?:generation\s*(?:route|routing|路由)|生成(?:模型)?路由)[\s\S]{0,100}\b8b\b/i,

@@ -37,9 +37,10 @@ export interface SemanticMemoryGovernance {
   relate(unit: ProviderMemoryUnit, current: MemoryRevision): SemanticRelation;
 }
 
-const technicalPattern = /\b(?:api|database|function|script|service|tool|https|shell|floating[- ]point|error|bug|code|session\.py|review|schema|json|permissions?|polic(?:y|ies)|token|credential)\b|技術|程式|服務|資料庫|浮點|錯誤|審查|權限|規範|憑證|金鑰|密碼/i;
+const technicalPattern = /\b(?:api|database|function|script|service|tool|https|shell|floating[- ]point|error|bug|code|session\.py|review|schema|json|permissions?|polic(?:y|ies)|token|credential|time\s+window|execution\s+window|quote\s+window|threshold|constraint)\b|技術|程式|服務|資料庫|浮點|錯誤|審查|權限|規範|憑證|金鑰|密碼|時間窗口|執行時間|秒之間|門檻|限制條件/i;
 const transientPattern = /\b(?:currently|current progress|score|moves?|in progress|right now)\b|目前|當前|進度|分數|步數/i;
-const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed|deferred|updated?|implemented|fixed|rewrit(?:e|es|ing|ten)|task (?:was )?initiated|initiated a task|needs? revision|not yet implemented|scope boundary|stage (?:is |was )?(?:strictly )?defined)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞|延後|範圍邊界|已修正|尚未實作|未結案|更新|實施|修補|改寫|重寫|執行[^。！？\n]{0,40}任務/i;
+const completedEventPattern = /\b(?:review|audit|test|migration|deployment)\b[^.!?\n]{0,160}\b(?:was|were|has been|had been)\s+(?:performed|executed|run|completed)\b|(?:已|曾)(?:完成|執行|進行)[^。！？\n]{0,120}(?:審查|稽核|測試|遷移|部署)|(?:審查|稽核|測試|遷移|部署)[^。！？\n]{0,120}(?:已完成|已執行|已進行)/i;
+const projectPattern = /\b(?:added|installed|download(?:ed| failures?)?|verified|not added|replaced|blocked|completed|deployed|deferred|updated?|implemented|fixed|rewrit(?:e|es|ing|ten)|task (?:was )?initiated|initiated a task|(?:the\s+)?task\s+(?:now\s+)?requires?|fresh\s+closure\s+review|needs? revision|not yet implemented|scope boundary|stage (?:is |was )?(?:strictly )?defined)\b|已加入|未加入|下載失敗|已驗證|完成|阻塞|延後|範圍邊界|已修正|尚未實作|未結案|更新|實施|修補|改寫|重寫|執行[^。！？\n]{0,40}任務/i;
 const eventPattern = /\b(?:demonstrated|performed|executed|ran|showed)\b|展示|執行|進行/i;
 const generalNegativePattern = /\b(?:does not prefer|doesn't prefer|dislikes?|hates?|avoids?|rejects?|must not|should not|not)\b|不喜歡|不偏好|不要|反對|不得|不應/i;
 const generalPositivePattern = /\b(?:prefers?|must|should)\b|\b(?:i|we|you|they|he|she|user|arthur|nancy)\s+(?:really\s+)?(?:likes?|requires?|wants?)\b|偏好|喜歡|要求|希望|必須|應該/i;
@@ -116,6 +117,7 @@ function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
     return "preference";
   }
   if (transientPattern.test(text)) return "transient_state";
+  if (completedEventPattern.test(text)) return "event";
   if (projectPattern.test(text)) return "project_state";
   if (technicalPattern.test(text)) return "technical_fact";
 
@@ -209,7 +211,7 @@ function isSubset(left: Set<string>, right: Set<string>): boolean {
 }
 
 export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGovernance {
-  constructor(readonly policyVersion = "dlmf-semantic-v5") {}
+  constructor(readonly policyVersion = "dlmf-semantic-v6") {}
 
   classify(unit: ProviderMemoryUnit): SemanticClassification {
     const memoryType = inferredMemoryType(unit);

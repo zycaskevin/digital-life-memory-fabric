@@ -246,7 +246,7 @@ For a managed local pg0 target, Apply also verifies that the systemd service is 
 and that PostgreSQL answers `SELECT 1` **before** any Hindsight provider operation.
 
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
-runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0004
+runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0006
 inside that schema. It does not use `public`.
 
 The Hindsight TypeScript client is loaded from OmniHarness, keeping Hindsight out of
@@ -543,3 +543,37 @@ npm run pilot:memory-distillation:resume-reflection -- pilot_20260909075924
 The command fails closed unless the original report and schema match, all receipts are complete and review-closed, safety counters are zero, and no reflective insight already exists. It requests Hindsight fact evidence, accepts the 0.9.2 structured `based_on.memories` shape, writes a separate mode-`0600` recovery report, and proves that no canonical row count changed. It never reprocesses source sessions, writes canonical projections, prunes Hermes, promotes an insight, or writes canonical memory.
 
 The reflection-only recovery completed at `2026-09-09T08:26:06.493Z` and produced one Hindsight-derived insight. Database inspection proved `pending=1`, `synthesized=1`, `eligible=0`, `evidenceClosed=0`, `canonicalWrites=0`, and non-empty supporting memory/evidence. The combined pilot therefore passed while keeping the insight pending and the original failed report immutable.
+
+## DLMF-SG-008 production semantic canary remediation
+
+Plan `pilot_20260909165701` selected five live Hermes sessions and pinned their
+transcript checksums. Apply `pilot_20260909170351` processed those exact sessions in
+schema `dlmf_pilot_v011_20260909170351`: 1,113 provider units produced five
+candidates, five canonical memories, and six semantic review cases. Four receipts
+completed; the technical-debugging receipt remained `awaiting_review` because an 8B
+routing preference was assigned the reviewed concept key but related as `unrelated`
+to an English paraphrase. Reflection was skipped because the receipt set was
+incomplete.
+
+Identified reviewer `codex-sg007-production-reviewer` approved two classifications,
+marked three canary memory types misclassified, and deferred the 8B case rather than
+falsely confirming unrelatedness. The post-decision read-only gate remained blocked
+and proved canonical state unchanged. Hermes deletes, automatic pruning, automatic
+promotion, and semantic-review canonical writes remained zero.
+
+DLMF-SG-008 advances the next Apply identities:
+
+```text
+distillationPolicyVersion = pilot-distill-v9-semantic-canary-remediation
+curationProviderVersion    = pilot-curation-v8-semantic-canary-remediation
+adapterVersion             = hindsight-production-pilot-v0.1.1-semantic-canary-remediation-v10
+admissionPolicyVersion     = pilot-admission-v1
+semanticPolicyVersion      = dlmf-semantic-v6
+reflectionPolicyVersion    = pilot-reflect-v3-tool-grounded
+```
+
+Semantic v6 admits equal-polarity English and Traditional Chinese paraphrases for
+the narrow reviewed 8B generation-routing family. It also distinguishes completed
+review events, task/closure project state, and execution/quote time-window technical
+constraints. Unknown concepts remain exact-identity-only; opposite polarity remains
+review-gated. The failed schema and reports are preserved as immutable evidence.
