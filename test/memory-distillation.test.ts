@@ -551,7 +551,7 @@ test("SG-003: user projection separates source actor from epistemic status and r
     assert.equal(receipt.curationOutcomes.canonical_merge, 1);
     assert.equal(receipt.curationOutcomes.supporting_evidence_only, 8);
     assert.equal(receipt.canonicalMemoryIds.length, 2);
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v5");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     const record = (providerUnitRef: string) =>

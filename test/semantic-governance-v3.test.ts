@@ -171,7 +171,7 @@ test("DLMF-SG-006 merges reviewed English and Traditional Chinese preference fam
     ]).run(input("multilingual-reviewed-families"));
 
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v5");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 3);
     assert.equal(receipt.curationOutcomes.canonical_merge, 3);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
@@ -185,6 +185,96 @@ test("DLMF-SG-006 merges reviewed English and Traditional Chinese preference fam
       );
     }
   });
+});
+
+test("DLMF-SG-008 merges the production English and Traditional Chinese 8B preference", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const receipt = await service(archive, store, curationStore, [
+      unit(
+        "route_en_production",
+        "User prefers using the 8B model for the generation route among the proposed options (8B, 27B, or waiting for 8081). | When: 2026-08-23 | Involving: user | Decision regarding generation routing options.",
+      ),
+      unit(
+        "route_zh_production",
+        "使用者偏好使用 8B 模型進行 generation 路由。 | Involving: user | 使用者最新偏好訊號為「用 8B」。",
+      ),
+    ]).run(input("production-8b-equivalence"));
+
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.canonical_merge, 1);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(new Set(receipt.canonicalMemoryIds).size, 1);
+
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    assert.equal(
+      records.find((record) => record.providerUnitRef === "route_zh_production")
+        ?.semanticRelation,
+      "equivalent",
+    );
+  });
+});
+
+test("DLMF-SG-008 keeps opposite-polarity 8B preferences review-gated", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const receipt = await service(archive, store, curationStore, [
+      unit(
+        "route_positive",
+        "User prefers using the 8B model for the generation route.",
+      ),
+      unit(
+        "route_negative",
+        "使用者不喜歡使用 8B 模型進行 generation 路由。",
+      ),
+    ]).run(input("production-8b-contradiction"));
+
+    assert.equal(receipt.status, "awaiting_review");
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.pending_review, 1);
+    assert.equal(receipt.curationOutcomes.canonical_merge, 0);
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    assert.equal(
+      records.find((record) => record.providerUnitRef === "route_negative")
+        ?.semanticRelation,
+      "contradicts",
+    );
+  });
+});
+
+test("DLMF-SG-008 classifies the three production canary memory types per memory", () => {
+  const policy = new DeterministicSemanticMemoryGovernance();
+  const fixtures = [
+    {
+      providerUnitRef: "closure_review_project_state",
+      text: "The task requires a fresh closure review to verify specific criteria including input types, authority architecture, phase taxonomy consistency, provenance integrity, and security gates.",
+      expected: "project_state" as const,
+    },
+    {
+      providerUnitRef: "quote_window_technical_constraint",
+      text: "執行與 quote 時間窗口共用 12:55–13:10，且 quote 時間與執行時間之差需在 -15 至 +60 秒之間",
+      expected: "technical_fact" as const,
+    },
+    {
+      providerUnitRef: "completed_review_event",
+      text: "An independent code-quality and security review of the Personal OS scaffold candidate was performed. | When: 2026-08-26 | Involving: user",
+      expected: "event" as const,
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const source = unit(fixture.providerUnitRef, fixture.text, "mixed");
+    const classified = policy.classify({
+      ...source,
+      epistemicStatus: "synthesized",
+    });
+    assert.equal(classified.memoryType, fixture.expected);
+    assert.equal(classified.epistemicStatus, "synthesized");
+  }
 });
 
 test("DLMF-SG-006 routes a same-concept opposite preference to contradiction review", async () => {
