@@ -298,6 +298,11 @@ Receipt persistence is provider-neutral. Implementations:
 - `PostgresDistillationReceiptStore` for durable canonical operations.
 
 The base receipt schema is in `migrations/0003_memory_distillation.sql`; MD-010 admission/audit fields and `memory_curation_records` are added by `migrations/0004_canonical_admission.sql`. Additive semantic fields, canonical-merge proof shape, per-scope semantic-key uniqueness, five-outcome receipts, `reflective_insights`, and DLMF-owned `insight_promotion_records` are added by `migrations/0005_semantic_governance.sql`.
+Content-minimized semantic review cases and append-only review events are added by
+`migrations/0006_semantic_review_queue.sql`. Durable promotion approval evidence,
+one promotion lineage per insight, append-only promotion events, and monotonic
+insight/promotion database transitions are added by
+`migrations/0007_insight_promotion_governance.sql`.
 
 Important receipt states:
 

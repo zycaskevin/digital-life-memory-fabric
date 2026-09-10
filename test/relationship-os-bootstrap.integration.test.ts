@@ -12,7 +12,7 @@ const databaseUrl = process.env.DLFM_TEST_DATABASE_URL;
 const maybeTest = databaseUrl === undefined ? test.skip : test;
 const execFileAsync = promisify(execFile);
 
-maybeTest("DLMF-SG-007 Relationship OS bootstrap upgrades pre-0006 schemas exactly once", async () => {
+maybeTest("DLMF-SG-009 Relationship OS bootstrap upgrades pre-0006 schemas through 0007 exactly once", async () => {
   assert.ok(databaseUrl);
   const schema = `dlmf_relationship_test_${randomUUID().replaceAll("-", "")}`;
   const archiveRoot = await mkdtemp(join(tmpdir(), "dlmf-sg007-archive-"));
@@ -56,12 +56,17 @@ maybeTest("DLMF-SG-007 Relationship OS bootstrap upgrades pre-0006 schemas exact
     const state = await pool.query(
       `SELECT to_regclass('semantic_review_cases') AS cases,
               to_regclass('semantic_review_events') AS events,
+              to_regclass('insight_promotion_events') AS promotion_events,
               (SELECT count(*)::int FROM dlfm_schema_migrations
-                WHERE migration_name='0006_semantic_review_queue.sql') AS migration_count`,
+                WHERE migration_name='0006_semantic_review_queue.sql') AS migration_0006_count,
+              (SELECT count(*)::int FROM dlfm_schema_migrations
+                WHERE migration_name='0007_insight_promotion_governance.sql') AS migration_0007_count`,
     );
     assert.ok(state.rows[0]?.cases);
     assert.ok(state.rows[0]?.events);
-    assert.equal(state.rows[0]?.migration_count, 1);
+    assert.ok(state.rows[0]?.promotion_events);
+    assert.equal(state.rows[0]?.migration_0006_count, 1);
+    assert.equal(state.rows[0]?.migration_0007_count, 1);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

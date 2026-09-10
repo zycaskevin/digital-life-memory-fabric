@@ -1,7 +1,7 @@
 # DLMF-SG-008 — Production Canary Semantic Remediation
 
 **Date:** 2026-09-10
-**Status:** Implemented and locally verified
+**Status:** Implemented; remediated Production Pilot accepted
 **Baseline:** DLMF v0.1.1 Memory Distillation & Provider Boundary Amendment
 **Predecessor:** DLMF-SG-007
 **Semantic policy:** `dlmf-semantic-v6`
@@ -107,3 +107,13 @@ The failed Apply schema, detailed mode-0600 report, content-minimized semantic-r
 report, and append-only review decisions remain preserved. They are not rewritten
 or deleted after remediation. A new run is new evidence; it cannot retroactively
 turn the previous blocked gate into a pass.
+
+## Remediated production result
+
+Plan `pilot_20260909175007` and checksum-pinned Apply
+`pilot_20260909175112` completed all five receipts: 1,113 provider units produced
+six candidates, five canonical memories, and one governed merge. All five
+deterministic manual samples were approved and the read-only gate reported
+`ELIGIBLE`.
+
+The eligible result did not activate pruning or insight promotion. Both remained

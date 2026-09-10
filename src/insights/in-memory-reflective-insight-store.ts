@@ -19,8 +19,27 @@ export class InMemoryReflectiveInsightStore implements ReflectiveInsightStore {
       throw new ValidationError("reflective insights cannot perform canonical writes");
     }
     const existing = this.insights.get(insight.insightId);
-    if (existing !== undefined && immutableState(existing) !== immutableState(insight)) {
-      throw new ValidationError("reflective insight write changed immutable fields");
+    if (existing === undefined) {
+      if (insight.status !== "pending") {
+        throw new ValidationError("new reflective insights must start pending");
+      }
+    } else {
+      if (immutableState(existing) !== immutableState(insight)) {
+        throw new ValidationError("reflective insight write changed immutable fields");
+      }
+      if (
+        existing.status !== insight.status &&
+        !(
+          (existing.status === "pending" &&
+            ["accepted", "rejected", "superseded"].includes(insight.status)) ||
+          (existing.status === "accepted" && insight.status === "superseded")
+        )
+      ) {
+        throw new ValidationError("reflective insight status transition is not monotonic");
+      }
+      if (Date.parse(insight.updatedAt) < Date.parse(existing.updatedAt)) {
+        throw new ValidationError("reflective insight update time regressed");
+      }
     }
     this.insights.set(insight.insightId, clone(insight));
   }

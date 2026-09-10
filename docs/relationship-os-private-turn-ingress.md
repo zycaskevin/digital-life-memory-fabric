@@ -103,8 +103,9 @@ npm run relationship-os:serve
 
 Bootstrap is non-destructive:
 
-- an empty configured schema receives DLMF migrations 0001–0004;
-- a complete schema is only verified;
+- an empty configured schema receives DLMF migrations 0001–0007;
+- a complete pre-0006 schema is upgraded through migrations 0006 and 0007 exactly
+  once; an already-current schema is only verified;
 - a partially initialized schema fails closed.
 
 ## Privacy and retention
