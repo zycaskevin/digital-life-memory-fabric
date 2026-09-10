@@ -22,6 +22,10 @@
     "pilot:memory-distillation:inspect": "node scripts/production-pilot/inspect-memory-distillation-report.mjs",
     "pilot:memory-distillation:inspect-run": "node scripts/production-pilot/inspect-pilot-run.mjs",
     "pilot:semantic-review": "npm run build && node scripts/production-pilot/semantic-review-canary.mjs",
+    "pilot:insight-promotion": "npm run build && node scripts/production-pilot/insight-promotion-operator.mjs",
+    "pilot:insight-promotion:seal-approval": "npm run build && node scripts/production-pilot/seal-insight-promotion-approval.mjs",
+    "pilot:insight-promotion:migrate": "node scripts/production-pilot/insight-promotion-migration.mjs",
+    "pilot:insight-promotion:seed-canary": "npm run build && node scripts/production-pilot/seed-insight-promotion-canary.mjs",
     "relationship-os:bootstrap": "node scripts/relationship-os-ingress-bootstrap.mjs",
     "relationship-os:serve": "npm run build && node scripts/relationship-os-ingress-server.mjs",
     "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs"
