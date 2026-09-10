@@ -16,6 +16,8 @@ export * from "./ingress/relationship-os-http.js";
 export * from "./ingress/relationship-os-runtime.js";
 export * from "./integration/development-reference.js";
 export * from "./integration/development-reference-http.js";
+export * from "./integration/digital-life-stack-http.js";
+export * from "./integration/digital-life-stack-runtime.js";
 export * from "./store/canonical-memory-store.js";
 export * from "./store/in-memory-canonical-memory-store.js";
 export * from "./store/postgres-canonical-memory-store.js";

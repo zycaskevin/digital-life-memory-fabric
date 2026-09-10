@@ -611,8 +611,10 @@ exactly zero-write replay.
 
 Migration rollout requires a non-empty mode-`0600` schema backup and binds its checksum
 to migration 0007 bytes and pre-migration state. The accepted pilot schema is the only
-existing production-pilot migration target. The active Relationship OS schema is not a
-target because its deployed runtime and migration foundation predate this packet.
+existing production-pilot migration target. Relationship OS is not a DLMF consumer and
+is therefore outside DLMF migration/runtime/deployment scope entirely; historical
+Relationship OS artifacts in this repository are development/reference evidence only.
+Digital-Life-Stack is the sole formal upper-system DLMF integration target.
 
 The first promotion activation is restricted to a new
 `dlmf_promotion_canary_YYYYMMDDhhmmss` schema containing synthetic reviewed evidence.

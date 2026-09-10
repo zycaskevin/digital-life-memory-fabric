@@ -11,6 +11,10 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 - Current milestone: **DLMF v0.1.1 — Production Insight Promotion Operator (DLMF-SG-010)**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
+- Formal upper-system integration target: **Digital-Life-Stack only**
+- Relationship OS DLMF artifacts: **deprecated/development-only historical evidence**
+
+Integration decision: [DLMF → Digital-Life-Stack Integration v1](docs/digital-life-stack-integration-v1.md). Relationship OS artifact classification: [audit record](docs/relationship-os-dlmf-artifact-audit.md).
 
 Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md), [DLMF-SG-005 reflection and retention completion](docs/dlmf-sg-005-reflection-retention-completion.md), [DLMF-SG-006 reviewed semantic concept registry](docs/dlmf-sg-006-reviewed-semantic-concept-registry.md), [DLMF-SG-007 semantic review queue and canary gate](docs/dlmf-sg-007-semantic-review-queue-and-canary.md), [DLMF-SG-008 production canary semantic remediation](docs/dlmf-sg-008-production-canary-semantic-remediation.md), [DLMF-SG-009 governed insight promotion hardening](docs/dlmf-sg-009-governed-insight-promotion-hardening.md), and [DLMF-SG-010 production insight promotion operator](docs/dlmf-sg-010-production-insight-promotion-operator.md).
 

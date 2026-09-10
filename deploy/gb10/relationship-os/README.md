@@ -1,6 +1,8 @@
 # GB10 deployment — DLMF Relationship OS private-turn ingress
 
-This bundle installs the PM-001F DLMF ingress as a loopback-only host service. It does not grant Relationship OS canonical-memory authority and does not activate the Relationship OS Worker.
+> **DEPRECATED / HISTORICAL ONLY (2026-09-10):** Do not use this bundle for a new deployment, migration, upgrade, or restart. Relationship OS is not a DLMF consumer. These files remain solely as historical deployment evidence and compatibility reference. Current DLMF integration work targets Digital-Life-Stack only.
+
+Historically, this bundle installed the PM-001F DLMF ingress as a loopback-only host service. It did not grant Relationship OS canonical-memory authority and did not activate the Relationship OS Worker.
 
 ## Safety boundary
 

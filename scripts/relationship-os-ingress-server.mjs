@@ -1,3 +1,5 @@
+// DEPRECATED / DEVELOPMENT-ONLY: historical PM-001F compatibility tooling.
+// Relationship OS is not a current DLMF consumer. Do not use for new migration/deployment work.
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
