@@ -575,6 +575,8 @@ reflectionPolicyVersion    = pilot-reflect-v3-tool-grounded
 Semantic v6 admits equal-polarity English and Traditional Chinese paraphrases for
 the narrow reviewed 8B generation-routing family. It also distinguishes completed
 review events, task/closure project state, and execution/quote time-window technical
+facts from user preferences. Unknown concepts remain exact-identity-only; opposite
+polarity remains review-gated.
 
 The authorized remediated Plan `pilot_20260909175007` and checksum-pinned Apply
 `pilot_20260909175112` then processed the five selected sessions without rewriting
@@ -595,5 +597,42 @@ insight, cross-process serialization, append-only events, and monotonic database
 transitions. This implementation packet does not replay the Production Pilot, promote
 its pending insight, or enable automatic pruning/promotion. Production use remains a
 separate evidence-bearing action.
-constraints. Unknown concepts remain exact-identity-only; opposite polarity remains
-review-gated. The failed schema and reports are preserved as immutable evidence.
+
+## DLMF-SG-010 production insight promotion operator
+
+The operator makes that separate action executable through `Plan -> Dry-run -> Apply`.
+Plans bind the exact pending insight, evidence-closed canonical support revisions,
+DLMF semantic decision, expected create/merge operation, promotion policy, scoped row
+counts, expiry, and disabled automation flags. A separately sealed approval manifest
+binds an identified same-life reviewer and external approval evidence to that plan.
+Apply rechecks all inputs, uses DLMF-owned candidate and canonical authorities, verifies
+the ordered `approved`, `candidate_linked`, `committed` event closure, and requires an
+exactly zero-write replay.
+
+Migration rollout requires a non-empty mode-`0600` schema backup and binds its checksum
+to migration 0007 bytes and pre-migration state. The accepted pilot schema is the only
+existing production-pilot migration target. The active Relationship OS schema is not a
+target because its deployed runtime and migration foundation predate this packet.
+
+The first promotion activation is restricted to a new
+`dlmf_promotion_canary_YYYYMMDDhhmmss` schema containing synthetic reviewed evidence.
+The existing phase-leakage insight remains excluded and must stay pending, ineligible,
+evidence-open, and `canonicalWritePerformed=false`. Automatic pruning and automatic
+promotion remain disabled.
+
+### SG-010 production execution record — 2026-09-10
+
+Accepted schema `dlmf_pilot_v011_20260909175112` received migration 0007 under
+plan `migplan_f60e2daf74382227d350003c76472111` after a 406,642-byte mode-`0600`
+custom PostgreSQL backup. Candidate/head/revision/change/promotion counts remained
+`6/5/6/6/0`; the phase-leakage insight remained
+`pending/ineligible/evidence-open/canonicalWritePerformed=false`.
+
+Synthetic schema `dlmf_promotion_canary_20260910224506` received migrations
+0001-0007 and one synthetic evidence-closed pending insight. Promotion plan
+`promplan_7d51662df41ef7dc24f2d2fbb88fc6b8` passed Dry-run, then Apply added exactly
+`1 candidate / 1 head / 1 revision / 1 change / 1 promotion / 3 events`. Events were
+`approved -> candidate_linked -> committed`. An identical Apply replay added zero
+rows. Hindsight remained derivation provenance only; the insight object's
+`canonicalWritePerformed` stayed false. All artifacts are mode `0600` and contain no
+raw memory content or database credentials. Relationship OS was untouched.

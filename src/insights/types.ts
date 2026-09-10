@@ -3,6 +3,7 @@ import type {
   EpistemicStatus,
   MemoryAuthor,
   MemoryId,
+  MemoryRevisionRef,
   MemoryScope,
   MemoryType,
 } from "../domain/types.js";
@@ -90,4 +91,20 @@ export interface InsightPromotionResult {
   insight: ReflectiveInsight;
   record: InsightPromotionRecord;
   canonicalMemoryId: MemoryId;
+}
+
+export interface InsightPromotionPreflight {
+  insightId: ReflectiveInsightId;
+  scope: MemoryScope;
+  currentStatus: ReflectiveInsightStatus;
+  insightFingerprint: string;
+  promotionPolicyVersion: string;
+  eligibility: InsightPromotionEligibility;
+  memoryType: MemoryType;
+  semanticKey: string;
+  expectedOperation: "create" | "merge";
+  baseMemoryId?: MemoryId;
+  baseRevision?: number;
+  supportingRevisions: Array<MemoryRevisionRef & { contentHash: string }>;
+  assessedAt: string;
 }

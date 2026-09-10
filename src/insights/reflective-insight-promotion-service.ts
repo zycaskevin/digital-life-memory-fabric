@@ -26,6 +26,7 @@ import type { ReflectiveInsightStore } from "./reflective-insight-store.js";
 import type {
   InsightPromotionRecord,
   InsightPromotionRecordId,
+  InsightPromotionPreflight,
   InsightPromotionRequest,
   InsightPromotionResult,
   ReflectiveInsight,
@@ -152,6 +153,23 @@ export class ReflectiveInsightPromotionService {
       () => this.promoteLocked(request),
     );
   }
+  async preflight(
+    scope: InsightPromotionRequest["scope"],
+    insightId: InsightPromotionRequest["insightId"],
+  ): Promise<InsightPromotionPreflight> {
+    const insight = await this.dependencies.insightStore.get(insightId);
+    if (insight === undefined) {
+      throw new ValidationError(`reflective insight ${insightId} was not found`);
+    }
+    if (!sameScope(insight.scope, scope)) {
+      throw new ValidationError("reflective insight scope does not match promotion scope");
+    }
+    if (insight.status === "rejected" || insight.status === "superseded") {
+      throw new ValidationError(`reflective insight status=${insight.status} cannot be promoted`);
+    }
+    return this.buildPreflight(insight);
+  }
+
 
   private async promoteLocked(
     request: InsightPromotionRequest,
@@ -200,16 +218,12 @@ export class ReflectiveInsightPromotionService {
       throw new ValidationError("insight promotion approval could not be verified");
     }
 
+    const preflight = await this.buildPreflight(insight);
     const support = await this.requireEvidenceClosure(insight);
-    const acceptedAssessment = this.promotionGate.assess({
-      ...insight,
-      status: "accepted",
-    });
+    const acceptedAssessment = preflight.eligibility;
     const unit = providerUnitFor(insight);
-    const classification = this.semanticGovernance.classify(unit);
-    unit.memoryType = classification.memoryType;
-    unit.speakerProvenance = classification.speakerProvenance;
-    unit.semanticKey = classification.semanticKey;
+    unit.memoryType = preflight.memoryType;
+    unit.semanticKey = preflight.semanticKey;
 
     const timestamp = this.clock.now();
     const baseRecord: InsightPromotionRecord = prior ?? {
@@ -221,8 +235,8 @@ export class ReflectiveInsightPromotionService {
       approvedBy: request.approvedBy,
       approvalEvidenceIds: request.approvalEvidenceIds,
       eligibility: acceptedAssessment,
-      memoryType: classification.memoryType,
-      semanticKey: classification.semanticKey,
+      memoryType: preflight.memoryType,
+      semanticKey: preflight.semanticKey,
       status: acceptedAssessment.eligible ? "approved" : "rejected",
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -250,7 +264,7 @@ export class ReflectiveInsightPromotionService {
       const candidateInput = await this.candidateInput(
         acceptedInsight,
         unit,
-        classification.semanticKey,
+        preflight.semanticKey,
         support,
         request,
       );
@@ -345,6 +359,66 @@ export class ReflectiveInsightPromotionService {
     return { insight, record, canonicalMemoryId: record.canonicalMemoryId };
   }
 
+  private async buildPreflight(
+    insight: ReflectiveInsight,
+  ): Promise<InsightPromotionPreflight> {
+    const support = await this.requireEvidenceClosure(insight);
+    const eligibility = this.promotionGate.assess({
+      ...insight,
+      status: "accepted",
+    });
+    const unit = providerUnitFor(insight);
+    const classification = this.semanticGovernance.classify(unit);
+    unit.memoryType = classification.memoryType;
+    unit.speakerProvenance = classification.speakerProvenance;
+    unit.semanticKey = classification.semanticKey;
+    const current =
+      await this.dependencies.canonicalStore.findCurrentRevisionBySemanticKey(
+        insight.scope,
+        classification.semanticKey,
+      );
+    let expectedOperation: InsightPromotionPreflight["expectedOperation"] =
+      "create";
+    const base: Pick<
+      InsightPromotionPreflight,
+      "baseMemoryId" | "baseRevision"
+    > = {};
+    if (current !== undefined) {
+      const relation = this.semanticGovernance.relate(unit, current);
+      if (
+        relation === "contradicts" ||
+        relation === "unrelated"
+      ) {
+        throw new ValidationError(
+          `accepted insight cannot auto-merge semantic relation=${relation}`,
+        );
+      }
+      expectedOperation = "merge";
+      base.baseMemoryId = current.memoryId;
+      base.baseRevision = current.revision;
+    }
+    return {
+      insightId: insight.insightId,
+      scope: insight.scope,
+      currentStatus: insight.status,
+      insightFingerprint: sha256({
+        insight,
+        promotionPolicyVersion: this.promotionPolicyVersion,
+      }),
+      promotionPolicyVersion: this.promotionPolicyVersion,
+      eligibility,
+      memoryType: classification.memoryType,
+      semanticKey: classification.semanticKey,
+      expectedOperation,
+      ...base,
+      supportingRevisions: support.map((revision) => ({
+        memoryId: revision.memoryId,
+        revision: revision.revision,
+        contentHash: revision.contentHash,
+      })),
+      assessedAt: this.clock.now(),
+    };
+  }
   private async requireEvidenceClosure(
     insight: ReflectiveInsight,
   ): Promise<MemoryRevision[]> {
