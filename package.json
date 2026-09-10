@@ -26,6 +26,8 @@
     "pilot:insight-promotion:seal-approval": "npm run build && node scripts/production-pilot/seal-insight-promotion-approval.mjs",
     "pilot:insight-promotion:migrate": "node scripts/production-pilot/insight-promotion-migration.mjs",
     "pilot:insight-promotion:seed-canary": "npm run build && node scripts/production-pilot/seed-insight-promotion-canary.mjs",
+    "digital-life-stack:bootstrap": "node scripts/digital-life-stack-bootstrap.mjs",
+    "digital-life-stack:health": "node scripts/digital-life-stack-health.mjs",
     "relationship-os:bootstrap": "node scripts/relationship-os-ingress-bootstrap.mjs",
     "relationship-os:serve": "npm run build && node scripts/relationship-os-ingress-server.mjs",
     "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs"

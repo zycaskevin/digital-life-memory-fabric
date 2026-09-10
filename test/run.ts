@@ -16,6 +16,8 @@ import "./relationship-os-deployment.test.js";
 import "./relationship-os-bootstrap.integration.test.js";
 import "./development-reference-gateway.test.js";
 import "./development-reference-gateway-audit.test.js";
+import "./digital-life-stack-ingress.test.js";
+import "./digital-life-stack-schema.integration.test.js";
 import "./postgres.integration.test.js";
 import "./postgres-semantic-race.integration.test.js";
 import "./postgres-insight-promotion-race.integration.test.js";
