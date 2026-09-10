@@ -84,12 +84,15 @@ and replay workflow used by later governed operations.
 The existing Production Pilot phase-leakage insight is excluded: it remains pending,
 ineligible, evidence-open, and `canonicalWritePerformed=false`.
 
-### DR-SG-047 — Relationship OS upgrade is a separate deployment packet
+### DR-SG-047 — Relationship OS is not a DLMF integration target
 
-The active Relationship OS deployment predates migrations 0005 through 0007 and has a
-different deployed runtime/bootstrap. Applying 0007 directly would violate migration
-preconditions. SG-010 therefore neither changes that schema nor restarts its service.
-A separate runtime upgrade, backup, compatibility test, and rollout is required.
+Owner architecture correction supersedes the earlier assumption that Relationship OS
+would receive a later DLMF upgrade packet. Relationship OS does not consume DLMF and
+must not receive DLMF schema migration, runtime upgrade, deployment, or restart work.
+Existing Relationship OS scripts/tests/deployment files in this repository are retained
+only as historical/development references and regression evidence. Digital-Life-Stack
+is the sole formal upper-system DLMF integration target. SG-010 did not change or
+restart the active Relationship OS service.
 
 ## Commands
 
@@ -146,8 +149,10 @@ canonical source.
 On 2026-09-10, the full gate used fresh disposable PostgreSQL schemas and passed
 `130/130` tests with zero failures and zero skips, followed by strict TypeScript
 typecheck, production build, and `git diff --check`. The suite includes migration
-0001-0007, Relationship OS bootstrap upgrade/replay, multiprocess semantic-key
-loser-to-merge, multiprocess single-winner promotion, and the operator E2E.
+0001-0007, a legacy Relationship OS bootstrap upgrade/replay regression retained only
+as historical evidence, multiprocess semantic-key loser-to-merge, multiprocess
+single-winner promotion, and the operator E2E. That legacy regression is not a current
+consumer contract or future deployment requirement.
 
 The accepted schema `dlmf_pilot_v011_20260909175112` was backed up as a 406,642-byte
 mode-`0600` custom PostgreSQL dump. Migration plan

@@ -1,7 +1,9 @@
 # DLMF Relationship OS Private-Turn Ingress
 
-**Status:** PM-001F integration surface
-**Authority:** Digital Life Memory Fabric remains the sole canonical memory authority.
+> **DEPRECATED / DEVELOPMENT-ONLY (2026-09-10):** Relationship OS is not a DLMF consumer. This document is retained as historical PM-001F evidence and must not be used as a current production architecture, migration plan, deployment runbook, or restart instruction. The formal upper-system integration target is Digital-Life-Stack; see `digital-life-stack-integration-v1.md` and `relationship-os-dlmf-artifact-audit.md`.
+
+**Status:** Historical PM-001F integration surface; superseded for target architecture
+**Authority at the time:** Digital Life Memory Fabric remained the sole canonical memory authority.
 
 ## Purpose
 

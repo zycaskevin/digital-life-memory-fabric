@@ -1,0 +1,23 @@
+[Unit]
+Description=Digital Life Memory Fabric - Digital-Life-Stack ingress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_SERVICE_USER
+Group=REPLACE_WITH_SERVICE_GROUP
+WorkingDirectory=REPLACE_WITH_DLMF_REPO
+EnvironmentFile=/etc/dlmf/digital-life-stack.env
+ExecStart=REPLACE_WITH_NODE_BIN scripts/digital-life-stack-ingress-server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/dlmf/digital-life-stack
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
