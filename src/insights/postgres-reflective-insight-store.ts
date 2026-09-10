@@ -68,6 +68,53 @@ export class PostgresReflectiveInsightStore implements ReflectiveInsightStore {
     if (insight.canonicalWritePerformed !== false) {
       throw new ValidationError("reflective insights cannot perform canonical writes");
     }
+    if (insight.status !== "pending") {
+      const result = await this.pool.query(
+        `UPDATE reflective_insights SET
+           status=$14,
+           promotion_eligibility=$15::jsonb,
+           updated_at=$18
+         WHERE insight_id=$1
+           AND tenant_id=$2
+           AND life_did=$3
+           AND memory_namespace=$4
+           AND proposition=$5
+           AND epistemic_status=$6
+           AND supporting_memory_ids=$7::text[]
+           AND supporting_evidence_ids=$8::text[]
+           AND contradicting_memory_ids=$9::text[]
+           AND confidence=$10
+           AND derivation_provider=$11
+           AND derivation_model=$12
+           AND derivation_run_id=$13
+           AND canonical_write_performed=$16
+           AND created_at=$17`,
+        [
+          insight.insightId,
+          insight.scope.tenantId,
+          insight.scope.lifeDid,
+          insight.scope.memoryNamespace,
+          insight.proposition,
+          insight.epistemicStatus,
+          insight.supportingMemoryIds,
+          insight.supportingEvidenceIds,
+          insight.contradictingMemoryIds,
+          insight.confidence,
+          insight.derivationProvider,
+          insight.derivationModel,
+          insight.derivationRunId,
+          insight.status,
+          JSON.stringify(insight.promotionEligibility),
+          insight.canonicalWritePerformed,
+          insight.createdAt,
+          insight.updatedAt,
+        ],
+      );
+      if (result.rowCount !== 1) {
+        throw new ValidationError("reflective insight write changed immutable fields");
+      }
+      return;
+    }
     const result = await this.pool.query(
       `INSERT INTO reflective_insights (
          insight_id, tenant_id, life_did, memory_namespace, proposition,

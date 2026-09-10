@@ -50,15 +50,23 @@ function evidenceId(ref: EvidenceRef): string {
   return `${ref.sourceType}:${ref.sourceRef}`;
 }
 
-function evidenceRef(value: string): EvidenceRef {
+function evidenceRef(
+  value: string,
+  field = "supportingEvidenceId",
+): EvidenceRef {
   const separator = value.indexOf(":");
-  if (separator <= 0 || separator === value.length - 1) {
-    throw new ValidationError(`supportingEvidenceId ${value} must be sourceType:sourceRef`);
+  const sourceType = value.slice(0, separator);
+  const sourceRef = value.slice(separator + 1);
+  if (
+    value !== value.trim() ||
+    separator <= 0 ||
+    separator === value.length - 1 ||
+    sourceType !== sourceType.trim() ||
+    sourceRef !== sourceRef.trim()
+  ) {
+    throw new ValidationError(`${field} ${value} must be sourceType:sourceRef`);
   }
-  return {
-    sourceType: value.slice(0, separator),
-    sourceRef: value.slice(separator + 1),
-  };
+  return { sourceType, sourceRef };
 }
 
 function providerUnitFor(insight: ReflectiveInsight): ProviderMemoryUnit {
@@ -68,7 +76,7 @@ function providerUnitFor(insight: ReflectiveInsight): ProviderMemoryUnit {
     memoryClass: "semantic_assertion",
     memoryKind: "reflective_insight",
     proposedContent: { text: insight.proposition },
-    evidenceRefs: insight.supportingEvidenceIds.map(evidenceRef),
+    evidenceRefs: insight.supportingEvidenceIds.map((value) => evidenceRef(value)),
     epistemicStatus: insight.epistemicStatus,
     speakerProvenance: "unknown",
     confidence: insight.confidence,
@@ -133,19 +141,37 @@ export class ReflectiveInsightPromotionService {
       dependencies.promotionGate ?? new ReflectiveInsightPromotionGate();
     this.clock = dependencies.clock ?? new SystemClock();
     this.promotionPolicyVersion =
-      dependencies.promotionPolicyVersion ?? "dlmf-insight-promotion-v1";
+      dependencies.promotionPolicyVersion ?? "dlmf-insight-promotion-v2";
   }
 
   async promote(request: InsightPromotionRequest): Promise<InsightPromotionResult> {
-    requireNonEmpty(request.idempotencyKey, "idempotencyKey");
-    if (request.approvedBy.lifeDid !== request.scope.lifeDid) {
-      throw new ValidationError("approvedBy.lifeDid must match scope.lifeDid");
-    }
+    this.validateRequest(request);
+    return this.dependencies.promotionStore.withInsightLock(
+      request.scope,
+      request.insightId,
+      () => this.promoteLocked(request),
+    );
+  }
 
+  private async promoteLocked(
+    request: InsightPromotionRequest,
+  ): Promise<InsightPromotionResult> {
     const prior = await this.dependencies.promotionStore.getByIdempotencyKey(
       request.scope,
       request.idempotencyKey,
     );
+    const governed = await this.dependencies.promotionStore.getByInsightId(
+      request.scope,
+      request.insightId,
+    );
+    if (prior === undefined && governed !== undefined) {
+      throw new ValidationError(
+        `reflective insight already has governed promotion ${governed.promotionId}`,
+      );
+    }
+    if (prior !== undefined && governed?.promotionId !== prior.promotionId) {
+      throw new ValidationError("insight promotion indexes disagree");
+    }
     if (prior !== undefined) {
       this.validateReplay(prior, request);
       if (prior.status === "rejected") {
@@ -193,6 +219,7 @@ export class ReflectiveInsightPromotionService {
       idempotencyKey: request.idempotencyKey,
       promotionPolicyVersion: this.promotionPolicyVersion,
       approvedBy: request.approvedBy,
+      approvalEvidenceIds: request.approvalEvidenceIds,
       eligibility: acceptedAssessment,
       memoryType: classification.memoryType,
       semanticKey: classification.semanticKey,
@@ -215,8 +242,8 @@ export class ReflectiveInsightPromotionService {
       canonicalWritePerformed: false,
       updatedAt: timestamp,
     };
-    await this.dependencies.insightStore.put(acceptedInsight);
     await this.dependencies.promotionStore.put(baseRecord);
+    await this.dependencies.insightStore.put(acceptedInsight);
 
     let candidateId = baseRecord.candidateId;
     if (candidateId === undefined) {
@@ -255,6 +282,31 @@ export class ReflectiveInsightPromotionService {
     };
   }
 
+  private validateRequest(request: InsightPromotionRequest): void {
+    requireNonEmpty(request.idempotencyKey, "idempotencyKey");
+    if (request.approvedBy.lifeDid !== request.scope.lifeDid) {
+      throw new ValidationError("approvedBy.lifeDid must match scope.lifeDid");
+    }
+    if (![request.approvedBy.agentId, request.approvedBy.runtimeId, request.approvedBy.deviceId]
+      .some((value) => typeof value === "string" && value.trim().length > 0)) {
+      throw new ValidationError("approvedBy requires an identified agent, runtime, or device");
+    }
+    if (
+      !Array.isArray(request.approvalEvidenceIds) ||
+      request.approvalEvidenceIds.length === 0
+    ) {
+      throw new ValidationError("insight promotion approval evidence is required");
+    }
+    if (new Set(request.approvalEvidenceIds).size !== request.approvalEvidenceIds.length) {
+      throw new ValidationError("insight promotion approval evidence must be unique");
+    }
+    for (const evidence of request.approvalEvidenceIds) {
+      if (typeof evidence !== "string") {
+        throw new ValidationError("approvalEvidenceId must be sourceType:sourceRef");
+      }
+      evidenceRef(evidence, "approvalEvidenceId");
+    }
+  }
   private validateReplay(
     record: InsightPromotionRecord,
     request: InsightPromotionRequest,
@@ -263,6 +315,8 @@ export class ReflectiveInsightPromotionService {
       record.insightId !== request.insightId ||
       !sameScope(record.scope, request.scope) ||
       stableStringify(record.approvedBy) !== stableStringify(request.approvedBy) ||
+      stableStringify(record.approvalEvidenceIds) !==
+        stableStringify(request.approvalEvidenceIds) ||
       record.promotionPolicyVersion !== this.promotionPolicyVersion
     ) {
       throw new ValidationError(
@@ -375,7 +429,7 @@ export class ReflectiveInsightPromotionService {
       speakerProvenance: "unknown" as const,
       semanticKey,
       proposedContent: { text: insight.proposition },
-      evidenceRefs: insight.supportingEvidenceIds.map(evidenceRef),
+      evidenceRefs: insight.supportingEvidenceIds.map((value) => evidenceRef(value)),
       epistemicStatus: insight.epistemicStatus,
       confidence: insight.confidence,
       producer: { kind: "runtime" as const, id: "dlmf-insight-promotion" },

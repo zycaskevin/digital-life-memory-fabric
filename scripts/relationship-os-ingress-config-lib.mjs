@@ -94,6 +94,7 @@ export function checkRelationshipOsIngressConfig(
     "migrations/0004_canonical_admission.sql",
     "migrations/0005_semantic_governance.sql",
     "migrations/0006_semantic_review_queue.sql",
+    "migrations/0007_insight_promotion_governance.sql",
     "scripts/relationship-os-ingress-bootstrap.mjs",
     "scripts/relationship-os-ingress-server.mjs",
   ]) {

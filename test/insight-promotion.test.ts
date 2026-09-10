@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Pool } from "pg";
 
 import {
   CanonicalMemoryAuthority,
@@ -7,6 +8,7 @@ import {
   InMemoryInsightPromotionRecordStore,
   InMemoryReflectiveInsightStore,
   MemoryCandidateService,
+  PostgresInsightPromotionRecordStore,
   ReflectiveInsightPromotionGate,
   ReflectiveInsightPromotionService,
   type MemoryScope,
@@ -20,6 +22,7 @@ const scope: MemoryScope = {
 };
 
 const approvalVerifier = { verifyApproval: async () => true };
+const approvalEvidenceIds = ["approval:governed-review-receipt"];
 
 async function seedSupport(store: InMemoryCanonicalMemoryStore) {
   const candidate = await new MemoryCandidateService(store).ingest({
@@ -101,6 +104,7 @@ test("DLMF-SG-002 explicitly accepted evidence-closed insight promotes through D
     insightId: insight.insightId,
     scope,
     approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+    approvalEvidenceIds,
     idempotencyKey: "accept-phase-leakage-v1",
   } as const;
 
@@ -110,6 +114,13 @@ test("DLMF-SG-002 explicitly accepted evidence-closed insight promotes through D
   assert.equal(first.record.status, "committed");
   assert.equal(replay.record.promotionId, first.record.promotionId);
   assert.equal(replay.canonicalMemoryId, first.canonicalMemoryId);
+  const events = await promotionStore.listEvents(scope, first.record.promotionId);
+  assert.deepEqual(events.map((event) => event.eventType), [
+    "approved",
+    "candidate_linked",
+    "committed",
+  ]);
+  assert.deepEqual(events[0]?.approvalEvidenceIds, approvalEvidenceIds);
   assert.equal(first.insight.status, "accepted");
   assert.equal(first.insight.canonicalWritePerformed, false);
   assert.equal(first.insight.derivationProvider, "hindsight");
@@ -128,6 +139,144 @@ test("DLMF-SG-002 explicitly accepted evidence-closed insight promotes through D
   assert.equal(
     (await canonicalStore.getCandidate(first.record.candidateId!))?.status,
     "ACCEPTED",
+  );
+});
+
+test("DLMF-SG-009 concurrent replay yields one governed promotion and one canonical result", async () => {
+  const canonicalStore = new InMemoryCanonicalMemoryStore();
+  const support = await seedSupport(canonicalStore);
+  const insightStore = new InMemoryReflectiveInsightStore();
+  const promotionStore = new InMemoryInsightPromotionRecordStore();
+  const insight = pendingInsight(support.head.memoryId, {
+    insightId: "insight_concurrent_promotion_replay",
+  });
+  await insightStore.put(insight);
+  const service = new ReflectiveInsightPromotionService({
+    canonicalStore,
+    insightStore,
+    promotionStore,
+    approvalVerifier,
+  });
+  const request = {
+    insightId: insight.insightId,
+    scope,
+    approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+    approvalEvidenceIds,
+    idempotencyKey: "concurrent-promotion-replay-v1",
+  };
+
+  const [first, second] = await Promise.all([
+    service.promote(request),
+    service.promote(request),
+  ]);
+
+  assert.equal(first.record.promotionId, second.record.promotionId);
+  assert.equal(first.canonicalMemoryId, second.canonicalMemoryId);
+  assert.equal((await promotionStore.listEvents(scope, first.record.promotionId)).length, 3);
+});
+
+test("DLMF-SG-009 one reflective insight cannot be promoted under a second key", async () => {
+  const canonicalStore = new InMemoryCanonicalMemoryStore();
+  const support = await seedSupport(canonicalStore);
+  const insightStore = new InMemoryReflectiveInsightStore();
+  const promotionStore = new InMemoryInsightPromotionRecordStore();
+  const insight = pendingInsight(support.head.memoryId, {
+    insightId: "insight_single_promotion_record",
+  });
+  await insightStore.put(insight);
+  const service = new ReflectiveInsightPromotionService({
+    canonicalStore,
+    insightStore,
+    promotionStore,
+    approvalVerifier,
+  });
+  await service.promote({
+    insightId: insight.insightId,
+    scope,
+    approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+    approvalEvidenceIds,
+    idempotencyKey: "single-promotion-first",
+  });
+
+  await assert.rejects(
+    service.promote({
+      insightId: insight.insightId,
+      scope,
+      approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds,
+      idempotencyKey: "single-promotion-second",
+    }),
+    /already has governed promotion/,
+  );
+  assert.equal(await promotionStore.getByIdempotencyKey(scope, "single-promotion-second"), undefined);
+});
+
+test("DLMF-SG-009 refuses an approval without durable evidence identity", async () => {
+  const canonicalStore = new InMemoryCanonicalMemoryStore();
+  const support = await seedSupport(canonicalStore);
+  const insightStore = new InMemoryReflectiveInsightStore();
+  const promotionStore = new InMemoryInsightPromotionRecordStore();
+  const insight = pendingInsight(support.head.memoryId, {
+    insightId: "insight_approval_without_evidence",
+  });
+  await insightStore.put(insight);
+
+  await assert.rejects(
+    new ReflectiveInsightPromotionService({
+      canonicalStore,
+      insightStore,
+      promotionStore,
+      approvalVerifier,
+    }).promote({
+      insightId: insight.insightId,
+      scope,
+      approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds: [],
+      idempotencyKey: "missing-approval-evidence",
+    }),
+    /approval evidence is required/,
+  );
+});
+
+test("DLMF-SG-009 refuses anonymous approval and duplicate approval evidence", async () => {
+  const service = new ReflectiveInsightPromotionService({
+    canonicalStore: new InMemoryCanonicalMemoryStore(),
+    insightStore: new InMemoryReflectiveInsightStore(),
+    promotionStore: new InMemoryInsightPromotionRecordStore(),
+    approvalVerifier,
+  });
+  const request = {
+    insightId: "insight_invalid_approval_identity" as ReflectiveInsight["insightId"],
+    scope,
+    approvedBy: { lifeDid: scope.lifeDid },
+    approvalEvidenceIds,
+    idempotencyKey: "invalid-approval-identity",
+  };
+
+  await assert.rejects(
+    service.promote(request),
+    /requires an identified agent, runtime, or device/,
+  );
+  await assert.rejects(
+    service.promote({
+      ...request,
+      approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds: [
+        "approval:governed-review-receipt",
+        "approval:governed-review-receipt",
+      ],
+      idempotencyKey: "duplicate-approval-evidence",
+    }),
+    /approval evidence must be unique/,
+  );
+  await assert.rejects(
+    service.promote({
+      ...request,
+      approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds: ["approval: "],
+      idempotencyKey: "malformed-approval-evidence",
+    }),
+    /approvalEvidenceId .* must be sourceType:sourceRef/,
   );
 });
 
@@ -176,6 +325,7 @@ test("DLMF-SG-002 rejects an insight when canonical evidence closure cannot be r
       insightId: insight.insightId,
       scope,
       approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds,
       idempotencyKey: "reject-missing-evidence",
     }),
     /supporting evidence closure is missing/,
@@ -208,6 +358,7 @@ test("DLMF-SG-002 keeps an explicitly reviewed insight rejected when contradicti
       insightId: insight.insightId,
       scope,
       approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds,
       idempotencyKey: "reject-contradicted-insight",
     }),
     /promotion:unresolved_contradictions/,
@@ -241,6 +392,7 @@ test("DLMF-SG-002 refuses promotion when the approval verifier cannot authentica
       insightId: insight.insightId,
       scope,
       approvedBy: { lifeDid: scope.lifeDid, agentId: "unverified-reviewer" },
+      approvalEvidenceIds,
       idempotencyKey: "reject-unverified-approval",
     }),
     /approval could not be verified/,
@@ -272,6 +424,7 @@ test("DLMF-SG-002 persists a terminal rejection when confidence is below policy 
       insightId: insight.insightId,
       scope,
       approvedBy: { lifeDid: scope.lifeDid, agentId: "human-reviewer" },
+      approvalEvidenceIds,
       idempotencyKey: "reject-low-confidence",
     }),
     /promotion:confidence_below_threshold/,
@@ -282,4 +435,20 @@ test("DLMF-SG-002 persists a terminal rejection when confidence is below policy 
   );
   assert.equal(record?.status, "rejected");
   assert.equal(record?.eligibility.evidenceClosure, false);
+});
+
+test("DLMF-SG-009 PostgreSQL promotion lock fails fast with a single-connection pool", async () => {
+  const pool = new Pool({ max: 1 });
+  try {
+    await assert.rejects(
+      new PostgresInsightPromotionRecordStore(pool).withInsightLock(
+        scope,
+        "insight_single_connection_pool" as ReflectiveInsight["insightId"],
+        async () => undefined,
+      ),
+      /at least two connections/,
+    );
+  } finally {
+    await pool.end();
+  }
 });

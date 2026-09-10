@@ -17,3 +17,4 @@ import "./development-reference-gateway.test.js";
 import "./development-reference-gateway-audit.test.js";
 import "./postgres.integration.test.js";
 import "./postgres-semantic-race.integration.test.js";
+import "./postgres-insight-promotion-race.integration.test.js";

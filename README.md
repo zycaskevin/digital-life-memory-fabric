@@ -8,11 +8,11 @@ Provider-neutral canonical memory and synchronization layer for one Digital Life
 
 - Canonical baseline: v0.1 frozen at tag `v0.1.0`
 - Active canonical amendment: **v0.1.1 — Memory Distillation & Provider Boundary**
-- Current milestone: **DLMF v0.1.1 — Production Canary Semantic Remediation (DLMF-SG-008)**
+- Current milestone: **DLMF v0.1.1 — Governed Reflective Insight Promotion Hardening (DLMF-SG-009)**
 - Runtime: Node.js 22 + strict TypeScript
 - Canonical persistence target: PostgreSQL
 
-Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md), [DLMF-SG-005 reflection and retention completion](docs/dlmf-sg-005-reflection-retention-completion.md), [DLMF-SG-006 reviewed semantic concept registry](docs/dlmf-sg-006-reviewed-semantic-concept-registry.md), [DLMF-SG-007 semantic review queue and canary gate](docs/dlmf-sg-007-semantic-review-queue-and-canary.md), and [DLMF-SG-008 production canary semantic remediation](docs/dlmf-sg-008-production-canary-semantic-remediation.md).
+Decision records: [DLMF-SG-002 concurrency, multilingual semantics, and insight promotion](docs/dlmf-sg-002-concurrency-multilingual-promotion.md), [DLMF-SG-003 Production Pilot epistemic remediation](docs/dlmf-sg-003-production-pilot-epistemic-remediation.md), [DLMF-SG-004 Production preference-boundary remediation](docs/dlmf-sg-004-production-preference-boundary-remediation.md), [DLMF-SG-005 reflection and retention completion](docs/dlmf-sg-005-reflection-retention-completion.md), [DLMF-SG-006 reviewed semantic concept registry](docs/dlmf-sg-006-reviewed-semantic-concept-registry.md), [DLMF-SG-007 semantic review queue and canary gate](docs/dlmf-sg-007-semantic-review-queue-and-canary.md), [DLMF-SG-008 production canary semantic remediation](docs/dlmf-sg-008-production-canary-semantic-remediation.md), and [DLMF-SG-009 governed insight promotion hardening](docs/dlmf-sg-009-governed-insight-promotion-hardening.md).
 
 ## Architectural boundary
 
@@ -255,6 +255,7 @@ migrations/0003_memory_distillation.sql
 migrations/0004_canonical_admission.sql
 migrations/0005_semantic_governance.sql
 migrations/0006_semantic_review_queue.sql
+migrations/0007_insight_promotion_governance.sql
 ```
 
 The PostgreSQL adapter uses:

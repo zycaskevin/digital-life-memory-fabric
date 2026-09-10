@@ -37,7 +37,13 @@ export interface ReflectiveInsight {
 }
 
 export type InsightPromotionRecordId = `prom_${string}`;
+export type InsightPromotionEventId = `promevt_${string}`;
 export type InsightPromotionStatus = "approved" | "committed" | "rejected";
+export type InsightPromotionEventType =
+  | "approved"
+  | "candidate_linked"
+  | "committed"
+  | "rejected";
 
 export interface InsightPromotionRecord {
   promotionId: InsightPromotionRecordId;
@@ -46,6 +52,7 @@ export interface InsightPromotionRecord {
   idempotencyKey: string;
   promotionPolicyVersion: string;
   approvedBy: MemoryAuthor;
+  approvalEvidenceIds: string[];
   eligibility: InsightPromotionEligibility;
   memoryType: MemoryType;
   semanticKey: string;
@@ -56,10 +63,26 @@ export interface InsightPromotionRecord {
   updatedAt: string;
 }
 
+export interface InsightPromotionEvent {
+  eventId: InsightPromotionEventId;
+  promotionId: InsightPromotionRecordId;
+  insightId: ReflectiveInsightId;
+  scope: MemoryScope;
+  eventType: InsightPromotionEventType;
+  status: InsightPromotionStatus;
+  approvedBy: MemoryAuthor;
+  approvalEvidenceIds: string[];
+  eligibility: InsightPromotionEligibility;
+  candidateId?: CandidateId;
+  canonicalMemoryId?: MemoryId;
+  occurredAt: string;
+}
+
 export interface InsightPromotionRequest {
   insightId: ReflectiveInsightId;
   scope: MemoryScope;
   approvedBy: MemoryAuthor;
+  approvalEvidenceIds: string[];
   idempotencyKey: string;
 }
 

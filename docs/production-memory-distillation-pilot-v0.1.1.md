@@ -246,7 +246,7 @@ For a managed local pg0 target, Apply also verifies that the systemd service is 
 and that PostgreSQL answers `SELECT 1` **before** any Hindsight provider operation.
 
 Supply a PostgreSQL database dedicated or approved for DLMF pilot schemas. The
-runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0006
+runner creates a new unique `dlmf_pilot_*` schema and applies migrations 0001-0007
 inside that schema. It does not use `public`.
 
 The Hindsight TypeScript client is loaded from OmniHarness, keeping Hindsight out of
@@ -575,5 +575,25 @@ reflectionPolicyVersion    = pilot-reflect-v3-tool-grounded
 Semantic v6 admits equal-polarity English and Traditional Chinese paraphrases for
 the narrow reviewed 8B generation-routing family. It also distinguishes completed
 review events, task/closure project state, and execution/quote time-window technical
+
+The authorized remediated Plan `pilot_20260909175007` and checksum-pinned Apply
+`pilot_20260909175112` then processed the five selected sessions without rewriting
+the blocked run. All five receipts completed. The run produced 1,113 provider units,
+six candidates, five canonical memories, and one governed merge. The five
+deterministic manual samples were approved and the final read-only semantic gate
+reported `ELIGIBLE`.
+
+Eligibility was not treated as activation. Automatic pruning and automatic insight
+promotion remained disabled, `canonicalWritePerformed` remained false for reflective
+insight handling, and no semantic-review decision wrote Canonical Memory.
+
+## DLMF-SG-009 governed insight promotion hardening
+
+Migration 0007 and promotion policy v2 harden the separately invoked DLMF-owned
+accepted-insight workflow with durable approval evidence, one promotion lineage per
+insight, cross-process serialization, append-only events, and monotonic database
+transitions. This implementation packet does not replay the Production Pilot, promote
+its pending insight, or enable automatic pruning/promotion. Production use remains a
+separate evidence-bearing action.
 constraints. Unknown concepts remain exact-identity-only; opposite polarity remains
 review-gated. The failed schema and reports are preserved as immutable evidence.

@@ -70,12 +70,17 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0006_semantic_review_queue.sql",
       "utf8",
     );
+    const promotionGovernanceMigration = await readFile(
+      "migrations/0007_insight_promotion_governance.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
     await pool.query(admissionMigration);
     await pool.query(semanticGovernanceMigration);
     await pool.query(semanticReviewMigration);
+    await pool.query(promotionGovernanceMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -303,6 +308,36 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(
       (await insightStore.get("insight_pg_phase_leakage_1"))?.proposition,
       loadedInsight.proposition,
+    );
+    await assert.rejects(
+      insightStore.put({
+        ...rejectedInsight,
+        status: "pending",
+        updatedAt: "2026-09-03T02:00:02.800Z",
+      }),
+      /immutable or monotonic state|status transition is not monotonic/,
+    );
+
+    const ungovernedAccepted = {
+      ...loadedInsight,
+      insightId: "insight_pg_ungoverned_acceptance" as const,
+      createdAt: "2026-09-03T02:00:02.900Z",
+      updatedAt: "2026-09-03T02:00:02.900Z",
+    };
+    await insightStore.put(ungovernedAccepted);
+    await assert.rejects(
+      insightStore.put({
+        ...ungovernedAccepted,
+        status: "accepted",
+        promotionEligibility: {
+          eligible: true,
+          evidenceClosure: true,
+          requiresExplicitApproval: true,
+          reasonCodes: ["promotion:evidence_closed_and_explicitly_accepted"],
+        },
+        updatedAt: "2026-09-03T02:00:03.000Z",
+      }),
+      /requires a governed promotion record/,
     );
 
     const createCandidate = await candidates.ingest({
@@ -886,6 +921,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
         lifeDid: materializationScope.lifeDid,
         agentId: "human-reviewer",
       },
+      approvalEvidenceIds: ["approval:pg-governed-review-receipt"],
       idempotencyKey: "pg-governed-insight-promotion-v1",
     });
     assert.equal(promoted.record.status, "committed");
@@ -899,6 +935,68 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(
       (await store.getRevision(promoted.canonicalMemoryId, 1))?.epistemicStatus,
       "synthesized",
+    );
+    const promotionEvents = await promotionRecords.listEvents(
+      materializationScope,
+      promoted.record.promotionId,
+    );
+    assert.deepEqual(promotionEvents.map((event) => event.eventType), [
+      "approved",
+      "candidate_linked",
+      "committed",
+    ]);
+    assert.deepEqual(
+      promotionEvents[0]?.approvalEvidenceIds,
+      ["approval:pg-governed-review-receipt"],
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE insight_promotion_events SET status='rejected' WHERE promotion_id=$1",
+        [promoted.record.promotionId],
+      ),
+      /insight promotion events are append-only/,
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE insight_promotion_records SET status='approved' WHERE promotion_id=$1",
+        [promoted.record.promotionId],
+      ),
+      /status transition is not monotonic/,
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE insight_promotion_records SET candidate_id=NULL WHERE promotion_id=$1",
+        [promoted.record.promotionId],
+      ),
+      /candidate linkage cannot change/,
+    );
+    await assert.rejects(
+      pool.query(
+        "UPDATE insight_promotion_records SET canonical_memory_id=NULL WHERE promotion_id=$1",
+        [promoted.record.promotionId],
+      ),
+      /canonical linkage cannot change/,
+    );
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO insight_promotion_records (
+           promotion_id, insight_id, tenant_id, life_did, memory_namespace,
+           idempotency_key, promotion_policy_version, approved_by,
+           approval_evidence_ids, eligibility, memory_type, semantic_key,
+           status, candidate_id, canonical_memory_id, created_at, updated_at
+         )
+         SELECT $1, insight_id, tenant_id, life_did, memory_namespace,
+                $2, promotion_policy_version, approved_by,
+                approval_evidence_ids, eligibility, memory_type, semantic_key,
+                status, candidate_id, canonical_memory_id, created_at, updated_at
+           FROM insight_promotion_records WHERE promotion_id=$3`,
+        [
+          "prom_duplicate_insight_governance",
+          "pg-governed-insight-promotion-duplicate",
+          promoted.record.promotionId,
+        ],
+      ),
+      /insight_promotion_records_insight_once_idx/,
     );
   } finally {
     await store.close();
