@@ -66,6 +66,8 @@ class FakeHindsightClient implements HindsightClientPort {
   reflectResponse: HindsightReflectResponse = { text: "" };
   retainResponse: HindsightRetainResponse | undefined;
   retainFailure?: Error;
+  asyncOperationCollision = false;
+  asyncOperationCollisionIdOverride?: string;
   operationStatuses: Array<"pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found"> = ["completed"];
 
   async retain(
@@ -75,6 +77,10 @@ class FakeHindsightClient implements HindsightClientPort {
   ): Promise<HindsightRetainResponse> {
     this.retainCalls.push({ bankId, content, options });
     if (this.retainFailure !== undefined) throw this.retainFailure;
+    if (options?.async === true && this.asyncOperationCollision) {
+      const operationId = this.asyncOperationCollisionIdOverride ?? options.operationId ?? "missing-operation-id";
+      throw new Error(`retainBatch failed: "operation_id ${operationId} is already in use"`);
+    }
     if (this.retainResponse !== undefined) return this.retainResponse;
     return options?.async === true
       ? {
@@ -588,6 +594,89 @@ test("SG-003: user projection separates source actor from epistemic status and r
       assert.equal(record(providerUnitRef)?.attributedEpistemicStatus, "uncertain");
       assert.equal(record(providerUnitRef)?.outcome, "supporting_evidence_only");
     }
+  });
+});
+
+test("MD-010 retry: duplicate deterministic role projection resumes the existing provider operation", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    client.asyncOperationCollision = true;
+    client.operationStatuses = ["processing", "completed"];
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-role-aware-retry-v1",
+      providerVersion: "test-provider",
+      asyncRetainPollIntervalMs: 1,
+      sleep: async () => undefined,
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const input = transcriptInput("session-role-aware-idempotent-retry", "distill-role-aware-retry-v1");
+    input.sourceSegments = [
+      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+    ];
+
+    const receipt = await service.run(input);
+    assert.equal(receipt.status, "complete");
+    assert.equal(client.retainCalls.length, 2);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls[0]?.operationId, client.operationStatusCalls[1]?.operationId);
+    assert.equal(receipt.errors.length, 0);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+  });
+});
+
+test("MD-010 retry: collision for a different provider operation remains fail-closed", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    client.asyncOperationCollision = true;
+    client.asyncOperationCollisionIdOverride = "00000000-0000-5000-8000-000000000000";
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-role-aware-retry-v1",
+      providerVersion: "test-provider",
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const input = transcriptInput("session-role-aware-foreign-collision", "distill-role-aware-retry-v1");
+    input.sourceSegments = [
+      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+    ];
+
+    const receipt = await service.run(input);
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "provider");
+    assert.match(receipt.errors.at(-1)?.message ?? "", /already in use/);
+    assert.equal(client.operationStatusCalls.length, 0);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
   });
 });
 

@@ -310,6 +310,11 @@ function deterministicOperationId(value: string): string {
   return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`;
 }
 
+function isExistingOperationCollision(error: unknown, operationId: string): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.message.includes(`operation_id ${operationId} is already in use`);
+}
+
 function assertRetainComplete(
   retained: HindsightRetainResponse,
   bankId: string,
@@ -491,27 +496,37 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       const userProjectionOperationId = deterministicOperationId(
         `${request.experience.checksum}|${request.distillationPolicyVersion}|${userDocumentId}|${userContent}`,
       );
-      const userRetained = await this.options.client.retain(distillation, userContent, {
-        ...(timestamp === undefined ? {} : { timestamp }),
-        context: `${request.experience.contentType}; source-actor=user`,
-        documentId: userDocumentId,
-        async: true,
-        operationId: userProjectionOperationId,
-        tags: ["dlmf", "distillation", "source_actor:user"],
-        metadata: {
-          ...commonMetadata,
-          dlmf_projection_kind: "source_actor",
-          dlmf_source_actor: "user",
-          dlmf_projection_segment_count: String(userSegments.length),
-        },
-      });
-      const acceptedOperationId = assertAsyncRetainAccepted(
-        userRetained,
-        distillation,
-        "user-source-projection",
-      );
-      if (acceptedOperationId !== userProjectionOperationId) {
-        throw new Error("Hindsight user-source-projection returned an unexpected operation_id");
+      let acceptedOperationId: string;
+      try {
+        const userRetained = await this.options.client.retain(distillation, userContent, {
+          ...(timestamp === undefined ? {} : { timestamp }),
+          context: `${request.experience.contentType}; source-actor=user`,
+          documentId: userDocumentId,
+          async: true,
+          operationId: userProjectionOperationId,
+          tags: ["dlmf", "distillation", "source_actor:user"],
+          metadata: {
+            ...commonMetadata,
+            dlmf_projection_kind: "source_actor",
+            dlmf_source_actor: "user",
+            dlmf_projection_segment_count: String(userSegments.length),
+          },
+        });
+        acceptedOperationId = assertAsyncRetainAccepted(
+          userRetained,
+          distillation,
+          "user-source-projection",
+        );
+        if (acceptedOperationId !== userProjectionOperationId) {
+          throw new Error("Hindsight user-source-projection returned an unexpected operation_id");
+        }
+      } catch (error) {
+        // The operation ID is deterministic from immutable source evidence. On
+        // retry Hindsight may reject the duplicate submit instead of returning
+        // the existing operation. Resume only the exact same operation ID and
+        // let operation-status decide whether it actually completed.
+        if (!isExistingOperationCollision(error, userProjectionOperationId)) throw error;
+        acceptedOperationId = userProjectionOperationId;
       }
       await this.waitForAsyncRetain(
         distillation,
