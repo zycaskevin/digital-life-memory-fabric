@@ -145,7 +145,7 @@ export class HermesSourceAdapter implements MemorySourceAdapter<HermesSessionPay
       sourceType: "conversation_session",
       capabilities: {
         historicalImport: "full",
-        incrementalSync: "full",
+        incrementalSync: "partial",
         stableSourceId: "full",
         timestamps: "full",
         toolEvents: "full",
@@ -165,8 +165,23 @@ export class HermesSourceAdapter implements MemorySourceAdapter<HermesSessionPay
     if (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 1000) {
       throw new Error("discover limit must be an integer between 1 and 1000");
     }
+    const checkpoint = request.checkpoint;
+    if (checkpoint !== undefined) {
+      if (
+        checkpoint.adapterName !== this.name ||
+        checkpoint.adapterVersion !== this.version ||
+        checkpoint.sourceSystem !== "hermes" ||
+        checkpoint.sourceType !== "conversation_session"
+      ) {
+        throw new Error("checkpoint does not belong to this HermesSourceAdapter version/source");
+      }
+      if (request.cursor !== undefined && checkpoint.cursor !== undefined && request.cursor !== checkpoint.cursor) {
+        throw new Error("discover cursor conflicts with checkpoint cursor");
+      }
+    }
+    const resumeCursor = request.cursor ?? checkpoint?.cursor;
     const rows = await this.#reader.listSessions({
-      ...(request.cursor === undefined ? {} : { afterSessionId: request.cursor }),
+      ...(resumeCursor === undefined ? {} : { afterSessionId: resumeCursor }),
       limit: request.limit,
     });
     const units = rows.map((row) => this.#unit(row));

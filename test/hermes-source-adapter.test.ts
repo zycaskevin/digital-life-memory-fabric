@@ -91,6 +91,7 @@ test("ADAPTER-001 inspect exposes Hermes capabilities without leaking schema int
   assert.equal(inspection.sourceSystem, "hermes");
   assert.equal(inspection.sourceType, "conversation_session");
   assert.equal(inspection.capabilities.historicalImport, "full");
+  assert.equal(inspection.capabilities.incrementalSync, "partial");
   assert.equal(inspection.capabilities.toolEvents, "full");
   assert.equal(inspection.capabilities.deletionDetection, "unknown");
   assert.equal(inspection.metadata.sessionCount, 11216);
@@ -108,6 +109,19 @@ test("ADAPTER-001 discover is bounded, cursor-based, and uses stable DLMF experi
   assert.equal(page.units[0]!.endedAt.certainty, "exact");
   await adapter.discover({ limit: 1, cursor: page.nextCursor });
   assert.equal(reader.listCalls[1]?.afterSessionId, session.id);
+
+  await adapter.discover({
+    limit: 1,
+    checkpoint: {
+      adapterName: "HermesSourceAdapter",
+      adapterVersion: "0.1.0",
+      sourceSystem: "hermes",
+      sourceType: "conversation_session",
+      cursor: page.nextCursor,
+      updatedAt: "2026-09-12T13:10:00.000Z",
+    },
+  });
+  assert.equal(reader.listCalls[2]?.afterSessionId, session.id);
 });
 
 test("ADAPTER-001 read/fingerprint/normalize preserves messages, tool evidence, provenance, and idempotent identity", async () => {
@@ -135,6 +149,20 @@ test("ADAPTER-001 read/fingerprint/normalize preserves messages, tool evidence, 
 test("ADAPTER-001 rejects foreign units and unbounded discovery", async () => {
   const adapter = new HermesSourceAdapter({ reader: new FakeHermesReader(), clock: fixedClock });
   await assert.rejects(() => adapter.discover({ limit: 1001 }), /between 1 and 1000/);
+  await assert.rejects(
+    () => adapter.discover({
+      limit: 1,
+      checkpoint: {
+        adapterName: "OtherAdapter",
+        adapterVersion: "0.1.0",
+        sourceSystem: "hermes",
+        sourceType: "conversation_session",
+        cursor: session.id,
+        updatedAt: "2026-09-12T13:10:00.000Z",
+      },
+    }),
+    /checkpoint does not belong/,
+  );
   const foreign = (await adapter.discover({ limit: 1 })).units[0]!;
   const mutated = structuredClone(foreign);
   mutated.source.sourceSystem = "openclaw";
