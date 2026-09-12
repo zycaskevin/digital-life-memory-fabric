@@ -75,6 +75,7 @@ export interface HistoricalMigrationRunnerOptions<TSourcePayload> {
   ingestor: NormalizedExperienceIngestor;
   stateStore: SourceMigrationStateStore;
   eligibility?: HistoricalMigrationEligibilityPolicy;
+  migrationId: string;
   clock?: () => Date;
 }
 
@@ -100,6 +101,7 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
   readonly #ingestor: NormalizedExperienceIngestor;
   readonly #stateStore: SourceMigrationStateStore;
   readonly #eligibility: HistoricalMigrationEligibilityPolicy;
+  readonly #migrationId: string;
   readonly #clock: () => Date;
 
   constructor(options: HistoricalMigrationRunnerOptions<TSourcePayload>) {
@@ -108,6 +110,10 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
     this.#stateStore = options.stateStore;
     this.#eligibility = options.eligibility ?? new TextualExperienceMigrationEligibilityPolicy();
     if (!this.#eligibility.version.trim()) throw new Error("eligibility policy version must not be empty");
+    if (!options.migrationId.trim() || options.migrationId.length > 256) {
+      throw new Error("migrationId must contain 1..256 characters");
+    }
+    this.#migrationId = options.migrationId;
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -242,6 +248,7 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
       sourceSystem: inspection.sourceSystem,
       sourceType: inspection.sourceType,
       eligibilityPolicyVersion: this.#eligibility.version,
+      migrationId: this.#migrationId,
       checkpoint: {
         adapterName: inspection.adapterName,
         adapterVersion: inspection.adapterVersion,
@@ -272,6 +279,7 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
       sourceSystem: inspection.sourceSystem,
       sourceType: inspection.sourceType,
       eligibilityPolicyVersion: this.#eligibility.version,
+      migrationId: this.#migrationId,
       checkpoint: prior?.checkpoint ?? {
         adapterName: inspection.adapterName,
         adapterVersion: inspection.adapterVersion,
@@ -298,6 +306,9 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
     }
     if (state.eligibilityPolicyVersion !== this.#eligibility.version) {
       throw new Error("source migration eligibility policy version changed; explicit migration-state review is required");
+    }
+    if (state.migrationId !== this.#migrationId) {
+      throw new Error("source migration destination identity changed; explicit migration-state review is required");
     }
     if (
       state.checkpoint.adapterName !== state.adapterName

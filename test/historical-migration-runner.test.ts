@@ -148,6 +148,7 @@ test("historical migration checkpoints each unit and resumes after a normalized-
   const runner = new HistoricalExperienceMigrationRunner({
     adapter,
     stateStore,
+    migrationId: "fake-destination-v1",
     eligibility: new TextualExperienceMigrationEligibilityPolicy(),
     ingestor: {
       async ingest(experience) {
@@ -189,6 +190,7 @@ test("failed downstream receipt leaves the prior durable checkpoint untouched", 
   const runner = new HistoricalExperienceMigrationRunner({
     adapter,
     stateStore,
+    migrationId: "fake-destination-v1",
     ingestor: {
       async ingest(experience) {
         return receipt(experience.experienceId, experience.sourceId === "c" ? "failed" : "complete");
@@ -216,6 +218,7 @@ test("historical migration fails closed without checkpoint advance when source m
   const runner = new HistoricalExperienceMigrationRunner({
     adapter,
     stateStore,
+    migrationId: "fake-destination-v1",
     ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
   });
   await assert.rejects(
@@ -236,6 +239,7 @@ test("eligibility policy version drift fails closed before resume", async () => 
   const base = new HistoricalExperienceMigrationRunner({
     adapter,
     stateStore,
+    migrationId: "fake-destination-v1",
     ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
   });
   await base.run({ maxUnits: 1 });
@@ -246,8 +250,34 @@ test("eligibility policy version drift fails closed before resume", async () => 
   const changed = new HistoricalExperienceMigrationRunner({
     adapter,
     stateStore,
+    migrationId: "fake-destination-v1",
     eligibility: changedPolicy,
     ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
   });
   await assert.rejects(() => changed.run({ maxUnits: 1 }), /eligibility policy version changed/);
+});
+
+test("migration destination drift fails closed before resume", async () => {
+  const stateStore = new MemoryStateStore();
+  const adapter = new FakeAdapter();
+  const first = new HistoricalExperienceMigrationRunner({
+    adapter,
+    stateStore,
+    migrationId: "destination-a",
+    ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
+  });
+  await first.run({ maxUnits: 1 });
+  const before = structuredClone(stateStore.state);
+
+  const changed = new HistoricalExperienceMigrationRunner({
+    adapter,
+    stateStore,
+    migrationId: "destination-b",
+    ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
+  });
+  await assert.rejects(
+    () => changed.run({ maxUnits: 1 }),
+    /destination identity changed/,
+  );
+  assert.deepEqual(stateStore.state, before);
 });

@@ -30,6 +30,7 @@ export interface SourceMigrationState {
   sourceSystem: string;
   sourceType: string;
   eligibilityPolicyVersion: string;
+  migrationId: string;
   checkpoint: SourceCheckpoint;
   processedUnits: number;
   ingestedUnits: number;
@@ -98,6 +99,7 @@ export function validateSourceMigrationState(value: unknown): SourceMigrationSta
     ["sourceSystem", state.sourceSystem],
     ["sourceType", state.sourceType],
     ["eligibilityPolicyVersion", state.eligibilityPolicyVersion],
+    ["migrationId", state.migrationId],
     ["updatedAt", state.updatedAt],
   ] as const) {
     if (typeof raw !== "string" || !raw.trim()) throw new Error(`source migration state ${field} is invalid`);

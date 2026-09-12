@@ -22,6 +22,7 @@ test("JSON migration state store persists private atomic resumable state", async
     sourceSystem: "fake",
     sourceType: "thread",
     eligibilityPolicyVersion: "fake-policy-v1",
+    migrationId: "fake-destination-v1",
     checkpoint: {
       adapterName: "FakeSourceAdapter",
       adapterVersion: "1.0.0",
