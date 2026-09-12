@@ -397,10 +397,14 @@ test("MD-010 remediation: role-aware user projection preserves direct assertions
     assert.doesNotMatch(client.retainCalls[1]?.content ?? "", /configure that for you/);
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_source_actor, "user");
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_epistemic_status, undefined);
+    assert.equal(client.retainCalls[0]?.options?.async, true);
+    assert.match(client.retainCalls[0]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
     assert.equal(client.retainCalls[1]?.options?.async, true);
     assert.match(client.retainCalls[1]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
-    assert.equal(client.operationStatusCalls.length, 1);
-    assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[1]?.options?.operationId);
+    assert.notEqual(client.retainCalls[0]?.options?.operationId, client.retainCalls[1]?.options?.operationId);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[0]?.options?.operationId);
+    assert.equal(client.operationStatusCalls[1]?.operationId, client.retainCalls[1]?.options?.operationId);
     assert.equal(client.listMemoriesCalls.length, 2);
     assert.equal(client.recallCalls.length, 0);
 
@@ -625,7 +629,7 @@ test("MD-010 retry identity: deterministic user projection operation IDs are sta
   await adapterA.distill(request);
   await adapterA.distill(request);
   const operationIdsA = clientA.retainCalls
-    .filter((call) => call.options?.async === true)
+    .filter((call) => call.options?.documentId?.endsWith(":source-actor:user") === true)
     .map((call) => call.options?.operationId);
   assert.equal(operationIdsA.length, 2);
   assert.ok(operationIdsA[0]);
@@ -642,9 +646,52 @@ test("MD-010 retry identity: deterministic user projection operation IDs are sta
     },
   });
   await adapterB.distill(request);
-  const operationIdB = clientB.retainCalls.find((call) => call.options?.async === true)?.options?.operationId;
+  const operationIdB = clientB.retainCalls.find(
+    (call) => call.options?.documentId?.endsWith(":source-actor:user") === true,
+  )?.options?.operationId;
   assert.ok(operationIdB);
   assert.notEqual(operationIdsA[0], operationIdB);
+});
+
+test("MD-004 async full-source retain fails closed before provider enumeration", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    client.operationStatuses = ["processing", "failed"];
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-full-source-async-v1",
+      providerVersion: "test-provider",
+      asyncRetainPollIntervalMs: 1,
+      sleep: async () => undefined,
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput("session-full-source-async-failure", "distill-full-source-async-v1"));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "provider");
+    assert.match(receipt.errors.at(-1)?.message ?? "", /full-source async retain failed/);
+    assert.equal(client.retainCalls.length, 1);
+    assert.equal(client.retainCalls[0]?.options?.async, true);
+    assert.ok(client.retainCalls[0]?.options?.operationId);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(receipt.providerUnitCount, 0);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+  });
 });
 
 test("MD-010 remediation: role projection async retain fails closed until provider operation completes", async () => {
@@ -653,7 +700,7 @@ test("MD-010 remediation: role projection async retain fails closed until provid
     const receipts = new InMemoryDistillationReceiptStore();
     const client = new FakeHindsightClient();
     const sourceId = "session-role-aware-async-failure";
-    client.operationStatuses = ["processing", "failed"];
+    client.operationStatuses = ["completed", "processing", "failed"];
     const adapter = new HindsightMemoryAdapter({
       client,
       adapterVersion: "hindsight-adapter-role-aware-async-v3",
@@ -683,7 +730,7 @@ test("MD-010 remediation: role projection async retain fails closed until provid
     assert.equal(receipt.status, "failed");
     assert.equal(receipt.errors.at(-1)?.stage, "provider");
     assert.match(receipt.errors.at(-1)?.message ?? "", /user-source-projection async retain failed/);
-    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls.length, 3);
     assert.equal(receipt.providerUnitCount, 0);
     assert.deepEqual(receipt.candidateIds, []);
     assert.deepEqual(receipt.canonicalMemoryIds, []);

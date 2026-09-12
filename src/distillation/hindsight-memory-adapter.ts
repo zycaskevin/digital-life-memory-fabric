@@ -310,25 +310,6 @@ function deterministicOperationId(value: string): string {
   return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`;
 }
 
-function assertRetainComplete(
-  retained: HindsightRetainResponse,
-  bankId: string,
-  projection: string,
-): void {
-  if (!retained.success) {
-    throw new Error(`Hindsight ${projection} retain reported success=false`);
-  }
-  if (retained.async) {
-    throw new Error(`Hindsight ${projection} retain remained asynchronous; distillation is not complete`);
-  }
-  if (retained.bank_id !== bankId) {
-    throw new Error(`Hindsight ${projection} retain returned a mismatched bank_id`);
-  }
-  if (!Number.isSafeInteger(retained.items_count) || retained.items_count < 1) {
-    throw new Error(`Hindsight ${projection} retain did not durably accept the source experience`);
-  }
-}
-
 function assertAsyncRetainAccepted(
   retained: HindsightRetainResponse,
   bankId: string,
@@ -471,15 +452,31 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       dlmf_policy_version: request.distillationPolicyVersion,
       dlmf_provider_run_id: providerRunId,
     };
+    const fullSourceOperationId = deterministicOperationId(
+      `${distillation}|full-source|${request.experience.checksum}|${request.distillationPolicyVersion}|${documentId}|${request.experience.content}`,
+    );
     const retained = await this.options.client.retain(distillation, request.experience.content, {
       ...(timestamp === undefined ? {} : { timestamp }),
       context: request.experience.contentType,
       documentId,
-      async: false,
+      async: true,
+      operationId: fullSourceOperationId,
       tags: ["dlmf", "distillation"],
       metadata: commonMetadata,
     });
-    assertRetainComplete(retained, distillation, "full-source");
+    const acceptedFullSourceOperationId = assertAsyncRetainAccepted(
+      retained,
+      distillation,
+      "full-source",
+    );
+    if (acceptedFullSourceOperationId !== fullSourceOperationId) {
+      throw new Error("Hindsight full-source returned an unexpected operation_id");
+    }
+    await this.waitForAsyncRetain(
+      distillation,
+      acceptedFullSourceOperationId,
+      "full-source",
+    );
 
     const documentMemories = await this.listDocumentMemories(distillation, documentId);
     const userSegments = (request.experience.sourceSegments ?? []).filter(
