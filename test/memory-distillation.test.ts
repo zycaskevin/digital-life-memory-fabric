@@ -603,12 +603,13 @@ test("MD-010 retry: duplicate deterministic role projection resumes the existing
     const receipts = new InMemoryDistillationReceiptStore();
     const client = new FakeHindsightClient();
     client.asyncOperationCollision = true;
-    client.operationStatuses = ["processing", "completed"];
+    client.operationStatuses = ["not_found", "processing", "completed"];
     const adapter = new HindsightMemoryAdapter({
       client,
       adapterVersion: "hindsight-adapter-role-aware-retry-v1",
       providerVersion: "test-provider",
       asyncRetainPollIntervalMs: 1,
+      asyncRetainResumeNotFoundGraceMs: 5_000,
       sleep: async () => undefined,
       banks: {
         distillationBankId: () => "nancy:distillation",
@@ -632,11 +633,51 @@ test("MD-010 retry: duplicate deterministic role projection resumes the existing
     const receipt = await service.run(input);
     assert.equal(receipt.status, "complete");
     assert.equal(client.retainCalls.length, 2);
-    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls.length, 3);
     assert.equal(client.operationStatusCalls[0]?.operationId, client.operationStatusCalls[1]?.operationId);
+    assert.equal(client.operationStatusCalls[1]?.operationId, client.operationStatusCalls[2]?.operationId);
     assert.equal(receipt.errors.length, 0);
     assert.deepEqual(receipt.candidateIds, []);
     assert.deepEqual(receipt.canonicalMemoryIds, []);
+  });
+});
+
+test("MD-010 async retain: not_found remains fail-closed for a newly accepted operation", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    client.operationStatuses = ["not_found", "completed"];
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-role-aware-not-found-v1",
+      providerVersion: "test-provider",
+      asyncRetainPollIntervalMs: 1,
+      asyncRetainResumeNotFoundGraceMs: 5_000,
+      sleep: async () => undefined,
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const input = transcriptInput("session-role-aware-new-not-found", "distill-role-aware-not-found-v1");
+    input.sourceSegments = [
+      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+    ];
+
+    const receipt = await service.run(input);
+    assert.equal(receipt.status, "failed");
+    assert.match(receipt.errors.at(-1)?.message ?? "", /async retain not_found/);
+    assert.equal(client.operationStatusCalls.length, 1);
   });
 });
 
