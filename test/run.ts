@@ -21,3 +21,4 @@ import "./postgres-semantic-race.integration.test.js";
 import "./postgres-insight-promotion-race.integration.test.js";
 import "./postgres-insight-promotion-operator.integration.test.js";
 import "./source-adapter-contracts.test.js";
+import "./hermes-source-adapter.test.js";
