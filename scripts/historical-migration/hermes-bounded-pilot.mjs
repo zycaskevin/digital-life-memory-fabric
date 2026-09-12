@@ -55,12 +55,12 @@ if (!databaseUrl) {
 }
 
 const schema = validatedDlmfSchema(
-  process.env.DLMF_MIGRATION_SCHEMA || "dlmf_pilot_hermes_adapter_v2",
+  process.env.DLMF_MIGRATION_SCHEMA || "dlmf_pilot_hermes_adapter_bounded_v2",
 );
 if (!schema.startsWith("dlmf_pilot_")) {
   throw new Error("DLMF_MIGRATION_SCHEMA must be an isolated dlmf_pilot_* schema");
 }
-const namespace = process.env.DLMF_MIGRATION_NAMESPACE || "pilot.hermes-historical-migration.v0.2";
+const namespace = process.env.DLMF_MIGRATION_NAMESPACE || "pilot.hermes-historical-migration.bounded-v2";
 if (!namespace.startsWith("pilot.")) throw new Error("bounded pilot namespace must start with pilot.");
 const tenantId = process.env.DLMF_MIGRATION_TENANT_ID || "arthurverse-hermes-migration-pilot";
 const lifeDid = process.env.DLMF_MIGRATION_LIFE_DID || "did:arthurverse:nancy";
@@ -70,18 +70,16 @@ const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 20);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
-  || "dlmf-hermes-migration-pilot-v2";
+  || "dlmf-hermes-migration-pilot-bounded-v2";
 
-const stateRoot = resolve(
+const stateBaseRoot = resolve(
   process.env.DLMF_MIGRATION_STATE_ROOT
     || join(home, ".local", "state", "dlmf", "hermes-historical-migration", schema),
 );
-const archiveRoot = resolve(
+const archiveBaseRoot = resolve(
   process.env.DLMF_MIGRATION_ARCHIVE_ROOT
-    || join(home, ".local", "share", "dlmf", "hermes-historical-migration", schema, "raw"),
+    || join(home, ".local", "share", "dlmf", "hermes-historical-migration", schema),
 );
-const statePath = join(stateRoot, "state.json");
-const reportPath = join(stateRoot, "latest-report.json");
 const scope = { tenantId, lifeDid, memoryNamespace: namespace };
 
 function firstText(...values) {
@@ -418,6 +416,16 @@ console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(da
 console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
 console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars}`);
 
+const eligibility = migrationEligibility();
+const destinationId = migrationId(hindsightConnection, eligibility.version);
+const migrationFingerprint = sha256(destinationId).slice(0, 16);
+const stateRoot = join(stateBaseRoot, migrationFingerprint);
+const archiveRoot = join(archiveBaseRoot, migrationFingerprint, "raw");
+const statePath = join(stateRoot, "state.json");
+const reportPath = join(stateRoot, "latest-report.json");
+const stateExists = existsSync(statePath);
+console.log(`migrationFingerprint=${migrationFingerprint} state=${stateExists ? "resumable" : "new"}`);
+
 if (preflightOnly) {
   console.log("HERMES_BOUNDED_MIGRATION_PREFLIGHT=PASS");
   process.exit(0);
@@ -428,8 +436,6 @@ await chmod(stateRoot, 0o700);
 await mkdir(archiveRoot, { recursive: true, mode: 0o700 });
 await chmod(archiveRoot, 0o700);
 
-const eligibility = migrationEligibility();
-const destinationId = migrationId(hindsightConnection, eligibility.version);
 const pool = await openBootstrappedPilotSchema();
 let runtime;
 try {
