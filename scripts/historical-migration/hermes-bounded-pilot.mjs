@@ -55,12 +55,12 @@ if (!databaseUrl) {
 }
 
 const schema = validatedDlmfSchema(
-  process.env.DLMF_MIGRATION_SCHEMA || "dlmf_pilot_hermes_adapter_v1",
+  process.env.DLMF_MIGRATION_SCHEMA || "dlmf_pilot_hermes_adapter_v2",
 );
 if (!schema.startsWith("dlmf_pilot_")) {
   throw new Error("DLMF_MIGRATION_SCHEMA must be an isolated dlmf_pilot_* schema");
 }
-const namespace = process.env.DLMF_MIGRATION_NAMESPACE || "pilot.hermes-historical-migration.v0.1";
+const namespace = process.env.DLMF_MIGRATION_NAMESPACE || "pilot.hermes-historical-migration.v0.2";
 if (!namespace.startsWith("pilot.")) throw new Error("bounded pilot namespace must start with pilot.");
 const tenantId = process.env.DLMF_MIGRATION_TENANT_ID || "arthurverse-hermes-migration-pilot";
 const lifeDid = process.env.DLMF_MIGRATION_LIFE_DID || "did:arthurverse:nancy";
@@ -70,7 +70,7 @@ const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 20);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
-  || "dlmf-hermes-migration-pilot-v1";
+  || "dlmf-hermes-migration-pilot-v2";
 
 const stateRoot = resolve(
   process.env.DLMF_MIGRATION_STATE_ROOT
@@ -337,7 +337,7 @@ async function canonicalCounts(pool) {
 
 function migrationEligibility() {
   const base = new HermesHistoricalMigrationEligibilityPolicy();
-  const version = `${base.version}:bounded:maxEvents=${maxEvents}:maxChars=${maxChars}`;
+  const version = `${base.version}:bounded-v2:maxEvents=${maxEvents}:maxChars=${maxChars}`;
   return {
     version,
     assess(experience) {
@@ -349,8 +349,9 @@ function migrationEligibility() {
       const fallback = experience.content.filter(
         (content) => typeof content.text === "string" && content.text.trim().length > 0,
       );
-      const chars = textEvents.reduce((sum, event) => sum + event.content.length, 0)
-        + fallback.reduce((sum, content) => sum + content.text.length, 0);
+      const chars = textEvents.length > 0
+        ? textEvents.reduce((sum, event) => sum + event.content.length, 0)
+        : fallback.reduce((sum, content) => sum + content.text.length, 0);
       if (experience.events.length > maxEvents) {
         return { eligible: false, reasonCode: "bounded_pilot_event_limit" };
       }
