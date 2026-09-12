@@ -27,3 +27,4 @@ import "./hermes-source-adapter.test.js";
 import "./normalized-experience-distillation.test.js";
 import "./source-migration.test.js";
 import "./historical-migration-runner.test.js";
+import "./hermes-historical-migration-policy.test.js";
