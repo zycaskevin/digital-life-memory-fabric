@@ -8,8 +8,10 @@ import type { MemoryDistillationProvider } from "../distillation/memory-distilla
 import { PostgresDistillationReceiptStore } from "../distillation/postgres-distillation-receipt-store.js";
 import { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
-import type { MemoryRevision } from "../domain/types.js";
+import type { MemoryRevision, MemoryScope } from "../domain/types.js";
 import type { MemoryRetrievalPort } from "../retrieval/types.js";
+import { NormalizedExperienceDistillationBridge } from "../source-adapters/normalized-experience-distillation.js";
+import type { NormalizedExperienceIngestor } from "../source-adapters/source-migration.js";
 import { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import { PostgresSemanticReviewStore } from "../review/postgres-semantic-review-store.js";
 import { SemanticReviewQueueService } from "../review/semantic-review-service.js";
@@ -39,6 +41,8 @@ export interface CanonicalProjectionPort extends MemoryRetrievalPort {
 
 export interface DigitalLifeStackDlmfRuntime {
   ingress: DigitalLifeStackDlmfIngress;
+  /** DLMF-internal adapter/migration ingress. This is not exposed by the HTTP contract. */
+  createNormalizedExperienceIngestor(scope: MemoryScope): NormalizedExperienceIngestor;
   close(): Promise<void>;
 }
 
@@ -85,10 +89,11 @@ export function createDigitalLifeStackDlmfRuntime(
     options.retrievalPort,
   );
   const readiness = new PostgresDlmfReadiness(options.pool);
+  const trustedRuntimeId = options.runtimeId ?? "digital-life-stack";
   const ingress = new DigitalLifeStackDlmfIngress({
     bearerToken: options.bearerToken,
     agentId: options.agentId,
-    runtimeId: options.runtimeId ?? "digital-life-stack",
+    runtimeId: trustedRuntimeId,
     policies: options.policies,
     distillation: projectingDistillation,
     retrieval,
@@ -96,6 +101,18 @@ export function createDigitalLifeStackDlmfRuntime(
   });
   return {
     ingress,
+    createNormalizedExperienceIngestor(scope) {
+      return new NormalizedExperienceDistillationBridge({
+        distillation: projectingDistillation,
+        scope,
+        origin: {
+          lifeDid: scope.lifeDid,
+          agentId: options.agentId,
+          runtimeId: trustedRuntimeId,
+        },
+        policies: options.policies,
+      });
+    },
     close: () => canonicalStore.close(),
   };
 }
