@@ -20,6 +20,7 @@ import {
   ReflectiveMemoryService,
   TranscriptDistillationService,
   ValidationError,
+  type DistillationRequest,
   type HindsightClientPort,
   type HindsightRecallResponse,
   type HindsightListMemoriesResponse,
@@ -66,8 +67,6 @@ class FakeHindsightClient implements HindsightClientPort {
   reflectResponse: HindsightReflectResponse = { text: "" };
   retainResponse: HindsightRetainResponse | undefined;
   retainFailure?: Error;
-  asyncOperationCollision = false;
-  asyncOperationCollisionIdOverride?: string;
   operationStatuses: Array<"pending" | "processing" | "completed" | "failed" | "cancelled" | "not_found"> = ["completed"];
 
   async retain(
@@ -77,10 +76,6 @@ class FakeHindsightClient implements HindsightClientPort {
   ): Promise<HindsightRetainResponse> {
     this.retainCalls.push({ bankId, content, options });
     if (this.retainFailure !== undefined) throw this.retainFailure;
-    if (options?.async === true && this.asyncOperationCollision) {
-      const operationId = this.asyncOperationCollisionIdOverride ?? options.operationId ?? "missing-operation-id";
-      throw new Error(`retainBatch failed: "operation_id ${operationId} is already in use"`);
-    }
     if (this.retainResponse !== undefined) return this.retainResponse;
     return options?.async === true
       ? {
@@ -597,128 +592,59 @@ test("SG-003: user projection separates source actor from epistemic status and r
   });
 });
 
-test("MD-010 retry: duplicate deterministic role projection resumes the existing provider operation", async () => {
-  await withArchive(async (archive) => {
-    const store = new InMemoryCanonicalMemoryStore();
-    const receipts = new InMemoryDistillationReceiptStore();
-    const client = new FakeHindsightClient();
-    client.asyncOperationCollision = true;
-    client.operationStatuses = ["not_found", "processing", "completed"];
-    const adapter = new HindsightMemoryAdapter({
-      client,
-      adapterVersion: "hindsight-adapter-role-aware-retry-v1",
-      providerVersion: "test-provider",
-      asyncRetainPollIntervalMs: 1,
-      asyncRetainResumeNotFoundGraceMs: 5_000,
-      sleep: async () => undefined,
-      banks: {
-        distillationBankId: () => "nancy:distillation",
-        projectionBankId: () => "nancy:canonical-projection",
-      },
-    });
-    const service = new TranscriptDistillationService({
-      canonicalStore: store,
-      receiptStore: receipts,
-      archive,
-      provider: adapter,
-      ...curationComponents(),
-      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
-    });
-    const input = transcriptInput("session-role-aware-idempotent-retry", "distill-role-aware-retry-v1");
-    input.sourceSegments = [
-      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
-      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
-    ];
+test("MD-010 retry identity: deterministic user projection operation IDs are stable within a bank and isolated across banks", async () => {
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId: "session-bank-scoped-operation-id",
+      content: "User: I prefer dark mode.\nAssistant: Understood.",
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-bank-scoped-operation-id",
+      checksum: "checksum-bank-scoped-operation-id",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+        { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+      ],
+    },
+    distillationPolicyVersion: "distill-bank-scoped-operation-id-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
 
-    const receipt = await service.run(input);
-    assert.equal(receipt.status, "complete");
-    assert.equal(client.retainCalls.length, 2);
-    assert.equal(client.operationStatusCalls.length, 3);
-    assert.equal(client.operationStatusCalls[0]?.operationId, client.operationStatusCalls[1]?.operationId);
-    assert.equal(client.operationStatusCalls[1]?.operationId, client.operationStatusCalls[2]?.operationId);
-    assert.equal(receipt.errors.length, 0);
-    assert.deepEqual(receipt.candidateIds, []);
-    assert.deepEqual(receipt.canonicalMemoryIds, []);
+  const clientA = new FakeHindsightClient();
+  const adapterA = new HindsightMemoryAdapter({
+    client: clientA,
+    adapterVersion: "hindsight-adapter-bank-scope-v1",
+    providerVersion: "test-provider",
+    banks: {
+      distillationBankId: () => "bank-a:distillation",
+      projectionBankId: () => "bank-a:projection",
+    },
   });
-});
+  await adapterA.distill(request);
+  await adapterA.distill(request);
+  const operationIdsA = clientA.retainCalls
+    .filter((call) => call.options?.async === true)
+    .map((call) => call.options?.operationId);
+  assert.equal(operationIdsA.length, 2);
+  assert.ok(operationIdsA[0]);
+  assert.equal(operationIdsA[0], operationIdsA[1]);
 
-test("MD-010 async retain: not_found remains fail-closed for a newly accepted operation", async () => {
-  await withArchive(async (archive) => {
-    const store = new InMemoryCanonicalMemoryStore();
-    const receipts = new InMemoryDistillationReceiptStore();
-    const client = new FakeHindsightClient();
-    client.operationStatuses = ["not_found", "completed"];
-    const adapter = new HindsightMemoryAdapter({
-      client,
-      adapterVersion: "hindsight-adapter-role-aware-not-found-v1",
-      providerVersion: "test-provider",
-      asyncRetainPollIntervalMs: 1,
-      asyncRetainResumeNotFoundGraceMs: 5_000,
-      sleep: async () => undefined,
-      banks: {
-        distillationBankId: () => "nancy:distillation",
-        projectionBankId: () => "nancy:canonical-projection",
-      },
-    });
-    const service = new TranscriptDistillationService({
-      canonicalStore: store,
-      receiptStore: receipts,
-      archive,
-      provider: adapter,
-      ...curationComponents(),
-      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
-    });
-    const input = transcriptInput("session-role-aware-new-not-found", "distill-role-aware-not-found-v1");
-    input.sourceSegments = [
-      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
-      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
-    ];
-
-    const receipt = await service.run(input);
-    assert.equal(receipt.status, "failed");
-    assert.match(receipt.errors.at(-1)?.message ?? "", /async retain not_found/);
-    assert.equal(client.operationStatusCalls.length, 1);
+  const clientB = new FakeHindsightClient();
+  const adapterB = new HindsightMemoryAdapter({
+    client: clientB,
+    adapterVersion: "hindsight-adapter-bank-scope-v1",
+    providerVersion: "test-provider",
+    banks: {
+      distillationBankId: () => "bank-b:distillation",
+      projectionBankId: () => "bank-b:projection",
+    },
   });
-});
-
-test("MD-010 retry: collision for a different provider operation remains fail-closed", async () => {
-  await withArchive(async (archive) => {
-    const store = new InMemoryCanonicalMemoryStore();
-    const receipts = new InMemoryDistillationReceiptStore();
-    const client = new FakeHindsightClient();
-    client.asyncOperationCollision = true;
-    client.asyncOperationCollisionIdOverride = "00000000-0000-5000-8000-000000000000";
-    const adapter = new HindsightMemoryAdapter({
-      client,
-      adapterVersion: "hindsight-adapter-role-aware-retry-v1",
-      providerVersion: "test-provider",
-      banks: {
-        distillationBankId: () => "nancy:distillation",
-        projectionBankId: () => "nancy:canonical-projection",
-      },
-    });
-    const service = new TranscriptDistillationService({
-      canonicalStore: store,
-      receiptStore: receipts,
-      archive,
-      provider: adapter,
-      ...curationComponents(),
-      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
-    });
-    const input = transcriptInput("session-role-aware-foreign-collision", "distill-role-aware-retry-v1");
-    input.sourceSegments = [
-      { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
-      { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
-    ];
-
-    const receipt = await service.run(input);
-    assert.equal(receipt.status, "failed");
-    assert.equal(receipt.errors.at(-1)?.stage, "provider");
-    assert.match(receipt.errors.at(-1)?.message ?? "", /already in use/);
-    assert.equal(client.operationStatusCalls.length, 0);
-    assert.deepEqual(receipt.candidateIds, []);
-    assert.deepEqual(receipt.canonicalMemoryIds, []);
-  });
+  await adapterB.distill(request);
+  const operationIdB = clientB.retainCalls.find((call) => call.options?.async === true)?.options?.operationId;
+  assert.ok(operationIdB);
+  assert.notEqual(operationIdsA[0], operationIdB);
 });
 
 test("MD-010 remediation: role projection async retain fails closed until provider operation completes", async () => {
