@@ -58,3 +58,7 @@ export * from "./review/in-memory-semantic-review-store.js";
 export * from "./review/postgres-semantic-review-store.js";
 export * from "./review/semantic-review-service.js";
 export * from "./review/semantic-canary-gate.js";
+export * from "./source-adapters/contracts.js";
+export * from "./source-adapters/source-adapter.js";
+export * from "./source-adapters/identity.js";
+export * from "./source-adapters/validation.js";
