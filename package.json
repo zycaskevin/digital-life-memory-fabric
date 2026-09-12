@@ -28,7 +28,8 @@
     "pilot:insight-promotion:seed-canary": "npm run build && node scripts/production-pilot/seed-insight-promotion-canary.mjs",
     "relationship-os:bootstrap": "node scripts/relationship-os-ingress-bootstrap.mjs",
     "relationship-os:serve": "npm run build && node scripts/relationship-os-ingress-server.mjs",
-    "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs"
+    "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs",
+    "uat:hermes-source-adapter": "npm run build && node scripts/hermes-source-adapter-live-uat.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
