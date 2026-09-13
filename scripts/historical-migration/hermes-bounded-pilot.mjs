@@ -554,11 +554,19 @@ async function receiptSummaries(pool, receiptIds) {
   }));
 }
 
-async function assertCanonicalCommitCanary(pool, result, summaries) {
+async function assertCanonicalCommitCanary(pool, result, summaries, before, after) {
   if (!requireCanonicalCommit) return { required: false, verified: false, candidateProvenanceMatches: 0, canonicalProvenanceMatches: 0 };
   if (targetSourceId === undefined) throw new Error("canonical commit canary requires targeted source selection");
-  if (result.processedThisRun !== 1 || result.ingestedThisRun !== 1) {
-    throw new Error("canonical commit canary must process and ingest exactly one Experience");
+  const replay = result.processedThisRun === 0 && result.ingestedThisRun === 0;
+  if (!replay && (result.processedThisRun !== 1 || result.ingestedThisRun !== 1)) {
+    throw new Error("canonical commit canary must either ingest exactly one Experience or replay as a no-op");
+  }
+  if (replay) {
+    for (const key of ["receipts", "candidates", "heads", "revisions"]) {
+      if (Number(before[key]) !== Number(after[key])) {
+        throw new Error(`canonical commit replay changed ${key}`);
+      }
+    }
   }
   if (summaries.length !== 1) throw new Error("canonical commit canary must resolve exactly one receipt");
   const summary = summaries[0];
@@ -600,6 +608,7 @@ async function assertCanonicalCommitCanary(pool, result, summaries) {
   return {
     required: true,
     verified: true,
+    replay,
     receiptStatus: summary.status,
     canonicalizationOutcome: summary.canonicalizationOutcome,
     admissionComplete: summary.admissionComplete,
@@ -736,9 +745,20 @@ try {
   const before = await canonicalCounts(pool);
   const result = await runner.run({ maxUnits });
   const after = await canonicalCounts(pool);
-  const receiptIds = result.units.flatMap((unit) => unit.receiptId ? [unit.receiptId] : []);
+  let receiptIds = result.units.flatMap((unit) => unit.receiptId ? [unit.receiptId] : []);
+  if (requireCanonicalCommit && receiptIds.length === 0 && result.processedThisRun === 0 && result.ingestedThisRun === 0) {
+    const experienceId = result.state.checkpoint.lastExperienceId;
+    if (experienceId) {
+      const replayReceipt = await pool.query(`SELECT receipt_id
+        FROM memory_distillation_receipts
+        WHERE tenant_id=$1 AND life_did=$2 AND memory_namespace=$3
+          AND source_type='normalized_experience' AND source_id=$4
+        ORDER BY created_at DESC`, [scope.tenantId, scope.lifeDid, scope.memoryNamespace, experienceId]);
+      receiptIds = replayReceipt.rows.map((row) => String(row.receipt_id));
+    }
+  }
   const receipts = await receiptSummaries(pool, receiptIds);
-  const canonicalCanary = await assertCanonicalCommitCanary(pool, result, receipts);
+  const canonicalCanary = await assertCanonicalCommitCanary(pool, result, receipts, before, after);
   const report = {
     contract: "dlmf/hermes-bounded-historical-migration/v1",
     status: "PASS",
