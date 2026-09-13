@@ -1,6 +1,7 @@
 import type { DistillationReceipt } from "../distillation/types.js";
 import type {
   ExperienceId,
+  ExperienceUnit,
   NormalizedExperience,
   SourceAdapterInspection,
   SourceFingerprint,
@@ -88,13 +89,13 @@ function terminalReceipt(receipt: Pick<DistillationReceipt, "status">): boolean 
 }
 
 /**
- * Source-neutral, per-unit durable historical migration.
+ * Source-neutral, durable historical migration.
  *
- * Discovery is deliberately fixed to one unit at a time. The source cursor is
- * persisted only after that unit has either reached a DLMF accepted terminal
- * receipt or been explicitly skipped by the version-bound eligibility policy.
- * Any read/normalize/fingerprint/distillation failure leaves the prior durable
- * checkpoint untouched.
+ * Discovery remains source-ordered and one unit at a time. Processing may use a
+ * bounded concurrency window, but durable checkpoint advancement is always the
+ * contiguous successful source prefix. Work that completes beyond a failed unit
+ * is intentionally replayed from the prior checkpoint and must rely on downstream
+ * idempotency; it can never move the source checkpoint past the failure.
  */
 export class HistoricalExperienceMigrationRunner<TSourcePayload> {
   readonly #adapter: MemorySourceAdapter<TSourcePayload>;
@@ -117,9 +118,13 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
     this.#clock = options.clock ?? (() => new Date());
   }
 
-  async run(request: { maxUnits: number }): Promise<HistoricalMigrationRunResult> {
+  async run(request: { maxUnits: number; concurrency?: number }): Promise<HistoricalMigrationRunResult> {
     if (!Number.isInteger(request.maxUnits) || request.maxUnits < 1 || request.maxUnits > 1000) {
       throw new Error("maxUnits must be an integer between 1 and 1000");
+    }
+    const concurrency = request.concurrency ?? 1;
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
+      throw new Error("concurrency must be an integer between 1 and 32");
     }
 
     const inspection = await this.#adapter.inspect();
@@ -138,98 +143,142 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
     const units: HistoricalMigrationUnitResult[] = [];
 
     while (processedThisRun < request.maxUnits) {
-      const prior = state;
-      const priorCursor = prior?.checkpoint.cursor;
-      const page = await this.#adapter.discover({
-        limit: 1,
-        ...(prior === null ? {} : { checkpoint: prior.checkpoint }),
-      });
-      if (page.units.length > 1) {
-        throw new HistoricalMigrationError(
-          "source adapter returned more than one unit for a per-unit migration request",
-          prior?.checkpoint === undefined ? {} : { checkpoint: prior.checkpoint },
-        );
+      const capacity = Math.min(concurrency, request.maxUnits - processedThisRun);
+      const window: Array<{ unit: ExperienceUnit; nextCursor?: string }> = [];
+      let discoveryCursor = state?.checkpoint.cursor;
+      let sourceExhausted = false;
+
+      for (let index = 0; index < capacity; index += 1) {
+        const page = await this.#adapter.discover({
+          limit: 1,
+          ...(index === 0 && state !== null
+            ? { checkpoint: state.checkpoint }
+            : discoveryCursor === undefined
+              ? {}
+              : { cursor: discoveryCursor }),
+        });
+        if (page.units.length > 1) {
+          throw new HistoricalMigrationError(
+            "source adapter returned more than one unit for a per-unit migration request",
+            state?.checkpoint === undefined ? {} : { checkpoint: state.checkpoint },
+          );
+        }
+        if (page.units.length === 0) {
+          sourceExhausted = true;
+          break;
+        }
+        if (discoveryCursor !== undefined && page.nextCursor === discoveryCursor) {
+          throw new HistoricalMigrationError(
+            "source adapter cursor did not advance",
+            state?.checkpoint === undefined ? {} : { checkpoint: state.checkpoint },
+          );
+        }
+        const unit = page.units[0]!;
+        this.#assertUnitCompatible(unit, inspection);
+        window.push({ unit, ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }) });
+        discoveryCursor = page.nextCursor;
+        if (page.nextCursor === undefined) {
+          sourceExhausted = true;
+          break;
+        }
       }
-      if (page.units.length === 0) {
-        state = this.#completedState(inspection, prior);
+
+      if (window.length === 0) {
+        state = this.#completedState(inspection, state);
         await this.#stateStore.save(state);
         return this.#result("source_exhausted", inspection, state, units, processedThisRun, ingestedThisRun, skippedThisRun);
       }
-      if (priorCursor !== undefined && page.nextCursor === priorCursor) {
-        throw new HistoricalMigrationError(
-          "source adapter cursor did not advance",
-          { checkpoint: prior!.checkpoint },
-        );
-      }
 
-      const unit = page.units[0]!;
-      this.#assertUnitCompatible(unit, inspection);
-      try {
-        const read = await this.#adapter.read(unit);
-        const normalized = await this.#adapter.normalize(read);
-        assertNormalizedExperience(normalized);
-        this.#assertNormalizedMatchesUnit(normalized, unit.experienceId, inspection);
+      const settled = await Promise.allSettled(
+        window.map(({ unit }) => this.#processUnit(unit, inspection)),
+      );
+      const failureIndex = settled.findIndex((item) => item.status === "rejected");
+      const commitCount = failureIndex < 0 ? settled.length : failureIndex;
 
-        const currentFingerprint = await this.#adapter.fingerprint(unit);
-        if (!sameFingerprint(currentFingerprint, normalized.provenance.sourceFingerprint)) {
-          throw new Error("source changed between read/normalize and fingerprint verification");
-        }
-
-        const eligibility = await this.#eligibility.assess(normalized);
-        this.#assertEligibility(eligibility.reasonCode);
-        let result: HistoricalMigrationUnitResult;
-        if (eligibility.eligible) {
-          const receipt = await this.#ingestor.ingest(normalized);
-          if (!terminalReceipt(receipt)) {
-            throw new Error(`DLMF distillation did not reach an accepted terminal state: ${receipt.status}`);
-          }
-          result = {
-            experienceId: normalized.experienceId,
-            sourceFingerprint: currentFingerprint,
-            outcome: "ingested",
-            eligibilityReasonCode: eligibility.reasonCode,
-            receiptId: receipt.receiptId,
-            receiptStatus: receipt.status,
-          };
-          ingestedThisRun += 1;
-        } else {
-          result = {
-            experienceId: normalized.experienceId,
-            sourceFingerprint: currentFingerprint,
-            outcome: "skipped",
-            eligibilityReasonCode: eligibility.reasonCode,
-          };
-          skippedThisRun += 1;
-        }
-
+      for (let index = 0; index < commitCount; index += 1) {
+        const settledItem = settled[index]!;
+        if (settledItem.status !== "fulfilled") throw new Error("unreachable migration settlement state");
+        const result = settledItem.value;
+        const discovered = window[index]!;
         processedThisRun += 1;
+        if (result.outcome === "ingested") ingestedThisRun += 1;
+        else skippedThisRun += 1;
         units.push(result);
         state = this.#advancedState(
           inspection,
-          prior,
-          normalized.experienceId,
-          currentFingerprint,
-          page.nextCursor,
-          eligibility.eligible,
+          state,
+          result.experienceId,
+          result.sourceFingerprint,
+          discovered.nextCursor,
+          result.outcome === "ingested",
         );
         await this.#stateStore.save(state);
-        if (state.complete) {
-          return this.#result("source_exhausted", inspection, state, units, processedThisRun, ingestedThisRun, skippedThisRun);
-        }
-      } catch (error) {
+      }
+
+      if (failureIndex >= 0) {
+        const failed = settled[failureIndex]!;
+        const failedUnit = window[failureIndex]!.unit;
         throw new HistoricalMigrationError(
-          `historical migration failed for ${unit.experienceId}`,
+          `historical migration failed for ${failedUnit.experienceId}`,
           {
-            ...(prior?.checkpoint === undefined ? {} : { checkpoint: prior.checkpoint }),
-            failedExperienceId: unit.experienceId,
-            cause: error,
+            ...(state?.checkpoint === undefined ? {} : { checkpoint: state.checkpoint }),
+            failedExperienceId: failedUnit.experienceId,
+            cause: failed.status === "rejected" ? failed.reason : new Error("unreachable fulfilled failure"),
           },
         );
+      }
+
+      if (sourceExhausted) {
+        if (state === null) throw new Error("historical migration produced no durable state");
+        if (!state.complete) {
+          state = this.#completedState(inspection, state);
+          await this.#stateStore.save(state);
+        }
+        return this.#result("source_exhausted", inspection, state, units, processedThisRun, ingestedThisRun, skippedThisRun);
       }
     }
 
     if (state === null) throw new Error("historical migration produced no durable state");
     return this.#result("bounded", inspection, state, units, processedThisRun, ingestedThisRun, skippedThisRun);
+  }
+
+  async #processUnit(
+    unit: ExperienceUnit,
+    inspection: SourceAdapterInspection,
+  ): Promise<HistoricalMigrationUnitResult> {
+    const read = await this.#adapter.read(unit);
+    const normalized = await this.#adapter.normalize(read);
+    assertNormalizedExperience(normalized);
+    this.#assertNormalizedMatchesUnit(normalized, unit.experienceId, inspection);
+
+    const currentFingerprint = await this.#adapter.fingerprint(unit);
+    if (!sameFingerprint(currentFingerprint, normalized.provenance.sourceFingerprint)) {
+      throw new Error("source changed between read/normalize and fingerprint verification");
+    }
+
+    const eligibility = await this.#eligibility.assess(normalized);
+    this.#assertEligibility(eligibility.reasonCode);
+    if (!eligibility.eligible) {
+      return {
+        experienceId: normalized.experienceId,
+        sourceFingerprint: currentFingerprint,
+        outcome: "skipped",
+        eligibilityReasonCode: eligibility.reasonCode,
+      };
+    }
+
+    const receipt = await this.#ingestor.ingest(normalized);
+    if (!terminalReceipt(receipt)) {
+      throw new Error(`DLMF distillation did not reach an accepted terminal state: ${receipt.status}`);
+    }
+    return {
+      experienceId: normalized.experienceId,
+      sourceFingerprint: currentFingerprint,
+      outcome: "ingested",
+      eligibilityReasonCode: eligibility.reasonCode,
+      receiptId: receipt.receiptId,
+      receiptStatus: receipt.status,
+    };
   }
 
   #advancedState(

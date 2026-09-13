@@ -281,3 +281,76 @@ test("migration destination drift fails closed before resume", async () => {
   );
   assert.deepEqual(stateStore.state, before);
 });
+
+test("bounded concurrency uses parallel ingestion but advances only the contiguous source prefix", async () => {
+  const adapter = new FakeAdapter();
+  const stateStore = new MemoryStateStore();
+  let active = 0;
+  let maxActive = 0;
+  const ingested: string[] = [];
+  const runner = new HistoricalExperienceMigrationRunner({
+    adapter,
+    stateStore,
+    migrationId: "fake-concurrent-destination-v1",
+    eligibility: new TextualExperienceMigrationEligibilityPolicy(),
+    ingestor: {
+      async ingest(experience) {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        ingested.push(experience.sourceId);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active -= 1;
+        return receipt(experience.experienceId);
+      },
+    },
+  });
+
+  const result = await runner.run({ maxUnits: 4, concurrency: 3 });
+  assert.equal(result.status, "source_exhausted");
+  assert.equal(result.processedThisRun, 4);
+  assert.equal(result.ingestedThisRun, 3);
+  assert.equal(result.skippedThisRun, 1);
+  assert.ok(maxActive >= 2);
+  assert.equal(result.state.processedUnits, 4);
+  assert.equal(result.state.complete, true);
+  assert.deepEqual(result.units.map((item) => item.experienceId), adapter.ids.map((id) => unit(id).experienceId));
+});
+
+test("bounded concurrency never checkpoints past the first failed unit", async () => {
+  const adapter = new FakeAdapter();
+  const stateStore = new MemoryStateStore();
+  let failC = true;
+  const calls: string[] = [];
+  const runner = new HistoricalExperienceMigrationRunner({
+    adapter,
+    stateStore,
+    migrationId: "fake-concurrent-failure-v1",
+    eligibility: new TextualExperienceMigrationEligibilityPolicy(),
+    ingestor: {
+      async ingest(experience) {
+        calls.push(experience.sourceId);
+        await new Promise((resolve) => setTimeout(resolve, experience.sourceId === "d" ? 1 : 5));
+        return receipt(experience.experienceId, failC && experience.sourceId === "c" ? "failed" : "complete");
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => runner.run({ maxUnits: 4, concurrency: 4 }),
+    (error: unknown) => {
+      assert.ok(error instanceof HistoricalMigrationError);
+      assert.equal(error.failedExperienceId, unit("c").experienceId);
+      return true;
+    },
+  );
+  assert.equal(stateStore.state?.processedUnits, 2);
+  assert.equal(stateStore.state?.checkpoint.cursor, "2");
+  assert.ok(calls.includes("d"));
+
+  failC = false;
+  const resumed = await runner.run({ maxUnits: 4, concurrency: 4 });
+  assert.equal(resumed.status, "source_exhausted");
+  assert.equal(resumed.processedThisRun, 2);
+  assert.equal(resumed.state.processedUnits, 4);
+  assert.equal(resumed.state.complete, true);
+});

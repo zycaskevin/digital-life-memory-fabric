@@ -69,6 +69,7 @@ const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
 const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 1000);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
+const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 4);
 const hindsightAsyncTimeoutMs = boundedInt(
   process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
   1_800_000,
@@ -685,7 +686,7 @@ console.log(`node=${process.version}`);
 console.log(`sourceDb=read-only schemaVersion=${inspection.metadata.schemaVersion} sessions=${inspection.metadata.sessionCount} messages=${inspection.metadata.messageCount}`);
 console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(databaseUrl)).slice(0, 12)} schema=${schema} schemaState=${existingSchema.state}`);
 console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
-console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs},fullSourceChunking:${fullSourceChunking === undefined ? "off" : `${fullSourceChunking.maxChars}chars/${fullSourceChunking.maxSegments}segments`}`);
+console.log(`bounds=maxUnits:${maxUnits},concurrency:${migrationConcurrency},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs},fullSourceChunking:${fullSourceChunking === undefined ? "off" : `${fullSourceChunking.maxChars}chars/${fullSourceChunking.maxSegments}segments`}`);
 console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (targetCategory ? `reviewed-category:${targetCategory}` : "targeted")}`);
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
 console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
@@ -766,7 +767,7 @@ try {
   });
 
   const before = await canonicalCounts(pool);
-  const result = await runner.run({ maxUnits });
+  const result = await runner.run({ maxUnits, concurrency: migrationConcurrency });
   const after = await canonicalCounts(pool);
   let receiptIds = result.units.flatMap((unit) => unit.receiptId ? [unit.receiptId] : []);
   if (requireCanonicalCommit && receiptIds.length === 0 && result.processedThisRun === 0 && result.ingestedThisRun === 0) {
@@ -815,6 +816,7 @@ try {
     },
     bounds: {
       maxUnits,
+      migrationConcurrency,
       maxEvents,
       maxChars,
       hindsightAsyncTimeoutMs,
