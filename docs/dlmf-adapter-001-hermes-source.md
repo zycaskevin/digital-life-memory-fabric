@@ -433,9 +433,26 @@ The `24K/12` policy substantially reduces provider operation count compared with
 
 This closes the Evidence250 gate: mixed full-source evidence is source-resumable, chunk-operation replay-safe, provenance-preserving, and unable to bypass Canonical Memory authority.
 
+## Full-source Evidence Lane Batch500 acceptance — 2026-09-13
+
+The Evidence Lane continued through source position `500` without changing the frozen snapshot, destination, Hindsight bank, `full_source_only` policy, conservative `80 events / 60K characters` eligibility bounds, or `24K/12` chunk policy. The deterministic eligibility scan predicted Batch2 (`251-500`) as `156` eligible / `94` skipped, and the durable run matched exactly.
+
+Cumulative Evidence500 acceptance:
+
+- `500 processed / 234 ingested / 266 skipped`;
+- prefix positions `1-500` contain exactly `234` receipts and all `234/234` are `complete / no_memory_worthy_content`;
+- `5,626` provider units received exactly `5,626` curation decisions;
+- mixed evidence produced `0` candidates, `0` Canonical Memory heads, and `0` revisions;
+- the Hindsight prefix contains `720/720` completed operation records across `360` deterministic chunk documents, with `retry_total=0`;
+- an independent empty-state replay rediscovered `500 / 234 / 266` in approximately six seconds while preserving receipts `234 -> 234`, candidates `0 -> 0`, heads `0 -> 0`, revisions `0 -> 0`, and the exact `720 / 360` provider prefix.
+
+Batch2 also exposed an execution-governance issue rather than a memory-governance issue: two migration processes were briefly allowed to target the same durable state before the duplicate writer failed closed. No checkpoint or Canonical truth crossed the failure boundary, but the incident demonstrated that downstream receipt idempotency is not a substitute for source-state single ownership. Commit `a8e39a4` therefore adds a PostgreSQL session-level advisory lock bound to the migration destination identity. New migration applies now fail fast before source traversal when another writer owns the same destination; the lock is automatically released when the database session ends. Full repository checks passed before promotion of this hardening.
+
+This closes the Evidence500 gate and establishes both evidence replay safety and explicit single-writer ownership before scaling the same destination further.
+
 ## Next increment
 
-1. Continue the Full-source Evidence Lane over source positions `251-500`, `501-750`, and `751-1000` with the same frozen snapshot, migration identity, `full_source_only` policy, `24K/12` chunks, and bounded lookahead.
+1. Continue the Full-source Evidence Lane over source positions `501-750` and `751-1000` with the same frozen snapshot, migration identity, `full_source_only` policy, `24K/12` chunks, bounded lookahead, and enforced single-writer ownership.
 2. Close each 250-source gate with Adapter-position-scoped receipt/provider checks so speculative next-batch work cannot contaminate the accepted prefix.
 3. At Evidence1000, require an independent empty-state replay, zero duplicate prefix Hindsight chunk operations, complete source provenance, and zero unintended Canonical growth from mixed evidence.
 4. Compare Direct vs Evidence throughput/long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
