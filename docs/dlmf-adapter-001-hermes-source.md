@@ -450,6 +450,21 @@ Batch2 also exposed an execution-governance issue rather than a memory-governanc
 
 This closes the Evidence500 gate and establishes both evidence replay safety and explicit single-writer ownership before scaling the same destination further.
 
+## Full-source Evidence Lane Batch750 acceptance — 2026-09-14
+
+The Full-source Evidence Lane completed source positions `501-750` against the same frozen snapshot, PostgreSQL destination, Hindsight bank, `full_source_only` policy, `24K/12` chunk policy, and bounded lookahead. Source-position-scoped acceptance proved:
+
+- cumulative source progress through position `750` is complete;
+- positions `1-750` contain `266/266` terminal DLMF receipts, all `complete / no_memory_worthy_content`;
+- `6,479` provider units received exactly `6,479` curation decisions;
+- Evidence destination Canonical state remains `0` candidates / `0` heads / `0` revisions;
+- Hindsight prefix contains `812/812` completed operation records across `406` deterministic chunk documents, with `retry_total=0`;
+- no mixed full-source evidence acquired direct-user Canonical authority.
+
+The durable migration later advanced to position `764`. Source-position inspection showed this is not a Batch750 replay or boundary failure: position `758` had already completed normally, position `765` remained an archived receipt with its deterministic Hindsight retain still processing, and position `771` had completed speculatively in a later lookahead. Therefore position `750` is a clean accepted prefix and later receipts are owned by the `751-1000` stage.
+
+This closes the Evidence750 gate.
+
 ## Next increment
 
 1. Continue the Full-source Evidence Lane over source positions `501-750` and `751-1000` with the same frozen snapshot, migration identity, `full_source_only` policy, `24K/12` chunks, bounded lookahead, and enforced single-writer ownership.
