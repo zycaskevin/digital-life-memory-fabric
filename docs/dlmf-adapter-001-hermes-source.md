@@ -1,7 +1,7 @@
 # DLMF-ADAPTER-001 — Hermes Source Adapter
 
 **Date:** 2026-09-12
-**Status:** Live Snapshot UAT PASS — bounded migration / canonical-write / replay / full-source chunking PASS; 100-Experience stage pending
+**Status:** Live Snapshot UAT PASS — bounded migration / strict canonical-commit remediation / replay / full-source chunking / Direct1000 PASS; Evidence1000 pending
 **Depends on:** DLMF-ADAPTER-000 Memory Source Adapter Contract
 
 ## Purpose
@@ -387,6 +387,28 @@ An independent empty migration-state root replayed source positions `1-1000` aga
 - admission remediation dry-run `repairsNeeded=0`.
 
 This closes the Direct1000 gate. Direct user-memory extraction is now proven source-resumable, receipt-idempotent, provider-replay-safe, Canonical-nonduplicating, and provenance-closed at 1,000-source scale.
+
+## Reviewed canonical-commit closure — 2026-09-13
+
+The retained full-source canonical-canary destination was closed after the Owner made
+a bounded semantic decision for its one contradictory preference unit. DLMF consumed
+the durable `invalid_candidate` decision through an exact source, content-hash,
+semantic-key, relation, and Canonical-target binding. Provider execution identity was
+not allowed to redefine the reviewed proposition, and any semantic/content/target
+drift still fails closed.
+
+The strict retry completed one real Adapter Experience with `744/744` provider and
+curation coverage: `735` supporting-evidence-only units, `8` governed canonical
+merges, `1` reviewed rejection, and `0` pending review. The receipt reached
+`complete / committed`, exposed `8` candidate IDs and `3` Canonical Memory IDs,
+and passed candidate plus current-revision provenance checks back to the same
+`NormalizedExperience`.
+
+An exact source replay produced no new receipt, candidate, head, or revision
+(`3/24/3/24` remained `3/24/3/24`) and preserved the Canonical truth fingerprint.
+The earlier fail-closed receipt and review evidence remain append-only. See
+[DLMF-SG-011](dlmf-sg-011-hermes-canonical-canary-review-remediation.md) for the
+governance contract and complete verification record.
 
 ## Next increment
 

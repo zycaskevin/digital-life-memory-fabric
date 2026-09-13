@@ -30,6 +30,11 @@ import {
   DeterministicSemanticMemoryGovernance,
   type SemanticMemoryGovernance,
 } from "../semantic/deterministic-semantic-governance.js";
+import {
+  semanticReviewCandidateFingerprint,
+  semanticReviewProviderUnitFingerprint,
+  type SemanticReviewRemediationPolicy,
+} from "../review/semantic-review-remediation.js";
 import type { DistillationReceiptStore } from "./distillation-receipt-store.js";
 import type { MemoryCandidateGovernance } from "./governance.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
@@ -90,6 +95,7 @@ export interface TranscriptDistillationServiceOptions {
   canonicalAuthority?: CanonicalMemoryAuthority;
   semanticGovernance?: SemanticMemoryGovernance;
   semanticReviewQueue?: PendingSemanticReviewQueue;
+  semanticReviewRemediation?: SemanticReviewRemediationPolicy;
   clock?: Clock;
   receiptIds?: DistillationReceiptIdFactory;
 }
@@ -220,23 +226,6 @@ function curationRecordId(receiptId: string, providerUnitRef: string): MemoryCur
   return `cur_${sha256({ receiptId, providerUnitRef }).slice("sha256:".length)}`;
 }
 
-function providerUnitFingerprint(unit: ProviderMemoryUnit): string {
-  return sha256({
-    providerUnitRef: unit.providerUnitRef,
-    candidateType: unit.candidateType,
-    memoryClass: unit.memoryClass,
-    memoryKind: unit.memoryKind,
-    memoryType: unit.memoryType ?? null,
-    speakerProvenance: unit.speakerProvenance ?? null,
-    semanticKey: unit.semanticKey ?? null,
-    proposedContent: unit.proposedContent,
-    providerDeclaredEpistemicStatus: unit.providerDeclaredEpistemicStatus ?? null,
-    attributedEpistemicStatus: unit.epistemicStatus,
-    epistemicAttributionBasis: unit.epistemicAttributionBasis ?? null,
-    evidenceRefs: unit.evidenceRefs,
-  });
-}
-
 export class TranscriptDistillationService {
   private readonly candidateService: MemoryCandidateService;
   private readonly canonicalAuthority: CanonicalMemoryAuthority;
@@ -285,6 +274,12 @@ export class TranscriptDistillationService {
       curationProviderVersion: this.options.curationProvider.version ?? null,
       admissionPolicyVersion: input.admissionPolicyVersion,
       semanticPolicyVersion: this.semanticGovernance.policyVersion,
+      ...(this.options.semanticReviewRemediation === undefined
+        ? {}
+        : {
+            semanticReviewRemediationIdentity:
+              this.options.semanticReviewRemediation.identity,
+          }),
       sourceSegmentFingerprint:
         input.sourceSegments === undefined ? null : sha256(input.sourceSegments),
     });
@@ -506,7 +501,8 @@ export class TranscriptDistillationService {
 
         const priorCanonicalRecord = priorCurationRecords.get(recordId);
         if (priorCanonicalRecord?.canonicalMemoryId !== undefined) {
-          const currentUnitFingerprint = providerUnitFingerprint(unit);
+          const currentUnitFingerprint =
+            semanticReviewProviderUnitFingerprint(unit);
           if (
             priorCanonicalRecord.candidateId === undefined
             || (priorCanonicalRecord.outcome !== "canonical_candidate"
@@ -740,7 +736,7 @@ export class TranscriptDistillationService {
                 providerRunId: result.providerRunId,
                 providerUnitRef: unit.providerUnitRef,
                 providerUnitText: unit.proposedContent.text,
-                providerUnitFingerprint: providerUnitFingerprint(unit),
+                providerUnitFingerprint: semanticReviewProviderUnitFingerprint(unit),
                 providerEpistemicStatus:
                   unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
                 attributedEpistemicBasis:
@@ -878,6 +874,63 @@ export class TranscriptDistillationService {
           }
         }
 
+        if (
+          decision.outcome === "pending_review" &&
+          semanticRelation !== undefined &&
+          this.options.semanticReviewRemediation !== undefined
+        ) {
+          const remediation =
+            await this.options.semanticReviewRemediation.resolveInvalidCandidate({
+              scope: input.scope,
+              sourceType: input.sourceType,
+              sourceId: input.sourceId,
+              providerUnitRef: unit.providerUnitRef,
+              reviewedCandidateFingerprint: semanticReviewCandidateFingerprint({
+                scope: input.scope,
+                sourceType: input.sourceType,
+                sourceId: input.sourceId,
+                providerUnitRef: unit.providerUnitRef,
+                providerUnitText: unit.proposedContent.text,
+                semanticKey,
+                semanticPolicyVersion: this.semanticGovernance.policyVersion,
+                memoryType,
+                speakerProvenance,
+                semanticRelation,
+                ...(decision.targetMemoryId === undefined
+                  ? {}
+                  : { targetMemoryId: decision.targetMemoryId }),
+              }),
+              semanticKey,
+              semanticPolicyVersion: this.semanticGovernance.policyVersion,
+              memoryType,
+              speakerProvenance,
+              semanticRelation,
+              ...(decision.targetMemoryId === undefined
+                ? {}
+                : { targetMemoryId: decision.targetMemoryId }),
+            });
+          if (remediation !== undefined) {
+            if (candidateId !== undefined || canonicalMemoryId !== undefined) {
+              throw new ValidationError(
+                `review remediation cannot replace an admitted candidate for ${unit.providerUnitRef}`,
+              );
+            }
+            decision = {
+              ...decision,
+              outcome: "rejected",
+              memoryWorthy: false,
+              reasonCodes: [
+                ...decision.reasonCodes,
+                "review_remediation:invalid_candidate",
+                `review_remediation:binding:${remediation.reviewDecisionId}`,
+              ],
+            };
+            receipt.warnings.push(
+              `review_remediation_applied:${remediation.reviewDecisionId}`,
+            );
+          }
+        }
+
         outcomeCounts[decision.outcome] += 1;
         const record: MemoryCurationRecord = {
           recordId,
@@ -889,7 +942,7 @@ export class TranscriptDistillationService {
           providerRunId: result.providerRunId,
           providerUnitRef: unit.providerUnitRef,
           providerUnitText: unit.proposedContent.text,
-          providerUnitFingerprint: providerUnitFingerprint(unit),
+          providerUnitFingerprint: semanticReviewProviderUnitFingerprint(unit),
           providerEpistemicStatus:
             unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
           attributedEpistemicBasis:

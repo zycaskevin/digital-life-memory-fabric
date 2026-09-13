@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +14,9 @@ import {
   HindsightMemoryAdapter,
   HistoricalExperienceMigrationRunner,
   JsonFileSourceMigrationStateStore,
+  ExactInvalidCandidateSemanticReviewRemediation,
   createDigitalLifeStackDlmfRuntime,
+  semanticReviewCandidateFingerprint,
 } from "../../dist/index.js";
 import {
   bootstrapDigitalLifeStackSchema,
@@ -100,6 +102,26 @@ if (targetCategory !== undefined) {
   targetSourceId = targetPlanEntry.sessionId;
 }
 const requireCanonicalCommit = process.env.DLMF_MIGRATION_REQUIRE_CANONICAL_COMMIT === "1";
+const requireCompleteCanonicalCommit =
+  process.env.DLMF_MIGRATION_REQUIRE_COMPLETE_CANONICAL_COMMIT === "1";
+if (requireCompleteCanonicalCommit && !requireCanonicalCommit) {
+  throw new Error(
+    "DLMF_MIGRATION_REQUIRE_COMPLETE_CANONICAL_COMMIT requires DLMF_MIGRATION_REQUIRE_CANONICAL_COMMIT=1",
+  );
+}
+const semanticReviewDecisionManifestPath = firstText(
+  process.env.DLMF_MIGRATION_SEMANTIC_REVIEW_DECISION_MANIFEST,
+);
+const semanticReviewDecisionManifest = semanticReviewDecisionManifestPath === undefined
+  ? undefined
+  : loadSemanticReviewDecisionManifest(
+      semanticReviewDecisionManifestPath,
+      schema,
+      lifeDid,
+    );
+const semanticReviewRemediationContract = semanticReviewDecisionManifest === undefined
+  ? undefined
+  : "dlmf/semantic-review-invalid-candidate-remediation/v2";
 const distillationProjectionMode = firstText(process.env.DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE)
   || "full_plus_source_actor";
 if (!new Set(["full_plus_source_actor", "source_actor_only", "full_source_only"]).has(distillationProjectionMode)) {
@@ -164,6 +186,62 @@ function readSimpleEnvFile(path) {
     values[key] = value;
   }
   return values;
+}
+
+function normalizedIdentifiers(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim()))].sort();
+}
+
+function loadSemanticReviewDecisionManifest(path, expectedSchema, expectedLifeDid) {
+  const resolvedPath = resolve(path);
+  const metadata = lstatSync(resolvedPath);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("semantic review decision manifest must be a regular file");
+  }
+  if ((metadata.mode & 0o077) !== 0) {
+    throw new Error("semantic review decision manifest must not be group/world accessible");
+  }
+  const parsed = JSON.parse(readFileSync(resolvedPath, "utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("semantic review decision manifest must be an object");
+  }
+  if (!/^pilot_\d{14}$/u.test(String(parsed.runId || ""))) {
+    throw new Error("semantic review decision manifest runId is invalid");
+  }
+  if (parsed.schema !== expectedSchema) {
+    throw new Error("semantic review decision manifest must bind the destination schema");
+  }
+  if (
+    !parsed.reviewer || typeof parsed.reviewer !== "object"
+    || parsed.reviewer.lifeDid !== expectedLifeDid
+    || !firstText(parsed.reviewer.agentId)
+  ) {
+    throw new Error("semantic review decision manifest reviewer is invalid");
+  }
+  if (!Array.isArray(parsed.decisions) || parsed.decisions.length !== 1) {
+    throw new Error("bounded remediation requires exactly one semantic review decision");
+  }
+  const decision = parsed.decisions[0];
+  if (
+    !decision || typeof decision !== "object" || Array.isArray(decision)
+    || !firstText(decision.caseId)
+    || !Number.isInteger(decision.expectedVersion)
+    || decision.expectedVersion < 1
+    || !firstText(decision.idempotencyKey)
+    || decision.disposition !== "invalid_candidate"
+    || normalizedIdentifiers(decision.evidenceIds).length === 0
+    || normalizedIdentifiers(decision.reasonCodes).length === 0
+  ) {
+    throw new Error("bounded remediation requires one complete invalid_candidate decision");
+  }
+  return {
+    path: resolvedPath,
+    value: parsed,
+    fingerprint: sha256(JSON.stringify(parsed)),
+  };
 }
 
 function sha256(value) {
@@ -438,6 +516,139 @@ async function openBootstrappedPilotSchema() {
   }
 }
 
+async function verifiedInvalidCandidateRemediation(pool, manifestDescriptor) {
+  if (manifestDescriptor === undefined) return undefined;
+  const manifest = manifestDescriptor.value;
+  const decision = manifest.decisions[0];
+  const row = (await pool.query(`SELECT
+      review_case.case_id,
+      review_case.curation_record_id,
+      review_case.receipt_id AS review_receipt_id,
+      review_case.tenant_id,
+      review_case.life_did,
+      review_case.memory_namespace,
+      review_case.trigger,
+      review_case.semantic_key,
+      review_case.semantic_policy_version,
+      review_case.memory_type,
+      review_case.semantic_relation,
+      review_case.status,
+      review_case.version,
+      review_case.latest_decision_id,
+      review_case.latest_idempotency_key,
+      review_case.latest_disposition,
+      review_case.reviewer,
+      review_case.decision_evidence_ids,
+      review_case.decision_reason_codes,
+      review_case.canonical_write_performed,
+      review_event.event_type,
+      review_event.case_version AS event_case_version,
+      review_event.decision_id AS event_decision_id,
+      review_event.idempotency_key AS event_idempotency_key,
+      review_event.disposition AS event_disposition,
+      review_event.reviewer AS event_reviewer,
+      review_event.evidence_ids AS event_evidence_ids,
+      review_event.reason_codes AS event_reason_codes,
+      curation.source_type,
+      curation.source_id,
+      curation.provider_unit_ref,
+      curation.provider_unit_text,
+      curation.speaker_provenance,
+      curation.outcome AS source_outcome,
+      curation.target_memory_id
+    FROM semantic_review_cases AS review_case
+    JOIN semantic_review_events AS review_event
+      ON review_event.case_id = review_case.case_id
+     AND review_event.decision_id = review_case.latest_decision_id
+    JOIN memory_curation_records AS curation
+      ON curation.record_id = review_case.curation_record_id
+     AND curation.receipt_id = review_case.receipt_id
+     AND curation.tenant_id = review_case.tenant_id
+     AND curation.life_did = review_case.life_did
+     AND curation.memory_namespace = review_case.memory_namespace
+     AND curation.semantic_key = review_case.semantic_key
+     AND curation.semantic_policy_version = review_case.semantic_policy_version
+     AND curation.memory_type = review_case.memory_type
+     AND curation.semantic_relation IS NOT DISTINCT FROM review_case.semantic_relation
+    WHERE review_case.case_id = $1`, [decision.caseId])).rows[0];
+  if (row === undefined) {
+    throw new Error("semantic review remediation case was not found");
+  }
+  const reviewerMatches =
+    row.reviewer?.lifeDid === manifest.reviewer.lifeDid
+    && row.reviewer?.agentId === manifest.reviewer.agentId
+    && row.event_reviewer?.lifeDid === manifest.reviewer.lifeDid
+    && row.event_reviewer?.agentId === manifest.reviewer.agentId;
+  const evidenceMatches =
+    JSON.stringify(normalizedIdentifiers(row.decision_evidence_ids))
+      === JSON.stringify(normalizedIdentifiers(decision.evidenceIds))
+    && JSON.stringify(normalizedIdentifiers(row.event_evidence_ids))
+      === JSON.stringify(normalizedIdentifiers(decision.evidenceIds));
+  const reasonsMatch =
+    JSON.stringify(normalizedIdentifiers(row.decision_reason_codes))
+      === JSON.stringify(normalizedIdentifiers(decision.reasonCodes))
+    && JSON.stringify(normalizedIdentifiers(row.event_reason_codes))
+      === JSON.stringify(normalizedIdentifiers(decision.reasonCodes));
+  if (
+    row.status !== "resolved"
+    || Number(row.version) !== decision.expectedVersion + 1
+    || row.trigger !== "pending_review"
+    || row.latest_idempotency_key !== decision.idempotencyKey
+    || row.latest_disposition !== "invalid_candidate"
+    || row.event_type !== "resolved"
+    || Number(row.event_case_version) !== Number(row.version)
+    || row.event_decision_id !== row.latest_decision_id
+    || row.event_idempotency_key !== decision.idempotencyKey
+    || row.event_disposition !== "invalid_candidate"
+    || row.canonical_write_performed !== false
+    || row.source_outcome !== "pending_review"
+    || !firstText(row.semantic_relation)
+    || !firstText(row.target_memory_id)
+    || !reviewerMatches
+    || !evidenceMatches
+    || !reasonsMatch
+  ) {
+    throw new Error("semantic review remediation decision does not match durable governed evidence");
+  }
+  if (
+    row.tenant_id !== scope.tenantId
+    || row.life_did !== scope.lifeDid
+    || row.memory_namespace !== scope.memoryNamespace
+  ) {
+    throw new Error("semantic review remediation scope does not match migration destination");
+  }
+  return new ExactInvalidCandidateSemanticReviewRemediation([{
+    reviewCaseId: String(row.case_id),
+    reviewDecisionId: String(row.latest_decision_id),
+    sourceCurationRecordId: String(row.curation_record_id),
+    reviewCaseVersion: Number(row.version),
+    disposition: "invalid_candidate",
+    scope,
+    sourceType: String(row.source_type),
+    sourceId: String(row.source_id),
+    providerUnitRef: String(row.provider_unit_ref),
+    reviewedCandidateFingerprint: semanticReviewCandidateFingerprint({
+      scope,
+      sourceType: String(row.source_type),
+      sourceId: String(row.source_id),
+      providerUnitRef: String(row.provider_unit_ref),
+      providerUnitText: String(row.provider_unit_text),
+      semanticKey: String(row.semantic_key),
+      semanticPolicyVersion: String(row.semantic_policy_version),
+      memoryType: String(row.memory_type),
+      speakerProvenance: String(row.speaker_provenance),
+      semanticRelation: String(row.semantic_relation),
+      targetMemoryId: String(row.target_memory_id),
+    }),
+    semanticKey: String(row.semantic_key),
+    semanticPolicyVersion: String(row.semantic_policy_version),
+    memoryType: String(row.memory_type),
+    speakerProvenance: String(row.speaker_provenance),
+    semanticRelation: String(row.semantic_relation),
+    targetMemoryId: String(row.target_memory_id),
+  }]);
+}
+
 async function canonicalCounts(pool) {
   const row = (await pool.query(`SELECT
     (SELECT count(*)::int FROM memory_distillation_receipts) AS receipts,
@@ -514,6 +725,12 @@ function migrationId(connection, eligibilityVersion) {
       ? {}
       : { distillationProjectionMode }),
     ...(fullSourceChunking === undefined ? {} : { fullSourceChunking }),
+    ...(semanticReviewDecisionManifest === undefined
+      ? {}
+      : {
+          semanticReviewDecisionFingerprint: semanticReviewDecisionManifest.fingerprint,
+          semanticReviewRemediationContract,
+        }),
     sourceSelection: targetSourceId === undefined
       ? { mode: "cursor" }
       : {
@@ -595,6 +812,11 @@ async function assertCanonicalCommitCanary(pool, result, summaries, before, afte
   const committedWithPendingReview = summary.status === "awaiting_review"
     && summary.canonicalizationOutcome === "pending_review"
     && !summary.admissionComplete;
+  if (requireCompleteCanonicalCommit && !fullyCommitted) {
+    throw new Error(
+      `canonical commit canary is not complete: status=${summary.status} outcome=${summary.canonicalizationOutcome} admissionComplete=${summary.admissionComplete}`,
+    );
+  }
   if (!fullyCommitted && !committedWithPendingReview) {
     throw new Error(`canonical commit canary did not commit: status=${summary.status} outcome=${summary.canonicalizationOutcome}`);
   }
@@ -626,6 +848,7 @@ async function assertCanonicalCommitCanary(pool, result, summaries, before, afte
   if (canonicalMatches < 1) throw new Error("canonical commit revision provenance does not point back to the Adapter Experience");
   return {
     required: true,
+    requireComplete: requireCompleteCanonicalCommit,
     verified: true,
     replay,
     receiptStatus: summary.status,
@@ -691,6 +914,13 @@ console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (target
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
 console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
 console.log(`distillationProjectionMode=${distillationProjectionMode}`);
+console.log(
+  `semanticReviewRemediation=${
+    semanticReviewDecisionManifest === undefined
+      ? "off"
+      : `${semanticReviewDecisionManifest.fingerprint.slice(0, 16)}:${semanticReviewRemediationContract}`
+  }`,
+);
 
 const eligibility = migrationEligibility();
 const destinationId = migrationId(hindsightConnection, eligibility.version);
@@ -715,6 +945,15 @@ await chmod(archiveRoot, 0o700);
 const pool = await openBootstrappedPilotSchema();
 let runtime;
 try {
+  const semanticReviewRemediation = await verifiedInvalidCandidateRemediation(
+    pool,
+    semanticReviewDecisionManifest,
+  );
+  const admissionPolicyVersion = semanticReviewRemediation === undefined
+    ? "hermes-migration-pilot-admission-v2"
+    : `hermes-migration-pilot-admission-v3-reviewed-invalid:${
+        semanticReviewRemediation.identity.slice("sha256:".length, "sha256:".length + 16)
+      }`;
   const clientPort = createHindsightPort(hindsightClient, hindsightConnection);
   const banks = new DeterministicHindsightPlaneResolver(hindsightBankPrefix);
   const distillationProvider = new HindsightMemoryAdapter({
@@ -749,12 +988,15 @@ try {
             ? "hermes-migration-pilot-distill-v2"
             : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`,
       canonicalizationPolicyVersion: "hermes-migration-pilot-canonical-v2",
-      admissionPolicyVersion: "hermes-migration-pilot-admission-v2",
+      admissionPolicyVersion,
       retentionPolicyVersion: "hermes-migration-pilot-retention-v2",
     },
     distillationProvider,
     retrievalPort,
     curationProviderVersion: "hermes-migration-pilot-curation-v2",
+    ...(semanticReviewRemediation === undefined
+      ? {}
+      : { semanticReviewRemediation }),
   });
   const ingestor = runtime.createNormalizedExperienceIngestor(scope);
   const stateStore = new JsonFileSourceMigrationStateStore(statePath);
@@ -777,7 +1019,15 @@ try {
         FROM memory_distillation_receipts
         WHERE tenant_id=$1 AND life_did=$2 AND memory_namespace=$3
           AND source_type='normalized_experience' AND source_id=$4
-        ORDER BY created_at DESC`, [scope.tenantId, scope.lifeDid, scope.memoryNamespace, experienceId]);
+          AND admission_policy_version=$5
+        ORDER BY created_at DESC
+        LIMIT 1`, [
+        scope.tenantId,
+        scope.lifeDid,
+        scope.memoryNamespace,
+        experienceId,
+        admissionPolicyVersion,
+      ]);
       receiptIds = replayReceipt.rows.map((row) => String(row.receipt_id));
     }
   }
@@ -813,6 +1063,14 @@ try {
       memoryNamespace: namespace,
       canonicalAuthority: "digital-life-memory-fabric",
       distillationProjectionMode,
+      admissionPolicyVersion,
+      semanticReviewRemediation: semanticReviewRemediation === undefined
+        ? null
+        : {
+            identity: semanticReviewRemediation.identity,
+            disposition: "invalid_candidate",
+            bindingCount: 1,
+          },
     },
     bounds: {
       maxUnits,

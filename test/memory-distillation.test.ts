@@ -33,6 +33,7 @@ import {
   type ReflectResult,
   type TranscriptDistillationInput,
 } from "../src/index.js";
+import { sha256 } from "../src/domain/utils.js";
 
 const scope: MemoryScope = {
   tenantId: "tenant_md",
@@ -1110,6 +1111,38 @@ test("MD-005 policy version is bound to the actual canonical governance policy",
       /does not match governance policy/,
     );
     assert.equal(client.retainCalls.length, 0);
+  });
+});
+
+test("MD-005 legacy receipt identity is unchanged when semantic review remediation is disabled", async () => {
+  await withArchive(async (archive) => {
+    const client = new FakeHindsightClient();
+    const service = new TranscriptDistillationService({
+      canonicalStore: new InMemoryCanonicalMemoryStore(),
+      receiptStore: new InMemoryDistillationReceiptStore(),
+      archive,
+      provider: createAdapter(client),
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const sourceId = "session-legacy-idempotency";
+    const receipt = await service.run(transcriptInput(sourceId));
+    const legacyKey = sha256({
+      scope,
+      sourceExperienceId: `hermes_session:${sourceId}`,
+      distillationPolicyVersion: "distill-v1",
+      canonicalizationPolicyVersion: "canonicalize-v1",
+      provider: "hindsight",
+      curationProvider: "dlmf-conservative-curation",
+      curationProviderVersion: "test-curation-v1",
+      admissionPolicyVersion: "admission-v1",
+      semanticPolicyVersion: "dlmf-semantic-v6",
+      sourceSegmentFingerprint: null,
+    });
+    assert.equal(
+      receipt.receiptId,
+      `dist_${legacyKey.slice("sha256:".length)}`,
+    );
   });
 });
 

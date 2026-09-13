@@ -15,6 +15,7 @@ import type { NormalizedExperienceIngestor } from "../source-adapters/source-mig
 import { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import { PostgresSemanticReviewStore } from "../review/postgres-semantic-review-store.js";
 import { SemanticReviewQueueService } from "../review/semantic-review-service.js";
+import type { SemanticReviewRemediationPolicy } from "../review/semantic-review-remediation.js";
 import { PostgresCanonicalMemoryStore } from "../store/postgres-canonical-memory-store.js";
 import { CanonicalVerifier } from "../verification/canonical-verifier.js";
 import {
@@ -33,6 +34,7 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   distillationProvider: MemoryDistillationProvider;
   retrievalPort: CanonicalProjectionPort;
   curationProviderVersion?: string;
+  semanticReviewRemediation?: SemanticReviewRemediationPolicy;
 }
 
 export interface CanonicalProjectionPort extends MemoryRetrievalPort {
@@ -78,6 +80,9 @@ export function createDigitalLifeStackDlmfRuntime(
       options.policies.canonicalizationPolicyVersion,
     ),
     semanticReviewQueue,
+    ...(options.semanticReviewRemediation === undefined
+      ? {}
+      : { semanticReviewRemediation: options.semanticReviewRemediation }),
   });
   const projectingDistillation = new CanonicalProjectionDistillationPort(
     distillation,
