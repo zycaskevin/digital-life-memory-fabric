@@ -1,7 +1,7 @@
 # DLMF-ADAPTER-001 — Hermes Source Adapter
 
 **Date:** 2026-09-12
-**Status:** Live Snapshot UAT PASS — bounded historical migration PASS; canonical-write/replay canary PASS; strict receipt closure awaiting review
+**Status:** Live Snapshot UAT PASS — bounded migration / canonical-write / replay / full-source chunking PASS; 100-Experience stage pending
 **Depends on:** DLMF-ADAPTER-000 Memory Source Adapter Contract
 
 ## Purpose
@@ -185,10 +185,44 @@ The commit canary also exposed an operational boundary. A 92K mixed transcript c
 
 The complete Experience, provenance, and archive remain source-neutral in both lanes; this split is a Memory Intelligence execution strategy, not an Adapter schema exception.
 
+## Full-source Evidence Chunking acceptance — 2026-09-13
+
+The Full-source Evidence Lane now supports bounded provider-execution chunking without creating new DLMF Experience identities. Chunking is implemented inside the Hindsight Memory Intelligence adapter, not inside `HermesSourceAdapter`. DLMF still archives, fingerprints, checkpoints, governs, and receipts one source `NormalizedExperience`.
+
+Chunk contract:
+
+- chunking is opt-in and version-bound through the migration/distillation policy;
+- each chunk has a deterministic provider document ID, content fingerprint, and asynchronous Hindsight operation ID;
+- source segments are kept intact when possible; an oversized source segment is deterministically partitioned into bounded fragments;
+- `maxChars` and optional `maxSegments` bound every provider operation;
+- chunk metadata records only provider-execution identity and fingerprints; it does not become Canonical Memory identity;
+- a failed or incomplete chunk prevents the source Experience receipt from reaching an accepted terminal state, therefore the source migration checkpoint does not advance;
+- replay uses the same provider operation IDs, so already-completed chunks are reused rather than extracted again.
+
+Executable tests cover bounded payload size, max-segment partitioning, deterministic document/operation identity, replay stability, and isolation from the `source_actor_only` Direct Memory Lane. Repository acceptance after this change: `172` tests, `0` failures (`8` environment-gated skips).
+
+### Live chunk UAT
+
+A real Hermes Experience from the frozen read-only snapshot was run through `full_plus_source_actor` with `maxChars=12000` and `maxSegments=6`. The source remained one Adapter Experience and one DLMF migration checkpoint. Hindsight executed:
+
+- `4` deterministic `full-source:chunk:NNNN:<fingerprint>` documents;
+- `1` direct-user source projection;
+- all `10` Hindsight operation records (batch + child retain) completed;
+- `retry_total=0`, with no provider error;
+- DLMF received `79` provider units and `79` curation decisions;
+- receipt terminal state: `complete / no_memory_worthy_content`;
+- Canonical Memory remained unchanged for this evidence-only sample (`0` candidates, `0` revisions), demonstrating fail-closed governance rather than forced memory creation.
+
+A second DLMF shadow schema then intentionally re-ran the same Experience against the same Hindsight bank, source, policy, and chunk configuration. The run completed in approximately `1.5s` with the same deterministic receipt ID and the same `79` provider units. Hindsight still contained only the original `10` operation records and `retry_total=0`, proving chunk-level provider replay did not create duplicate extraction work.
+
+This closes the chunking requirement while preserving the source-level invariant:
+
+`one source Experience -> one DLMF identity / archive / receipt / checkpoint -> N bounded provider chunks`.
+
 ## Next increment
 
-1. Add bounded chunking/partitioning for large full-source evidence extraction so long Hermes sessions cannot monopolize a provider operation.
-2. Preserve deterministic chunk identity, retry identity, provenance, and source-level checkpoint semantics across chunks.
-3. Run a 100-Experience staged migration with the Direct Memory Lane enabled and the evidence lane bounded/chunked.
-4. After 100-Experience retry/replay/provenance acceptance, increase to 1,000 and then the full frozen snapshot.
+1. Run a `100`-Experience staged migration with `full_plus_source_actor`, bounded Full-source Evidence chunks, and the Direct Memory Lane enabled.
+2. Validate cumulative skip/ingest distribution, checkpoint restart, provider operation reuse, Canonical provenance, and no duplicate receipt/head/revision growth on replay.
+3. Review provider throughput and chunk-size distribution before selecting the 1,000-Experience settings.
+4. After 100-Experience retry/replay/provenance acceptance, increase to `1,000` and then the full frozen snapshot.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.

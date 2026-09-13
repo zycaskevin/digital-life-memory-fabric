@@ -66,7 +66,7 @@ const tenantId = process.env.DLMF_MIGRATION_TENANT_ID || "arthurverse-hermes-mig
 const lifeDid = process.env.DLMF_MIGRATION_LIFE_DID || "did:arthurverse:nancy";
 const agentId = process.env.DLMF_MIGRATION_AGENT_ID || "nancy";
 const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
-const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 20);
+const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 100);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
 const hindsightAsyncTimeoutMs = boundedInt(
@@ -103,6 +103,20 @@ const distillationProjectionMode = firstText(process.env.DLMF_MIGRATION_DISTILLA
   || "full_plus_source_actor";
 if (!new Set(["full_plus_source_actor", "source_actor_only"]).has(distillationProjectionMode)) {
   throw new Error("DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE must be full_plus_source_actor or source_actor_only");
+}
+const chunkMaxCharsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_CHARS);
+const chunkMaxSegmentsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_SEGMENTS);
+if (chunkMaxSegmentsRaw !== undefined && chunkMaxCharsRaw === undefined) {
+  throw new Error("DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_SEGMENTS requires DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_CHARS");
+}
+const fullSourceChunking = chunkMaxCharsRaw === undefined
+  ? undefined
+  : {
+      maxChars: boundedInt(chunkMaxCharsRaw, 24_000, 256, 500_000),
+      maxSegments: boundedInt(chunkMaxSegmentsRaw, 24, 1, 500),
+    };
+if (distillationProjectionMode === "source_actor_only" && fullSourceChunking !== undefined) {
+  throw new Error("full-source chunking cannot be enabled when distillationProjectionMode=source_actor_only");
 }
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
   || "dlmf-hermes-migration-pilot-bounded-v2";
@@ -495,6 +509,7 @@ function migrationId(connection, eligibilityVersion) {
     ...(distillationProjectionMode === "source_actor_only"
       ? { distillationProjectionMode }
       : {}),
+    ...(fullSourceChunking === undefined ? {} : { fullSourceChunking }),
     sourceSelection: targetSourceId === undefined
       ? { mode: "cursor" }
       : {
@@ -667,7 +682,7 @@ console.log(`node=${process.version}`);
 console.log(`sourceDb=read-only schemaVersion=${inspection.metadata.schemaVersion} sessions=${inspection.metadata.sessionCount} messages=${inspection.metadata.messageCount}`);
 console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(databaseUrl)).slice(0, 12)} schema=${schema} schemaState=${existingSchema.state}`);
 console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
-console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs}`);
+console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs},fullSourceChunking:${fullSourceChunking === undefined ? "off" : `${fullSourceChunking.maxChars}chars/${fullSourceChunking.maxSegments}segments`}`);
 console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (targetCategory ? `reviewed-category:${targetCategory}` : "targeted")}`);
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
 console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
@@ -707,6 +722,7 @@ try {
     reflectBudget: "mid",
     asyncRetainTimeoutMs: hindsightAsyncTimeoutMs,
     distillationProjectionMode,
+    ...(fullSourceChunking === undefined ? {} : { fullSourceChunking }),
   });
   const retrievalPort = new HindsightCanonicalProjectionPort({
     client: clientPort,
@@ -723,7 +739,9 @@ try {
     policies: {
       distillationPolicyVersion: distillationProjectionMode === "source_actor_only"
         ? "hermes-migration-pilot-distill-v3-source-actor-only"
-        : "hermes-migration-pilot-distill-v2",
+        : fullSourceChunking === undefined
+          ? "hermes-migration-pilot-distill-v2"
+          : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`,
       canonicalizationPolicyVersion: "hermes-migration-pilot-canonical-v2",
       admissionPolicyVersion: "hermes-migration-pilot-admission-v2",
       retentionPolicyVersion: "hermes-migration-pilot-retention-v2",
@@ -790,7 +808,13 @@ try {
       canonicalAuthority: "digital-life-memory-fabric",
       distillationProjectionMode,
     },
-    bounds: { maxUnits, maxEvents, maxChars, hindsightAsyncTimeoutMs },
+    bounds: {
+      maxUnits,
+      maxEvents,
+      maxChars,
+      hindsightAsyncTimeoutMs,
+      fullSourceChunking: fullSourceChunking ?? null,
+    },
     run: {
       status: result.status,
       processedThisRun: result.processedThisRun,

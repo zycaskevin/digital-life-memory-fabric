@@ -14,6 +14,7 @@ import type {
   DerivedMemoryCandidateDraft,
   DistillationRequest,
   DistillationResult,
+  DistillationSourceSegment,
   MemoryCandidateType,
   MemoryEvidence,
   RecallRequest,
@@ -162,6 +163,13 @@ export interface HindsightPlaneResolver {
   projectionBankId(scope: MemoryScope): string;
 }
 
+export interface HindsightFullSourceChunkingOptions {
+  /** Maximum characters sent to one Hindsight full-source retain operation. */
+  maxChars: number;
+  /** Optional maximum number of rendered source-segment fragments per chunk. */
+  maxSegments?: number;
+}
+
 export interface HindsightMemoryAdapterOptions {
   client: HindsightClientPort;
   banks: HindsightPlaneResolver;
@@ -177,6 +185,12 @@ export interface HindsightMemoryAdapterOptions {
    * archive still preserves the complete experience. This is useful for direct-memory lanes.
    */
   distillationProjectionMode?: "full_plus_source_actor" | "source_actor_only";
+  /**
+   * Optional provider-execution partitioning for the full-source evidence lane.
+   * Chunks never become DLMF Experience identities; the source Experience, archive,
+   * receipt, governance, and migration checkpoint remain source-level.
+   */
+  fullSourceChunking?: HindsightFullSourceChunkingOptions;
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -316,6 +330,103 @@ function deterministicOperationId(value: string): string {
   return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20)}`;
 }
 
+interface FullSourceEvidenceChunk {
+  content: string;
+  segmentIds: string[];
+  fragmentCount: number;
+  fingerprint: string;
+}
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function renderSegmentFragments(
+  segment: DistillationSourceSegment,
+  maxChars: number,
+): Array<{ content: string; segmentId: string }> {
+  const trimmed = segment.content.trim();
+  const at = segment.observedAt === undefined ? "" : ` at=${segment.observedAt}`;
+  const baseHeader = `[actor=${segment.actor} segment=${segment.segmentId}${at}]`;
+  if (`${baseHeader}\n${trimmed}`.length <= maxChars) {
+    return [{ content: `${baseHeader}\n${trimmed}`, segmentId: segment.segmentId }];
+  }
+  const payloadSize = maxChars - baseHeader.length - 40;
+  if (payloadSize < 1) {
+    throw new ValidationError("Hindsight full-source chunk maxChars is too small for source-segment identity");
+  }
+  const parts = Math.ceil(trimmed.length / payloadSize);
+  const fragments: Array<{ content: string; segmentId: string }> = [];
+  for (let index = 0; index < parts; index += 1) {
+    const header = `${baseHeader.slice(0, -1)} part=${index + 1}/${parts}]`;
+    const payload = trimmed.slice(index * payloadSize, (index + 1) * payloadSize);
+    const content = `${header}\n${payload}`;
+    if (content.length > maxChars) {
+      throw new ValidationError("Hindsight full-source chunk fragment exceeds configured maxChars");
+    }
+    fragments.push({ content, segmentId: segment.segmentId });
+  }
+  return fragments;
+}
+
+function fullSourceEvidenceChunks(
+  request: DistillationRequest,
+  chunking: HindsightFullSourceChunkingOptions,
+): FullSourceEvidenceChunk[] {
+  const maxChars = chunking.maxChars;
+  const maxSegments = chunking.maxSegments ?? Number.MAX_SAFE_INTEGER;
+  const fragments: Array<{ content: string; segmentId?: string }> = [];
+  const sourceSegments = request.experience.sourceSegments ?? [];
+  if (sourceSegments.length > 0) {
+    for (const segment of sourceSegments) {
+      fragments.push(...renderSegmentFragments(segment, maxChars));
+    }
+  } else {
+    for (let offset = 0; offset < request.experience.content.length; offset += maxChars) {
+      fragments.push({ content: request.experience.content.slice(offset, offset + maxChars) });
+    }
+  }
+  if (fragments.length === 0) {
+    throw new ValidationError("Hindsight full-source chunking produced no evidence fragments");
+  }
+
+  const grouped: Array<{ content: string; segmentIds: string[]; fragmentCount: number }> = [];
+  let current: Array<{ content: string; segmentId?: string }> = [];
+  const flush = () => {
+    if (current.length === 0) return;
+    grouped.push({
+      content: current.map((fragment) => fragment.content).join("\n\n"),
+      segmentIds: current.flatMap((fragment) => fragment.segmentId === undefined ? [] : [fragment.segmentId]),
+      fragmentCount: current.length,
+    });
+    current = [];
+  };
+  for (const fragment of fragments) {
+    const candidate = current.length === 0
+      ? fragment.content
+      : `${current.map((item) => item.content).join("\n\n")}\n\n${fragment.content}`;
+    if (current.length > 0 && (candidate.length > maxChars || current.length >= maxSegments)) {
+      flush();
+    }
+    current.push(fragment);
+    const content = current.map((item) => item.content).join("\n\n");
+    if (content.length > maxChars || current.length > maxSegments) {
+      throw new ValidationError("Hindsight full-source chunking could not satisfy configured bounds");
+    }
+  }
+  flush();
+
+  return grouped.map((chunk, index) => ({
+    ...chunk,
+    fingerprint: sha256Hex(JSON.stringify({
+      index,
+      content: chunk.content,
+      segmentIds: chunk.segmentIds,
+      fragmentCount: chunk.fragmentCount,
+    })),
+  }));
+}
+
 function assertAsyncRetainAccepted(
   retained: HindsightRetainResponse,
   bankId: string,
@@ -361,6 +472,17 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       && options.distillationProjectionMode !== "source_actor_only"
     ) {
       throw new ValidationError("Unsupported Hindsight distillationProjectionMode");
+    }
+    if (options.fullSourceChunking !== undefined) {
+      if (!Number.isSafeInteger(options.fullSourceChunking.maxChars) || options.fullSourceChunking.maxChars < 256) {
+        throw new ValidationError("Hindsight fullSourceChunking.maxChars must be an integer >= 256");
+      }
+      if (
+        options.fullSourceChunking.maxSegments !== undefined
+        && (!Number.isSafeInteger(options.fullSourceChunking.maxSegments) || options.fullSourceChunking.maxSegments < 1)
+      ) {
+        throw new ValidationError("Hindsight fullSourceChunking.maxSegments must be a positive integer");
+      }
     }
     this.adapterVersion = options.adapterVersion;
     this.providerVersion = options.providerVersion;
@@ -471,34 +593,72 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     const documentMemories: HindsightMemoryUnit[] = [];
     const projectionMode = this.options.distillationProjectionMode ?? "full_plus_source_actor";
     if (projectionMode === "full_plus_source_actor") {
-      const fullSourceOperationId = deterministicOperationId(
-        `${distillation}|full-source|${request.experience.checksum}|${request.distillationPolicyVersion}|${documentId}|${request.experience.content}`,
-      );
-      const retained = await this.options.client.retain(distillation, request.experience.content, {
-        ...(timestamp === undefined ? {} : { timestamp }),
-        context: request.experience.contentType,
-        documentId,
-        async: true,
-        operationId: fullSourceOperationId,
-        tags: ["dlmf", "distillation"],
-        metadata: commonMetadata,
-      });
-      const acceptedFullSourceOperationId = assertAsyncRetainAccepted(
-        retained,
-        distillation,
-        "full-source",
-      );
-      if (acceptedFullSourceOperationId !== fullSourceOperationId) {
-        throw new Error("Hindsight full-source returned an unexpected operation_id");
+      const chunking = this.options.fullSourceChunking;
+      if (chunking === undefined) {
+        const fullSourceOperationId = deterministicOperationId(
+          `${distillation}|full-source|${request.experience.checksum}|${request.distillationPolicyVersion}|${documentId}|${request.experience.content}`,
+        );
+        const retained = await this.options.client.retain(distillation, request.experience.content, {
+          ...(timestamp === undefined ? {} : { timestamp }),
+          context: request.experience.contentType,
+          documentId,
+          async: true,
+          operationId: fullSourceOperationId,
+          tags: ["dlmf", "distillation"],
+          metadata: commonMetadata,
+        });
+        const acceptedFullSourceOperationId = assertAsyncRetainAccepted(
+          retained,
+          distillation,
+          "full-source",
+        );
+        if (acceptedFullSourceOperationId !== fullSourceOperationId) {
+          throw new Error("Hindsight full-source returned an unexpected operation_id");
+        }
+        await this.waitForAsyncRetain(
+          distillation,
+          acceptedFullSourceOperationId,
+          "full-source",
+        );
+        documentMemories.push(
+          ...(await this.listDocumentMemories(distillation, documentId)),
+        );
+      } else {
+        const chunks = fullSourceEvidenceChunks(request, chunking);
+        for (const [index, chunk] of chunks.entries()) {
+          const chunkNumber = index + 1;
+          const chunkDocumentId = `${documentId}:full-source:chunk:${String(chunkNumber).padStart(4, "0")}:${chunk.fingerprint.slice(0, 16)}`;
+          const chunkOperationId = deterministicOperationId(
+            `${distillation}|full-source-chunk|${request.experience.checksum}|${request.distillationPolicyVersion}|${chunkDocumentId}|${chunk.content}`,
+          );
+          const projection = `full-source-chunk:${chunkNumber}/${chunks.length}`;
+          const retained = await this.options.client.retain(distillation, chunk.content, {
+            ...(timestamp === undefined ? {} : { timestamp }),
+            context: `${request.experience.contentType}; projection=full-source-chunk`,
+            documentId: chunkDocumentId,
+            async: true,
+            operationId: chunkOperationId,
+            tags: ["dlmf", "distillation", "full_source_chunk"],
+            metadata: {
+              ...commonMetadata,
+              dlmf_projection_kind: "full_source_chunk",
+              dlmf_chunk_index: String(chunkNumber),
+              dlmf_chunk_count: String(chunks.length),
+              dlmf_chunk_fingerprint: chunk.fingerprint,
+              dlmf_chunk_fragment_count: String(chunk.fragmentCount),
+              dlmf_chunk_segment_ids_fingerprint: sha256Hex(chunk.segmentIds.join("\u001f")),
+            },
+          });
+          const acceptedOperationId = assertAsyncRetainAccepted(retained, distillation, projection);
+          if (acceptedOperationId !== chunkOperationId) {
+            throw new Error(`Hindsight ${projection} returned an unexpected operation_id`);
+          }
+          await this.waitForAsyncRetain(distillation, acceptedOperationId, projection);
+          documentMemories.push(
+            ...(await this.listDocumentMemories(distillation, chunkDocumentId)),
+          );
+        }
       }
-      await this.waitForAsyncRetain(
-        distillation,
-        acceptedFullSourceOperationId,
-        "full-source",
-      );
-      documentMemories.push(
-        ...(await this.listDocumentMemories(distillation, documentId)),
-      );
     }
     if (userSegments.length > 0) {
       const userDocumentId = `${documentId}:source-actor:user`;

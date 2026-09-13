@@ -696,6 +696,7 @@ test("MD-004 source-actor-only lane skips mixed transcript extraction while pres
     adapterVersion: "hindsight-source-actor-only-v1",
     providerVersion: "test-provider",
     distillationProjectionMode: "source_actor_only",
+    fullSourceChunking: { maxChars: 256, maxSegments: 1 },
     banks: {
       distillationBankId: () => "nancy:distillation",
       projectionBankId: () => "nancy:projection",
@@ -712,6 +713,118 @@ test("MD-004 source-actor-only lane skips mixed transcript extraction while pres
   assert.equal(result.providerUnits[0]?.memoryClass, "preference");
   assert.equal(result.providerUnits[0]?.epistemicStatus, "user_asserted");
   assert.equal(result.providerUnits[0]?.speakerProvenance, "user");
+});
+
+test("MD-004 chunked full-source evidence is bounded and replay-stable without changing Experience identity", async () => {
+  const sourceId = "session-full-source-chunked";
+  const longAssistantContent = "A".repeat(900);
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: `Assistant: ${longAssistantContent}`,
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-full-source-chunked",
+      checksum: "checksum-full-source-chunked",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        {
+          segmentId: "hermes_message:chunked-1",
+          actor: "assistant",
+          content: longAssistantContent,
+          observedAt: "2026-09-03T02:00:00.000Z",
+        },
+      ],
+    },
+    distillationPolicyVersion: "distill-full-source-chunked-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const client = new FakeHindsightClient();
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-full-source-chunked-v1",
+    providerVersion: "test-provider",
+    fullSourceChunking: { maxChars: 256, maxSegments: 2 },
+    asyncRetainPollIntervalMs: 1,
+    sleep: async () => undefined,
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  const first = await adapter.distill(request);
+  assert.equal(first.providerUnits.length, 0);
+  const firstCalls = structuredClone(client.retainCalls);
+  assert.ok(firstCalls.length > 1);
+  for (const [index, call] of firstCalls.entries()) {
+    assert.ok(call.content.length <= 256, `chunk ${index + 1} exceeded maxChars`);
+    assert.match(call.options?.documentId ?? "", /:full-source:chunk:\d{4}:[0-9a-f]{16}$/);
+    assert.equal(call.options?.async, true);
+    assert.ok(call.options?.operationId);
+    assert.equal(call.options?.metadata?.dlmf_projection_kind, "full_source_chunk");
+    assert.equal(call.options?.metadata?.dlmf_chunk_index, String(index + 1));
+    assert.equal(call.options?.metadata?.dlmf_chunk_count, String(firstCalls.length));
+    assert.match(call.options?.metadata?.dlmf_chunk_fingerprint ?? "", /^[0-9a-f]{64}$/);
+  }
+  assert.equal(client.listMemoriesCalls.length, firstCalls.length);
+
+  await adapter.distill(request);
+  const replayCalls = client.retainCalls.slice(firstCalls.length);
+  assert.equal(replayCalls.length, firstCalls.length);
+  assert.deepEqual(
+    replayCalls.map((call) => call.options?.documentId),
+    firstCalls.map((call) => call.options?.documentId),
+  );
+  assert.deepEqual(
+    replayCalls.map((call) => call.options?.operationId),
+    firstCalls.map((call) => call.options?.operationId),
+  );
+  assert.deepEqual(
+    replayCalls.map((call) => call.content),
+    firstCalls.map((call) => call.content),
+  );
+});
+
+test("MD-004 chunked full-source evidence respects maxSegments across stable source fragments", async () => {
+  const sourceId = "session-full-source-segment-bounded";
+  const segments = ["one", "two", "three"].map((value, index) => ({
+    segmentId: `hermes_message:${index + 1}`,
+    actor: "assistant" as const,
+    content: value.repeat(20),
+  }));
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: segments.map((segment) => segment.content).join("\n"),
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-full-source-segment-bounded",
+      checksum: "checksum-full-source-segment-bounded",
+      sourceSegments: segments,
+    },
+    distillationPolicyVersion: "distill-full-source-segment-bounded-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const client = new FakeHindsightClient();
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-full-source-segment-bounded-v1",
+    fullSourceChunking: { maxChars: 512, maxSegments: 1 },
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  await adapter.distill(request);
+  assert.equal(client.retainCalls.length, 3);
+  assert.deepEqual(
+    client.retainCalls.map((call) => call.options?.metadata?.dlmf_chunk_fragment_count),
+    ["1", "1", "1"],
+  );
 });
 
 test("MD-004 async full-source retain fails closed before provider enumeration", async () => {
