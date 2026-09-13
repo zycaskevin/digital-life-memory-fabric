@@ -38,6 +38,12 @@ import {
 import type { DistillationReceiptStore } from "./distillation-receipt-store.js";
 import type { MemoryCandidateGovernance } from "./governance.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
+import {
+  assertProviderExtractionArtifact,
+  providerExtractionArtifactIdentity,
+  type ProviderExtractionArtifact,
+  type ProviderExtractionArtifactStore,
+} from "./provider-extraction-artifact-store.js";
 import type {
   DistillationReceipt,
   DistillationReceiptId,
@@ -96,6 +102,7 @@ export interface TranscriptDistillationServiceOptions {
   semanticGovernance?: SemanticMemoryGovernance;
   semanticReviewQueue?: PendingSemanticReviewQueue;
   semanticReviewRemediation?: SemanticReviewRemediationPolicy;
+  providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
   clock?: Clock;
   receiptIds?: DistillationReceiptIdFactory;
 }
@@ -391,24 +398,74 @@ export class TranscriptDistillationService {
       await this.options.receiptStore.put(receipt);
 
       stage = "provider";
-      const result = await this.options.provider.distill({
-        experience: {
-          scope: archived.scope,
-          sourceType: archived.sourceType,
-          sourceId: archived.sourceId,
-          content: archived.content,
-          contentType: archived.contentType,
-          archiveRef: archived.archiveRef,
-          checksum: archived.checksum,
-          ...(archived.createdAt === undefined ? {} : { createdAt: archived.createdAt }),
-          ...(archived.observedAt === undefined ? {} : { observedAt: archived.observedAt }),
-          ...(archived.metadata === undefined ? {} : { metadata: archived.metadata }),
-          ...(input.sourceSegments === undefined ? {} : { sourceSegments: input.sourceSegments }),
-        },
+      const providerExperience = {
+        scope: archived.scope,
+        sourceType: archived.sourceType,
+        sourceId: archived.sourceId,
+        content: archived.content,
+        contentType: archived.contentType,
+        archiveRef: archived.archiveRef,
+        checksum: archived.checksum,
+        ...(archived.createdAt === undefined ? {} : { createdAt: archived.createdAt }),
+        ...(archived.observedAt === undefined ? {} : { observedAt: archived.observedAt }),
+        ...(archived.metadata === undefined ? {} : { metadata: archived.metadata }),
+        ...(input.sourceSegments === undefined ? {} : { sourceSegments: input.sourceSegments }),
+      };
+      const providerRequest = {
+        experience: providerExperience,
         distillationPolicyVersion: input.distillationPolicyVersion,
         requestedAt: this.clock.now(),
-      });
-      validateProviderResult(result, this.options.provider);
+      };
+      let result: DistillationResult;
+      const artifactStore = this.options.providerExtractionArtifactStore;
+      if (artifactStore === undefined) {
+        if (receipt.providerExtractionRef !== undefined || receipt.providerExtractionChecksum !== undefined) {
+          throw new ValidationError(
+            "receipt requires configured provider extraction artifact store",
+          );
+        }
+        result = await this.options.provider.distill(providerRequest);
+        validateProviderResult(result, this.options.provider);
+      } else {
+        const artifactIdentity = providerExtractionArtifactIdentity(
+          providerExperience,
+          this.options.provider,
+          input.distillationPolicyVersion,
+        );
+        let artifact: ProviderExtractionArtifact | undefined;
+        if (receipt.providerExtractionRef !== undefined || receipt.providerExtractionChecksum !== undefined) {
+          if (receipt.providerExtractionRef === undefined || receipt.providerExtractionChecksum === undefined) {
+            throw new ValidationError("receipt provider extraction artifact reference is incomplete");
+          }
+          artifact = await artifactStore.resolve(receipt.providerExtractionRef);
+          assertProviderExtractionArtifact(artifact, artifactIdentity);
+          if (artifact.checksum !== receipt.providerExtractionChecksum) {
+            throw new ValidationError("receipt provider extraction artifact checksum mismatch");
+          }
+        } else {
+          artifact = await artifactStore.get(artifactIdentity);
+        }
+        if (artifact === undefined) {
+          const extracted = await this.options.provider.distill(providerRequest);
+          validateProviderResult(extracted, this.options.provider);
+          artifact = await artifactStore.put({
+            identity: artifactIdentity,
+            result: extracted,
+            createdAt: this.clock.now(),
+          });
+        }
+        assertProviderExtractionArtifact(artifact, artifactIdentity);
+        result = structuredClone(artifact.result);
+        validateProviderResult(result, this.options.provider);
+        receipt = {
+          ...receipt,
+          providerExtractionRef: artifact.artifactRef,
+          providerExtractionChecksum: artifact.checksum,
+          providerRunId: result.providerRunId,
+          updatedAt: this.clock.now(),
+        };
+        await this.options.receiptStore.put(receipt);
+      }
       result.providerUnits = result.providerUnits.map((unit) => {
         const classified = this.semanticGovernance.classify(unit);
         return {

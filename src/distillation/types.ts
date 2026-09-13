@@ -214,6 +214,8 @@ export interface DistillationReceipt {
   canonicalizedAt?: string;
   rawArchiveRef?: string;
   rawArchiveChecksum?: string;
+  providerExtractionRef?: string;
+  providerExtractionChecksum?: string;
   provider: string;
   providerRunId?: string;
   distillationPolicyVersion: string;

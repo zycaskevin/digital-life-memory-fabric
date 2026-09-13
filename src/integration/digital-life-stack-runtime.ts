@@ -5,6 +5,7 @@ import { DeterministicCanonicalAdmissionPolicy } from "../curation/deterministic
 import { PostgresMemoryCurationRecordStore } from "../curation/postgres-memory-curation-record-store.js";
 import { EvidenceBoundMemoryGovernance } from "../distillation/governance.js";
 import type { MemoryDistillationProvider } from "../distillation/memory-distillation-provider.js";
+import type { ProviderExtractionArtifactStore } from "../distillation/provider-extraction-artifact-store.js";
 import { PostgresDistillationReceiptStore } from "../distillation/postgres-distillation-receipt-store.js";
 import { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
@@ -32,6 +33,7 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   runtimeId?: string;
   policies: DigitalLifeStackDlmfPolicies;
   distillationProvider: MemoryDistillationProvider;
+  providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
   retrievalPort: CanonicalProjectionPort;
   curationProviderVersion?: string;
   semanticReviewRemediation?: SemanticReviewRemediationPolicy;
@@ -69,6 +71,9 @@ export function createDigitalLifeStackDlmfRuntime(
     receiptStore: new PostgresDistillationReceiptStore(options.pool),
     archive: new FilesystemRawExperienceArchiveProvider(options.archiveRoot),
     provider: options.distillationProvider,
+    ...(options.providerExtractionArtifactStore === undefined
+      ? {}
+      : { providerExtractionArtifactStore: options.providerExtractionArtifactStore }),
     curationProvider: new ConservativeMemoryCurationProvider(
       options.curationProviderVersion ?? "dls-conservative-v1",
     ),
@@ -166,9 +171,10 @@ class PostgresDlmfReadiness implements DigitalLifeStackDlmfReadiness {
     const migrations = (await this.pool.query(
       "SELECT migration_name FROM dlfm_schema_migrations ORDER BY migration_name",
     )).rows.map((value) => String(value.migration_name));
-    const ready = migrations.length === 2
+    const ready = migrations.length === 3
       && migrations[0] === "0006_semantic_review_queue.sql"
-      && migrations[1] === "0007_insight_promotion_governance.sql";
-    return { ready, schemaState: ready ? "current-0007" : "stale-or-future" };
+      && migrations[1] === "0007_insight_promotion_governance.sql"
+      && migrations[2] === "0008_provider_extraction_artifacts.sql";
+    return { ready, schemaState: ready ? "current-0008" : "stale-or-future" };
   }
 }

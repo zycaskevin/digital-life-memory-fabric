@@ -26,6 +26,8 @@ interface ReceiptRow {
   canonicalized_at: Date | string | null;
   raw_archive_ref: string | null;
   raw_archive_checksum: string | null;
+  provider_extraction_ref: string | null;
+  provider_extraction_checksum: string | null;
   provider: string;
   provider_run_id: string | null;
   distillation_policy_version: string;
@@ -108,6 +110,8 @@ function fromRow(row: ReceiptRow): DistillationReceipt {
   if (canonicalizedAt !== undefined) receipt.canonicalizedAt = canonicalizedAt;
   if (row.raw_archive_ref !== null) receipt.rawArchiveRef = row.raw_archive_ref;
   if (row.raw_archive_checksum !== null) receipt.rawArchiveChecksum = row.raw_archive_checksum;
+  if (row.provider_extraction_ref !== null) receipt.providerExtractionRef = row.provider_extraction_ref;
+  if (row.provider_extraction_checksum !== null) receipt.providerExtractionChecksum = row.provider_extraction_checksum;
   if (row.provider_run_id !== null) receipt.providerRunId = row.provider_run_id;
   if (row.provider_version !== null) receipt.providerVersion = row.provider_version;
   if (row.curation_provider_version !== null) {
@@ -156,6 +160,7 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         source_type, source_id, idempotency_key,
         ingested_at, archived_at, distilled_at, curated_at, canonicalized_at,
         raw_archive_ref, raw_archive_checksum,
+        provider_extraction_ref, provider_extraction_checksum,
         provider, provider_run_id,
         distillation_policy_version, canonicalization_policy_version,
         admission_policy_version, retention_policy_version,
@@ -168,8 +173,8 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         created_at, updated_at, semantic_policy_version
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-        $21,$22,$23,$24,$25,$26,$27::jsonb,$28,$29,$30::text[],$31::text[],$32,
-        $33::jsonb,$34::jsonb,$35,$36,$37,$38,$39,$40,$41
+        $21,$22,$23,$24,$25,$26,$27,$28,$29::jsonb,$30,$31,$32::text[],$33::text[],$34,
+        $35::jsonb,$36::jsonb,$37,$38,$39,$40,$41,$42,$43
       )
       ON CONFLICT (tenant_id, life_did, memory_namespace, idempotency_key)
       DO UPDATE SET
@@ -180,6 +185,8 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         canonicalized_at=EXCLUDED.canonicalized_at,
         raw_archive_ref=EXCLUDED.raw_archive_ref,
         raw_archive_checksum=EXCLUDED.raw_archive_checksum,
+        provider_extraction_ref=EXCLUDED.provider_extraction_ref,
+        provider_extraction_checksum=EXCLUDED.provider_extraction_checksum,
         provider=EXCLUDED.provider,
         provider_run_id=EXCLUDED.provider_run_id,
         distillation_policy_version=EXCLUDED.distillation_policy_version,
@@ -261,6 +268,8 @@ export class PostgresDistillationReceiptStore implements DistillationReceiptStor
         receipt.canonicalizedAt ?? null,
         receipt.rawArchiveRef ?? null,
         receipt.rawArchiveChecksum ?? null,
+        receipt.providerExtractionRef ?? null,
+        receipt.providerExtractionChecksum ?? null,
         receipt.provider,
         receipt.providerRunId ?? null,
         receipt.distillationPolicyVersion,
