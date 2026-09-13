@@ -7,6 +7,7 @@ import {
   HermesSourceAdapter,
   HermesSqliteReader,
   assertNormalizedExperience,
+  experienceIdFor,
 } from "../dist/index.js";
 
 const CONTRACT = "dlmf/hermes-source-adapter-live-uat/v1";
@@ -125,10 +126,21 @@ async function main() {
   const secondNormalized = await adapter.normalize(secondRead);
   assertNormalizedExperience(secondNormalized);
 
+  const expectedExperienceId = experienceIdFor(sample.source);
   const repeatReadStable =
-    firstNormalized.experienceId === secondNormalized.experienceId
+    sample.experienceId === expectedExperienceId
+    && firstNormalized.experienceId === secondNormalized.experienceId
+    && firstNormalized.experienceId === expectedExperienceId
+    && secondNormalized.experienceId === expectedExperienceId
     && firstFingerprint.value === secondFingerprint.value
-    && firstNormalized.provenance.sourceFingerprint.value === secondNormalized.provenance.sourceFingerprint.value;
+    && firstNormalized.provenance.sourceFingerprint.value === firstFingerprint.value
+    && secondNormalized.provenance.sourceFingerprint.value === secondFingerprint.value
+    && firstNormalized.sourceSystem === sample.source.sourceSystem
+    && firstNormalized.sourceType === sample.source.sourceType
+    && firstNormalized.sourceId === sample.source.sourceId
+    && secondNormalized.sourceSystem === sample.source.sourceSystem
+    && secondNormalized.sourceType === sample.source.sourceType
+    && secondNormalized.sourceId === sample.source.sourceId;
   if (!repeatReadStable) throw new Error("repeat-read identity/fingerprint stability failed");
 
   const sourceMessageCount = firstRead.payload.messages.length;
