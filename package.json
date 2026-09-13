@@ -33,7 +33,8 @@
     "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs",
     "uat:hermes-source-adapter": "npm run build && node scripts/hermes-source-adapter-live-uat.mjs",
     "pilot:hermes-migration:preflight": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --preflight",
-    "pilot:hermes-migration:run": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --apply"
+    "pilot:hermes-migration:run": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --apply",
+    "pilot:hermes-migration:inspect": "npm run build && node scripts/historical-migration/inspect-hermes-migration-failure.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
