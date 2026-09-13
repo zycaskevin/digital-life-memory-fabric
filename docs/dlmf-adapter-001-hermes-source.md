@@ -335,10 +335,36 @@ An independent empty migration-state root replayed source positions `1-500` agai
 
 This closes the Direct500 gate and proves that source checkpoint recovery is independent of the AEB job-tracking process, while receipt/canonical/provider identities remain replay-safe at 500-source scale.
 
+## Direct Memory Lane Batch750 acceptance — 2026-09-13
+
+The Direct Memory Lane continued over source positions `501-750` with the same frozen snapshot, migration fingerprint, PostgreSQL destination, Hindsight bank, `source_actor_only` policy, direct-user bounds (`50` user events / `60K` user characters), lookahead `8`, and four-slot Ollama runtime.
+
+Cumulative acceptance at source position `750`:
+
+- `750 processed / 537 ingested / 213 skipped`;
+- the skip distribution is deterministic and policy-explainable: `199` `hermes_empty_session` and `14` `bounded_direct_source_char_limit`; an independent Adapter+policy scan reproduced exactly `537 / 213`;
+- PostgreSQL: `537` receipts, `120` candidate rows, `114` Canonical Memory heads, and `115` revisions;
+- receipt outcomes: `84 complete/committed`, `451 complete/no_memory_worthy_content`, and `2 awaiting_review/pending_review`;
+- candidate states: `115 ACCEPTED`, `2 CONFLICT` retained as pre-fix audit history, and `3 PENDING` review-path candidates;
+- provenance coverage: `120/120` candidate rows and `115/115` canonical revisions retain source-experience provenance;
+- Hindsight: `1074/1074` operation records completed = `537` retain children + `537` batch parents, with `retry_total=0`;
+- the canonical-admission remediation dry-run remains `repairsNeeded=0`; no new retry-binding drift occurred after the fix.
+
+An independent empty migration-state root replayed source positions `1-750` against the exact same destination, policy, bank, and frozen snapshot. Replay deterministically rediscovered `750 processed / 537 ingested / 213 skipped` while preserving:
+
+- receipts `537 -> 537`;
+- candidates `120 -> 120`;
+- heads `114 -> 114`;
+- revisions `115 -> 115`;
+- Hindsight operations `1074 -> 1074`, all completed, `retry_total=0`;
+- canonical-admission remediation dry-run `repairsNeeded=0`.
+
+This closes the Direct750 gate. The large skip increase in positions `501-750` is source-distribution driven (mostly empty Hermes sessions), not policy drift or lost experience.
+
 ## Next increment
 
-1. Replay the first `250` Direct Memory Lane sources from an independent empty migration-state root against the same destination/banks and require zero receipt/head/revision/operation growth.
-2. Continue the Direct Memory Lane over sources `251-500`, then `501-750`, then `751-1000` using the same migration identity, bounded lookahead, and four-slot Ollama runtime; stop on any new fail-closed admission inconsistency.
-3. After the Direct1000 replay/provenance gate passes, run the Full-source Evidence Lane over the same first 1,000 sources in resumable batches using `full_source_only` and the selected `24K/12` chunk baseline.
-4. Compare direct/evidence throughput and long-tail provider behavior before increasing beyond 1,000 or widening source eligibility bounds.
+1. Continue the same Direct Memory Lane over source positions `751-1000` without changing migration identity, source bounds, lookahead, provider model, or governance policy.
+2. At Direct1000, require an independent empty-state replay with zero receipt/candidate/head/revision/Hindsight-operation growth and `repairsNeeded=0`.
+3. After the Direct1000 gate passes, run the Full-source Evidence Lane over the same first 1,000 sources in resumable batches using `full_source_only` and the selected `24K/12` chunk baseline.
+4. Compare direct/evidence throughput and long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.
