@@ -410,10 +410,33 @@ The earlier fail-closed receipt and review evidence remain append-only. See
 [DLMF-SG-011](dlmf-sg-011-hermes-canonical-canary-review-remediation.md) for the
 governance contract and complete verification record.
 
+## Full-source Evidence Lane Batch250 acceptance — 2026-09-13
+
+The Full-source Evidence Lane processed source positions `1-250` against the same frozen Hermes snapshot using `full_source_only`, conservative full-source eligibility (`80` events / `60K` characters), bounded `24K/12` provider chunks, migration lookahead `8`, and the four-slot Ollama runtime. This lane is evidence-only: provider units may support memory governance, but mixed transcript evidence is not permitted to acquire direct-user Canonical authority.
+
+Durable source-prefix result:
+
+- `250 processed / 78 ingested / 172 skipped`;
+- source positions `1-250` contain exactly `78` DLMF receipts, and all `78/78` are `complete / no_memory_worthy_content`;
+- `2,516` provider units received exactly `2,516` curation decisions;
+- every admitted evidence unit remained `supporting_evidence_only`; PostgreSQL contains `0` candidates, `0` Canonical Memory heads, and `0` revisions in the Evidence destination;
+- the first-250 provider prefix contains `252/252` completed Hindsight operation records across `126` deterministic chunk documents, with `retry_total=0`;
+- the dominant curation classes are synthesized mixed-speaker general, technical, project, event, and transient evidence; even provider-labelled mixed preferences remain supporting evidence and cannot become Canonical Memory.
+
+An independent empty migration-state root replayed source positions `1-250` against the same PostgreSQL destination, Hindsight bank, source snapshot, policy versions, and chunk policy. Replay completed without creating new receipts, Canonical state, or provider work. A second independent replay was used to make the provider assertion source-position scoped: Hindsight remained exactly `252` operation records / `126` chunk documents for positions `1-250`, all completed with `retry_total=0`; PostgreSQL remained exactly `78` terminal prefix receipts and zero Canonical state.
+
+Three speculative receipts were observed outside the accepted prefix at source positions `252`, `253`, and `257`. They were created by earlier interrupted/concurrent lookahead work, were not counted as durable Batch250 progress, and are explicitly owned by Batch2. Prefix acceptance therefore uses Adapter source position rather than global destination row count, preventing valid next-batch work from contaminating the Batch250 gate.
+
+### Evidence chunk throughput observation
+
+The `24K/12` policy substantially reduces provider operation count compared with `12K/6`, and the earlier same-Experience A/B remained essentially equal in total wall time (`321.6s` vs `330.2s`). Batch250 nevertheless confirmed a pronounced local-model long tail: completed evidence retains showed roughly p50 `52.8s`, p90 `160.7s`, with individual operations extending beyond ten minutes while continuing to emit healthy Hindsight heartbeat/storing progress. Because the same-Experience A/B did not show a 12K wall-time advantage, Batch2-4 retain `24K/12`; long-tail behavior is treated as a provider/model throughput characteristic rather than evidence that Source identity or checkpointing is stalled.
+
+This closes the Evidence250 gate: mixed full-source evidence is source-resumable, chunk-operation replay-safe, provenance-preserving, and unable to bypass Canonical Memory authority.
+
 ## Next increment
 
-1. Run the Full-source Evidence Lane over the same first `1,000` source positions with `full_source_only`, conservative full-source eligibility, and deterministic `24K/12` provider chunks.
-2. Execute evidence migration in resumable bounded batches; require mixed-evidence receipts to remain unable to acquire direct-user Canonical authority.
-3. At Evidence1000, require empty-state replay, zero duplicate Hindsight chunk operations, complete source provenance, and no unintended Canonical growth from mixed evidence.
+1. Continue the Full-source Evidence Lane over source positions `251-500`, `501-750`, and `751-1000` with the same frozen snapshot, migration identity, `full_source_only` policy, `24K/12` chunks, and bounded lookahead.
+2. Close each 250-source gate with Adapter-position-scoped receipt/provider checks so speculative next-batch work cannot contaminate the accepted prefix.
+3. At Evidence1000, require an independent empty-state replay, zero duplicate prefix Hindsight chunk operations, complete source provenance, and zero unintended Canonical growth from mixed evidence.
 4. Compare Direct vs Evidence throughput/long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.
