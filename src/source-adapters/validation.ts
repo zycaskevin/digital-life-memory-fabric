@@ -2,9 +2,16 @@ import type { NormalizedExperience } from "./contracts.js";
 import { experienceIdFor } from "./identity.js";
 
 export function assertNormalizedExperience(value: NormalizedExperience): void {
-  if (value.sourceSystem.trim() === "") throw new Error("sourceSystem must not be empty");
-  if (value.sourceType.trim() === "") throw new Error("sourceType must not be empty");
-  if (value.sourceId.trim() === "") throw new Error("sourceId must not be empty");
+  for (const [field, raw] of [
+    ["sourceSystem", value.sourceSystem],
+    ["sourceType", value.sourceType],
+    ["sourceId", value.sourceId],
+  ] as const) {
+    if (raw.trim() === "") throw new Error(`${field} must not be empty`);
+    if (raw !== raw.trim()) {
+      throw new Error(`${field} must not contain surrounding whitespace`);
+    }
+  }
 
   const expectedId = experienceIdFor({
     sourceSystem: value.sourceSystem,

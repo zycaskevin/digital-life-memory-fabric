@@ -117,6 +117,25 @@ export function validateSourceMigrationState(value: unknown): SourceMigrationSta
   ] as const) {
     if (typeof raw !== "string" || !raw.trim()) throw new Error(`source migration checkpoint ${field} is invalid`);
   }
+  if (
+    checkpoint.cursor !== undefined
+    && (typeof checkpoint.cursor !== "string" || !checkpoint.cursor.trim())
+  ) {
+    throw new Error("source migration checkpoint cursor is invalid");
+  }
+  if (checkpoint.lastSourceFingerprint !== undefined) {
+    const fingerprint = checkpoint.lastSourceFingerprint as unknown;
+    if (
+      fingerprint === null
+      || typeof fingerprint !== "object"
+      || Array.isArray(fingerprint)
+      || (fingerprint as { algorithm?: unknown }).algorithm !== "sha256"
+      || typeof (fingerprint as { value?: unknown }).value !== "string"
+      || !/^[0-9a-f]{64}$/.test((fingerprint as { value: string }).value)
+    ) {
+      throw new Error("source migration checkpoint lastSourceFingerprint is invalid");
+    }
+  }
   for (const [field, raw] of [
     ["processedUnits", state.processedUnits],
     ["ingestedUnits", state.ingestedUnits],

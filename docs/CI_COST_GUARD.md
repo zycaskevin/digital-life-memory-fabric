@@ -15,8 +15,8 @@ The local gate starts an isolated loopback-only PostgreSQL 16 container, runs th
 
 Hosted CI rules:
 
-- one non-draft pull-request run per work package;
-- one rerun of the same revision only for a proven transient provider or runner failure;
+- full validation starts for a new non-draft pull-request revision or by explicit manual dispatch;
+- one rerun of the same revision is allowed only for a proven transient provider or runner failure;
 - read-only GitHub permissions, concurrency cancellation, and per-job timeout are mandatory;
 - post-merge verification is manual only and must use `workflow_dispatch`;
 - a skipped, cancelled, zero-step, or stale run is not release evidence.

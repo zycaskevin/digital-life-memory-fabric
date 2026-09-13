@@ -3,13 +3,13 @@ BEGIN;
 ALTER TABLE memory_distillation_receipts
   ADD COLUMN provider_extraction_ref text,
   ADD COLUMN provider_extraction_checksum text,
-  ADD CONSTRAINT memory_distillation_receipts_provider_extraction_pair_check CHECK (
+  ADD CONSTRAINT memory_distillation_receipts_provider_extraction_pair_check CHECK ((
     (provider_extraction_ref IS NULL AND provider_extraction_checksum IS NULL)
     OR (
       nullif(btrim(provider_extraction_ref), '') IS NOT NULL
       AND provider_extraction_checksum ~ '^sha256:[0-9a-f]{64}$'
     )
-  );
+  ) IS TRUE);
 
 CREATE FUNCTION validate_distillation_receipt_provider_extraction_binding()
 RETURNS trigger

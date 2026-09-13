@@ -90,6 +90,37 @@ test("normalized experience rejects forged stable identity", () => {
   assert.throws(() => assertNormalizedExperience(value), /stable source identity/);
 });
 
+test("normalized experience rejects non-canonical source identity whitespace", () => {
+  for (const field of ["sourceSystem", "sourceType", "sourceId"] as const) {
+    const paddedSource = { ...source, [field]: ` ${source[field]}` };
+    const value: NormalizedExperience = {
+      sourceSystem: paddedSource.sourceSystem,
+      sourceType: paddedSource.sourceType,
+      sourceId: paddedSource.sourceId,
+      experienceId: experienceIdFor(paddedSource),
+      startedAt: { certainty: "unknown" },
+      endedAt: { certainty: "unknown" },
+      actors: [],
+      events: [],
+      content: [],
+      metadata: {},
+      provenance: {
+        source: paddedSource,
+        sourceFingerprint: sha256SourceFingerprint("x"),
+        adapterName: "test",
+        adapterVersion: "1",
+        discoveredAt: "2026-09-12T00:00:00.000Z",
+        readAt: "2026-09-12T00:00:00.000Z",
+        normalizedAt: "2026-09-12T00:00:00.000Z",
+      },
+    };
+    assert.throws(
+      () => assertNormalizedExperience(value),
+      new RegExp(`${field} must not contain surrounding whitespace`),
+    );
+  }
+});
+
 test("normalized experience rejects exact time without a value", () => {
   const experienceId = experienceIdFor(source);
   const value: NormalizedExperience = {

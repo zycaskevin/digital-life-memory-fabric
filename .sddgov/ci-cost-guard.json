@@ -13,7 +13,7 @@
     "max_runs_per_work_package": 1,
     "max_reruns_per_revision": 1,
     "expected_minutes": 5,
-    "full_matrix": "ready_for_review",
+    "full_matrix": "manual_or_ready_for_review",
     "post_merge_verification": "manual_only"
   },
   "workflow_controls": {
