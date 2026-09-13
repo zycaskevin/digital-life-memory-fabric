@@ -469,6 +469,10 @@ export class TranscriptDistillationService {
       stage = "admission";
       const outcomeCounts = emptyCurationOutcomeCounts();
       let exactDuplicates = 0;
+      const priorCurationRecords = new Map(
+        (await this.options.curationStore.listByReceipt(receipt.receiptId))
+          .map((record) => [record.recordId, record] as const),
+      );
 
       for (const unit of result.providerUnits) {
         const recordId = curationRecordId(receipt.receiptId, unit.providerUnitRef);
@@ -499,6 +503,57 @@ export class TranscriptDistillationService {
         }
         let candidateId: MemoryCurationRecord["candidateId"] | undefined;
         let canonicalMemoryId: MemoryId | undefined;
+
+        const priorCanonicalRecord = priorCurationRecords.get(recordId);
+        if (priorCanonicalRecord?.canonicalMemoryId !== undefined) {
+          const currentUnitFingerprint = providerUnitFingerprint(unit);
+          if (
+            priorCanonicalRecord.candidateId === undefined
+            || (priorCanonicalRecord.outcome !== "canonical_candidate"
+              && priorCanonicalRecord.outcome !== "canonical_merge")
+            || priorCanonicalRecord.providerUnitRef !== unit.providerUnitRef
+            || priorCanonicalRecord.providerUnitFingerprint !== currentUnitFingerprint
+            || priorCanonicalRecord.memoryType !== memoryType
+            || priorCanonicalRecord.speakerProvenance !== speakerProvenance
+            || priorCanonicalRecord.semanticKey !== semanticKey
+            || priorCanonicalRecord.admissionPolicyVersion !== input.admissionPolicyVersion
+            || priorCanonicalRecord.curationProvider !== this.options.curationProvider.name
+            || (priorCanonicalRecord.curationProviderVersion ?? undefined)
+              !== (this.options.curationProvider.version ?? undefined)
+          ) {
+            throw new ValidationError(
+              `canonicalized curation record drift detected for ${unit.providerUnitRef}`,
+            );
+          }
+          const priorCandidate = await this.options.canonicalStore.getCandidate(
+            priorCanonicalRecord.candidateId,
+          );
+          if (
+            priorCandidate === undefined
+            || priorCandidate.status !== "ACCEPTED"
+            || !(await this.options.curationStore.verifyCanonicalAdmission(priorCandidate))
+          ) {
+            throw new ValidationError(
+              `canonicalized curation record has invalid candidate binding for ${unit.providerUnitRef}`,
+            );
+          }
+          const priorHead = await this.options.canonicalStore.getHead(
+            priorCanonicalRecord.canonicalMemoryId,
+          );
+          if (priorHead === undefined || !sameScope(priorHead.scope, input.scope)) {
+            throw new ValidationError(
+              `canonicalized curation record has invalid canonical memory binding for ${unit.providerUnitRef}`,
+            );
+          }
+          candidateId = priorCanonicalRecord.candidateId;
+          canonicalMemoryId = priorCanonicalRecord.canonicalMemoryId;
+          if (!receipt.candidateIds.includes(candidateId)) receipt.candidateIds.push(candidateId);
+          if (!receipt.canonicalMemoryIds.includes(canonicalMemoryId)) {
+            receipt.canonicalMemoryIds.push(canonicalMemoryId);
+          }
+          outcomeCounts[priorCanonicalRecord.outcome] += 1;
+          continue;
+        }
 
         if (decision.semanticDisposition === "duplicate") {
           const targetMemoryId = decision.targetMemoryId;

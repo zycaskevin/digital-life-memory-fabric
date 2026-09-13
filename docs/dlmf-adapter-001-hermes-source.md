@@ -273,10 +273,46 @@ An independent replay state root re-ran the same Experience against the same des
 
 This proves the Full-source Evidence Lane can be scaled independently of the Direct Memory Lane while preserving the same Adapter Experience provenance and fail-closed Canonical boundary.
 
+
+## Direct Memory Lane Batch250 acceptance and concurrency remediation — 2026-09-13
+
+The first Direct Memory Lane scale batch processed the first `250` source Experience Units against the frozen snapshot using `source_actor_only`, bounded source eligibility (`50` direct-user events / `60K` direct-user characters), DLMF migration lookahead `8`, and Hindsight/Ollama configured for four parallel generation slots (`-np 4`, `65,536` context per slot). Concurrency is an execution parameter only and does not participate in migration identity, so the run resumed the same source checkpoint and destination while the execution width changed.
+
+Durable source-level result:
+
+- `250 processed / 241 ingested / 9 skipped`;
+- PostgreSQL destination: `241` receipts, `88` candidate rows, `82` Canonical Memory heads, and `83` revisions;
+- receipt outcomes after remediation: `56 complete/committed`, `183 complete/no_memory_worthy_content`, and `2 awaiting_review/pending_review`;
+- candidate states: `83 ACCEPTED`, `2 CONFLICT`, `3 PENDING`; only governed accepted candidates contributed Canonical revisions;
+- provenance coverage: `88/88` candidate rows and `83/83` canonical revisions retain source-experience provenance;
+- Hindsight Direct Lane bank: `482/482` operation records complete = `241` parent batch records + `241` retain children, with `retry_total=0`.
+
+### Ollama throughput correction
+
+Hindsight already allowed bounded concurrent retain work, but Ollama had been launched with `-np 1 -c 262144`, serializing all local Gemma generation. A systemd drop-in changed the runtime to `OLLAMA_NUM_PARALLEL=4` and `OLLAMA_CONTEXT_LENGTH=65536`. The resulting llama-server was verified live as `-np 4 -c 262144`, with the API reporting `65,536` context per slot. After the change, typical source windows improved materially while preserving the same migration identity, receipt IDs, model, and governance policies.
+
+### Canonical-admission retry race
+
+Batch250 exposed two fail-closed canonicalization errors under concurrent retry. The affected curation record IDs are deterministic (`receipt + providerUnitRef`), while candidate IDs are intentionally random. A retry could therefore create a second candidate for a provider unit that had already canonicalized, and the PostgreSQL curation upsert could replace the record's `candidate_id` while retaining the earlier canonical outcome/memory. Canonical Authority correctly rejected the mismatched proof.
+
+The fix preserves the authority boundary rather than relaxing it:
+
+- `TranscriptDistillationService` loads prior curation records for the same receipt before admission;
+- a provider unit with an existing canonicalized record is reusable only when provider-unit fingerprint, semantic identity, policy/curator identity, accepted candidate binding, admission verifier, and canonical head scope all still match;
+- a valid canonicalized unit is counted/reused directly and no second candidate is created;
+- any drift fails closed;
+- `PostgresMemoryCurationRecordStore` now preserves both `candidate_id` and `target_memory_id` when an already-canonicalized record receives a retry upsert without a new canonical memory, matching the existing in-memory store's immutability behavior.
+
+A regression test simulates a two-unit receipt where the first unit commits and the second unit fails, then retries the same receipt. The first unit must retain the exact original candidate/canonical binding. Full repository checks pass after the fix.
+
+The two historical rows created before this fix were remediated in one guarded PostgreSQL transaction. Remediation required exactly one revision-backed `ACCEPTED` candidate whose admission proof, provider run, semantic identity, curator identity, and outcome matched each canonicalized curation record. The stale retry candidates had no canonical revision and were changed from `PENDING` to `CONFLICT`; the curation records were rebound to the unique accepted candidates; receipt candidate arrays and terminal admission state were recomputed. Historical error entries were deliberately retained and a remediation warning was added. Post-remediation dry-run reports `repairsNeeded=0` and both receipts recompute to `complete / committed / admissionComplete=true`.
+
+An isolated PostgreSQL schema UAT additionally proved that an already-canonicalized curation record retains its original candidate ID, canonical memory ID, outcome, semantic relation, target, and audit reason codes when a retry attempts to upsert the same record with a different candidate. The ephemeral schema was dropped after the assertion.
+
 ## Next increment
 
-1. Run a live `full_source_only` chunk canary and replay to verify that no direct-user projection is emitted and no Canonical Memory is forced from mixed evidence.
-2. Run the first 1,000 Experience Units through the Direct Memory Lane with bounded direct-user eligibility; validate checkpoint/replay/Canonical provenance independently of the evidence workload.
-3. Run the Full-source Evidence Lane over the same 1,000 source range in resumable bounded batches using the selected `24K/12` chunk baseline.
-4. Compare throughput and long-tail provider behavior before increasing beyond 1,000 or widening the source eligibility bounds.
+1. Replay the first `250` Direct Memory Lane sources from an independent empty migration-state root against the same destination/banks and require zero receipt/head/revision/operation growth.
+2. Continue the Direct Memory Lane over sources `251-500`, then `501-750`, then `751-1000` using the same migration identity, bounded lookahead, and four-slot Ollama runtime; stop on any new fail-closed admission inconsistency.
+3. After the Direct1000 replay/provenance gate passes, run the Full-source Evidence Lane over the same first 1,000 sources in resumable batches using `full_source_only` and the selected `24K/12` chunk baseline.
+4. Compare direct/evidence throughput and long-tail provider behavior before increasing beyond 1,000 or widening source eligibility bounds.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.

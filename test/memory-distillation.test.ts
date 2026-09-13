@@ -1960,3 +1960,104 @@ test("MD-009 forgetting guard: tombstoned canonical semantics cannot be resurrec
     assert.equal((await store.getHead(memoryId))?.status, "tombstoned");
   });
 });
+
+test("MD-010 retry reuses a canonicalized curation binding instead of creating a second candidate", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    let providerRun = 0;
+    const provider: MemoryDistillationProvider = {
+      name: "retry-provider",
+      adapterVersion: "retry-adapter-v1",
+      providerVersion: "1",
+      async distill(request) {
+        providerRun += 1;
+        const unit = (providerUnitRef: string, text: string, memoryKind: string) => ({
+          providerUnitRef,
+          candidateType: "preference_candidate" as const,
+          memoryClass: "preference" as const,
+          memoryKind,
+          proposedContent: { text },
+          evidenceRefs: [{ sourceType: "retry-provider", sourceRef: providerUnitRef }],
+          epistemicStatus: "user_asserted" as const,
+          speakerProvenance: "user" as const,
+          producer: {
+            kind: "provider" as const,
+            id: "retry-provider",
+            providerName: "retry-provider",
+            adapterVersion: "retry-adapter-v1",
+            providerVersion: "1",
+          },
+          sourceExperienceRefs: [{
+            sourceType: request.experience.sourceType,
+            sourceId: request.experience.sourceId,
+            archiveRef: request.experience.archiveRef,
+            checksum: request.experience.checksum,
+          }],
+        });
+        return {
+          providerName: "retry-provider",
+          providerRunId: `retry_run_${providerRun}`,
+          adapterVersion: "retry-adapter-v1",
+          providerVersion: "1",
+          providerUnits: [
+            unit("retry-dark", "I prefer dark mode.", "theme"),
+            unit("retry-concise", "I prefer concise answers.", "answer_style"),
+          ],
+          warnings: [],
+        };
+      },
+      async recall() { return []; },
+      async reflect() { throw new Error("not used"); },
+    };
+    const baseGovernance = new EvidenceBoundMemoryGovernance("canonicalize-retry-v1");
+    let failConciseOnce = true;
+    const governance = {
+      policyVersion: baseGovernance.policyVersion,
+      async evaluate(candidate: Parameters<EvidenceBoundMemoryGovernance["evaluate"]>[0]) {
+        if (failConciseOnce && candidate.proposedContent.text.includes("concise")) {
+          failConciseOnce = false;
+          throw new Error("simulated post-first-commit failure");
+        }
+        return baseGovernance.evaluate(candidate);
+      },
+    };
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider,
+      curationProvider: new ConservativeMemoryCurationProvider("retry-curation-v1"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("retry-admission-v1"),
+      governance,
+    });
+    const input = transcriptInput("session-canonicalized-retry-binding", "retry-distill-v1");
+    input.canonicalizationPolicyVersion = "canonicalize-retry-v1";
+    input.admissionPolicyVersion = "retry-admission-v1";
+
+    const first = await service.run(input);
+    assert.equal(first.status, "failed");
+    assert.equal(first.canonicalMemoryIds.length, 1);
+    const firstRecords = await curationStore.listByReceipt(first.receiptId);
+    const darkBefore = firstRecords.find((record) => record.providerUnitRef === "retry-dark");
+    assert.ok(darkBefore?.candidateId);
+    assert.ok(darkBefore?.canonicalMemoryId);
+    const originalCandidateId = darkBefore.candidateId;
+    const originalCanonicalId = darkBefore.canonicalMemoryId;
+
+    const retry = await service.run(input);
+    assert.equal(retry.status, "complete");
+    assert.equal(retry.canonicalMemoryIds.length, 2);
+    const retryRecords = await curationStore.listByReceipt(retry.receiptId);
+    const darkAfter = retryRecords.find((record) => record.providerUnitRef === "retry-dark");
+    assert.equal(darkAfter?.candidateId, originalCandidateId);
+    assert.equal(darkAfter?.canonicalMemoryId, originalCanonicalId);
+    assert.equal(darkAfter?.outcome, "canonical_candidate");
+    assert.equal(providerRun, 2);
+    assert.equal(await curationStore.verifyCanonicalAdmission(
+      (await store.getCandidate(originalCandidateId))!,
+    ), true);
+  });
+});
