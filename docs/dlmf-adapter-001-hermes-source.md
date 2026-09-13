@@ -1,7 +1,7 @@
 # DLMF-ADAPTER-001 — Hermes Source Adapter
 
 **Date:** 2026-09-12
-**Status:** Live Snapshot UAT PASS — bounded historical migration PASS; canonical-commit canary PASS
+**Status:** Live Snapshot UAT PASS — bounded historical migration PASS; canonical-write/replay canary PASS; strict receipt closure awaiting review
 **Depends on:** DLMF-ADAPTER-000 Memory Source Adapter Contract
 
 ## Purpose
@@ -140,6 +140,41 @@ This closes the required end-to-end path:
 `Hermes snapshot -> HermesSourceAdapter -> NormalizedExperience -> Raw Archive -> Direct Memory Lane -> Hindsight -> Curation -> Governance -> Canonical Memory`
 
 A receipt may legitimately remain `awaiting_review` while already containing governed commits for unambiguous units. Canary success therefore means at least one canonical commit with verified provenance; it does not waive or auto-resolve unrelated pending-review units.
+
+## Requested v1 full-source recovery and replay — 2026-09-13
+
+The originally requested destination was retained rather than replaced:
+
+- schema: `dlmf_pilot_hermes_canonical_canary_v1`;
+- namespace: `pilot.hermes-canonical-canary.v1`;
+- Hindsight bank prefix: `dlmf-hermes-canonical-canary-v1`;
+- reviewed source category: `preference_change`;
+- migration fingerprint: `dec15c9e5c361fd1`.
+
+After the 2 GiB Hindsight shared-memory correction, the existing asynchronous full-source operation continued to completion. The DLMF caller that had recorded the earlier ten-minute timeout was no longer active, so an explicit retry reused the same deterministic provider identity and the same DLMF receipt. The receipt advanced from failed attempt `2`, through archived attempt `3`, to an accepted terminal `awaiting_review` state without creating another receipt.
+
+Recovery evidence:
+
+- `processed=1`, `ingested=1`, `skipped=0`;
+- `744` provider units and `744` curation decisions with complete curation coverage;
+- curation outcomes: `3` canonical candidates, `5` canonical merges, `1` pending review, and `735` supporting-evidence-only units;
+- one receipt, `8` candidates, `3` Canonical Memory heads, and `8` revisions;
+- all `8` candidate provenance checks point to the Adapter-produced `NormalizedExperience`;
+- all `8` canonical revision provenance checks point to the same Adapter experience;
+- Hindsight remained healthy with 2 GiB shared memory and returned to zero pending work.
+
+An independent replay state root then forced the same source through the migration runner again while keeping the destination, source, policies, receipt identity, and provider banks unchanged. Replay completed in approximately three seconds and preserved exactly the same receipt, candidate fingerprints, Canonical Memory fingerprints, and canonical truth:
+
+- receipts: `1 -> 1`;
+- candidates: `8 -> 8`;
+- heads: `3 -> 3`;
+- revisions: `8 -> 8`;
+- provider units: `744 -> 744`;
+- curation decisions: `744 -> 744`;
+- candidate provenance: `8 -> 8`;
+- canonical revision provenance: `8 -> 8`.
+
+The canonical-write and replay/idempotency canaries pass. The stricter whole-receipt criterion `status=complete`, `canonicalization_outcome=committed`, and `admission_complete=true` remains intentionally open: one durable `user_asserted` preference contradicts an existing semantic target and is held as `merge_required` with `admission:semantic_contradiction_requires_review`. DLMF did not auto-approve or overwrite that conflict. Closing it requires an authorized semantic-review decision bound to the exact pending record; provider completion, more retries, or a new schema cannot supply that authority.
 
 ### Direct Memory Lane vs. evidence lane
 

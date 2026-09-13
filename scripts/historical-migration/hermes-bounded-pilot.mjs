@@ -436,28 +436,48 @@ async function canonicalCounts(pool) {
 
 function migrationEligibility() {
   const base = new HermesHistoricalMigrationEligibilityPolicy();
-  const version = `${base.version}:bounded-v2:maxEvents=${maxEvents}:maxChars=${maxChars}`;
+  const directSourceOnly = distillationProjectionMode === "source_actor_only";
+  const version = directSourceOnly
+    ? `${base.version}:bounded-direct-v1:maxEvents=${maxEvents}:maxChars=${maxChars}`
+    : `${base.version}:bounded-v2:maxEvents=${maxEvents}:maxChars=${maxChars}`;
   return {
     version,
     assess(experience) {
       const baseDecision = base.assess(experience);
       if (!baseDecision.eligible) return baseDecision;
-      const textEvents = experience.events.filter(
+      const actorKinds = new Map(experience.actors.map((actor) => [actor.actorId, actor.kind]));
+      const allTextEvents = experience.events.filter(
         (event) => typeof event.content === "string" && event.content.trim().length > 0,
       );
+      const textEvents = directSourceOnly
+        ? allTextEvents.filter((event) => event.actorId !== undefined && actorKinds.get(event.actorId) === "user")
+        : allTextEvents;
+      if (directSourceOnly && textEvents.length === 0) {
+        return { eligible: false, reasonCode: "bounded_direct_source_no_user_text" };
+      }
       const fallback = experience.content.filter(
         (content) => typeof content.text === "string" && content.text.trim().length > 0,
       );
       const chars = textEvents.length > 0
         ? textEvents.reduce((sum, event) => sum + event.content.length, 0)
         : fallback.reduce((sum, content) => sum + content.text.length, 0);
-      if (experience.events.length > maxEvents) {
-        return { eligible: false, reasonCode: "bounded_pilot_event_limit" };
+      const eventCount = directSourceOnly ? textEvents.length : experience.events.length;
+      if (eventCount > maxEvents) {
+        return {
+          eligible: false,
+          reasonCode: directSourceOnly ? "bounded_direct_source_event_limit" : "bounded_pilot_event_limit",
+        };
       }
       if (chars > maxChars) {
-        return { eligible: false, reasonCode: "bounded_pilot_char_limit" };
+        return {
+          eligible: false,
+          reasonCode: directSourceOnly ? "bounded_direct_source_char_limit" : "bounded_pilot_char_limit",
+        };
       }
-      return { eligible: true, reasonCode: "bounded_pilot_eligible" };
+      return {
+        eligible: true,
+        reasonCode: directSourceOnly ? "bounded_direct_source_eligible" : "bounded_pilot_eligible",
+      };
     },
   };
 }
