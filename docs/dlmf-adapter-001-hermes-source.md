@@ -1,7 +1,7 @@
 # DLMF-ADAPTER-001 — Hermes Source Adapter
 
 **Date:** 2026-09-12
-**Status:** Live Snapshot UAT PASS — bounded migration / strict canonical-commit remediation / replay / full-source chunking / Direct1000 PASS; Evidence1000 pending
+**Status:** Live Snapshot UAT PASS — bounded migration / strict canonical-commit remediation / replay / full-source chunking / Direct1000 PASS / Evidence1000 PASS
 **Depends on:** DLMF-ADAPTER-000 Memory Source Adapter Contract
 
 ## Purpose
@@ -465,10 +465,44 @@ The durable migration later advanced to position `764`. Source-position inspecti
 
 This closes the Evidence750 gate.
 
+## Full-source Evidence Lane Evidence1000 acceptance — 2026-09-14
+
+The Full-source Evidence Lane completed source positions `751-1000` without changing the frozen snapshot, PostgreSQL destination, Hindsight bank, `full_source_only` policy, conservative `80 events / 60K characters` eligibility bounds, `24K/12` chunk policy, or Canonical governance boundary. The single-writer advisory lock was acquired for the final bounded run and released with its database session.
+
+The deterministic Adapter+eligibility scan predicted exactly `284` eligible and `716` skipped Experience Units in the first 1,000 source positions. Durable migration matched that prediction exactly:
+
+- `1000 processed / 284 ingested / 716 skipped`;
+- all `284/284` receipts are `complete / no_memory_worthy_content`, with zero duplicate logical receipt groups and zero incomplete curation coverage;
+- `7,721` provider units received exactly `7,721` curation decisions;
+- every receipt is bound to a non-empty Adapter `NormalizedExperience` source ID and raw archive checksum, and every curation record resolves to the same receipt/source binding;
+- mixed evidence produced `0` candidates, `0` Canonical Memory heads, and `0` revisions, so no full-source provider output acquired direct-user Canonical authority;
+- the Hindsight bank contains `892/892` completed operation records across `446` deterministic chunk retains, with `retry_total=0`.
+
+An independent empty migration-state root replayed source positions `1-1000` against the exact same source, destination, policy versions, bank, and provider identities. Replay completed in approximately `7.7s` and deterministically rediscovered `1000 / 284 / 716` while preserving:
+
+- receipts `284 -> 284` and the complete receipt-state fingerprint;
+- provider units and curation decisions `7,721 -> 7,721`;
+- candidates / heads / revisions `0 / 0 / 0 -> 0 / 0 / 0`;
+- Hindsight operations `892 -> 892`, all completed with the same operation-state fingerprint and `retry_total=0`;
+- zero duplicate receipt groups, provenance mismatches, or curation-coverage gaps.
+
+The bounded migration state reports `complete=false` because the acceptance target is the first 1,000 source positions, not exhaustion of the 11,269-session snapshot. This is expected and does not weaken the closed Evidence1000 prefix.
+
+### Direct vs Evidence provider behavior
+
+At 1,000-source scale, the Direct Lane created `576` logical retains / `1,152` operation records, while the Evidence Lane created `446` logical chunk retains / `892` operation records. Both had zero provider retries. Completed child-retain durations show the expected full-source cost:
+
+- Direct Lane: p50 `35.0s`, p90 `151.9s`, max `917.4s`;
+- Evidence Lane: p50 `56.4s`, p90 `248.3s`, max `1,039.2s`.
+
+The observed first-to-last operation spans include deliberate pauses between staged runs and are not treated as pure runtime benchmarks. The comparable per-retain distribution still demonstrates that mixed full-source context has a materially heavier long tail. Lane separation therefore remains the correct operational design: Direct Memory can progress under DLMF governance without waiting for slower evidence extraction, while Evidence remains supporting provenance rather than Canonical authority.
+
+This closes the Evidence1000 gate. Full-source mixed evidence is source-resumable, receipt-idempotent, chunk-operation replay-safe, provenance-closed, curation-complete, and unable to create unintended Canonical Memory at 1,000-source scale.
+
 ## Next increment
 
-1. Continue the Full-source Evidence Lane over source positions `501-750` and `751-1000` with the same frozen snapshot, migration identity, `full_source_only` policy, `24K/12` chunks, bounded lookahead, and enforced single-writer ownership.
-2. Close each 250-source gate with Adapter-position-scoped receipt/provider checks so speculative next-batch work cannot contaminate the accepted prefix.
-3. At Evidence1000, require an independent empty-state replay, zero duplicate prefix Hindsight chunk operations, complete source provenance, and zero unintended Canonical growth from mixed evidence.
-4. Compare Direct vs Evidence throughput/long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
-5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.
+1. Keep the proven Direct/Evidence bounds and lane separation unchanged unless a separately reviewed policy change authorizes wider eligibility or a sample beyond 1,000.
+2. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
+3. Validate the Digital-Life-Stack consumer against current live refs, isolated disposable PostgreSQL, schema replay, startup/readiness, DLMF-unavailable behavior, authority-bypass rejection, and rollback.
+4. Run hosted CI and independent review against the exact release candidate before PR/merge; keep local green, merge, deployment, and production activation as separate claims.
+5. Do not use this pilot evidence to activate production migration automatically. Production scheduling, credentials, retention policy, and rollback execution remain separate operational gates.
