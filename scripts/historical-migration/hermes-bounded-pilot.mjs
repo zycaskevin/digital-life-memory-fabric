@@ -69,6 +69,30 @@ const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
 const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 20);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
+const explicitTargetSourceId = firstText(process.env.DLMF_MIGRATION_TARGET_SOURCE_ID);
+const targetCategory = firstText(process.env.DLMF_MIGRATION_TARGET_CATEGORY);
+if (explicitTargetSourceId !== undefined && targetCategory !== undefined) {
+  throw new Error("Choose DLMF_MIGRATION_TARGET_SOURCE_ID or DLMF_MIGRATION_TARGET_CATEGORY, not both");
+}
+if ((explicitTargetSourceId !== undefined || targetCategory !== undefined) && maxUnits !== 1) {
+  throw new Error("targeted Hermes canary requires DLMF_MIGRATION_MAX_UNITS=1");
+}
+const reviewedPlanManifest = resolve(
+  process.env.DLMF_MIGRATION_PLAN_MANIFEST
+    || join(home, ".local", "state", "dlmf", "production-pilot", "pilot_20260903061930-manifest.json"),
+);
+let targetSourceId = explicitTargetSourceId;
+let targetPlanEntry;
+if (targetCategory !== undefined) {
+  const plan = readReviewedPlanManifest(reviewedPlanManifest);
+  const matches = plan.sessions.filter((entry) => entry.category === targetCategory);
+  if (matches.length !== 1) {
+    throw new Error(`reviewed production pilot plan must contain exactly one ${targetCategory} session`);
+  }
+  targetPlanEntry = matches[0];
+  targetSourceId = targetPlanEntry.sessionId;
+}
+const requireCanonicalCommit = process.env.DLMF_MIGRATION_REQUIRE_CANONICAL_COMMIT === "1";
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
   || "dlmf-hermes-migration-pilot-bounded-v2";
 
@@ -119,6 +143,72 @@ function sha256(value) {
 
 function secretFingerprint(value) {
   return value ? sha256(value).slice(0, 12) : "none";
+}
+
+function readReviewedPlanManifest(path) {
+  if (!existsSync(path)) throw new Error(`reviewed production pilot plan not found: ${path}`);
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.sessions)) {
+    throw new Error("reviewed production pilot plan is malformed");
+  }
+  if (resolve(String(parsed.source?.databasePath || "")) !== sourceDb) {
+    throw new Error("reviewed production pilot plan belongs to a different Hermes database");
+  }
+  for (const entry of parsed.sessions) {
+    if (!entry || typeof entry !== "object" || !firstText(entry.category) || !firstText(entry.sessionId) || !firstText(entry.transcriptChecksum)) {
+      throw new Error("reviewed production pilot plan contains an invalid session entry");
+    }
+  }
+  return parsed;
+}
+
+function safeJsonParse(value) {
+  try { return JSON.parse(value); } catch { return undefined; }
+}
+
+function normalizeMessageContent(value) {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const parsed = safeJsonParse(trimmed);
+  if (Array.isArray(parsed)) {
+    const text = parsed.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        if (typeof item.text === "string") return item.text;
+        if (typeof item.content === "string") return item.content;
+      }
+      return "";
+    }).filter(Boolean).join("\n");
+    if (text) return text;
+  }
+  return trimmed;
+}
+
+function hermesTimestampToIso(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const numeric = typeof value === "number" ? value : Number(String(value).trim());
+  const millis = Number.isFinite(numeric)
+    ? (numeric > 10_000_000_000 ? numeric : numeric * 1000)
+    : Date.parse(String(value));
+  if (!Number.isFinite(millis)) return undefined;
+  return new Date(millis).toISOString();
+}
+
+function reviewedTranscriptChecksum(payload) {
+  const transcript = payload.messages
+    .filter((message) => (message.role === "user" || message.role === "assistant") && typeof message.content === "string")
+    .map((message) => {
+      const content = normalizeMessageContent(message.content);
+      if (!content) return "";
+      const timestampIso = hermesTimestampToIso(message.timestamp);
+      const timestamp = timestampIso ? ` [${timestampIso}]` : "";
+      const label = message.role === "user" ? "User" : "Assistant";
+      return `${label}${timestamp}:\n${content}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  return `sha256:${sha256(transcript)}`;
 }
 
 function safeDatabaseIdentity(value) {
@@ -371,6 +461,14 @@ function migrationId(connection, eligibilityVersion) {
     hindsight: endpointShape(connection.baseUrl),
     hindsightBankPrefix,
     eligibilityVersion,
+    sourceSelection: targetSourceId === undefined
+      ? { mode: "cursor" }
+      : {
+          mode: "targeted",
+          sourceIdHash: sha256(targetSourceId),
+          category: targetCategory ?? null,
+          reviewedTranscriptChecksum: targetPlanEntry?.transcriptChecksum ?? null,
+        },
   });
   return `hermes-migration:${sha256(identity)}`;
 }
@@ -385,13 +483,112 @@ async function privateJson(path, value) {
 function contentFreeCheckpoint(state) {
   const checkpoint = state.checkpoint;
   return {
-    lastExperienceId: checkpoint.lastExperienceId ?? null,
-    lastSourceFingerprint: checkpoint.lastSourceFingerprint?.value ?? null,
+    lastExperienceFingerprint: checkpoint.lastExperienceId ? sha256(checkpoint.lastExperienceId).slice(0, 16) : null,
+    lastSourceFingerprint: checkpoint.lastSourceFingerprint?.value
+      ? sha256(checkpoint.lastSourceFingerprint.value).slice(0, 16)
+      : null,
     updatedAt: checkpoint.updatedAt,
   };
 }
 
-const reader = new HermesSqliteReader(sourceDb);
+async function receiptSummaries(pool, receiptIds) {
+  if (receiptIds.length === 0) return [];
+  const rows = (await pool.query(`SELECT
+      receipt_id, status, canonicalization_outcome, provider_unit_count, curation_decision_count,
+      curation_coverage_complete, admission_complete, attempts, candidate_ids, canonical_memory_ids,
+      raw_archive_checksum
+    FROM memory_distillation_receipts
+    WHERE receipt_id = ANY($1::text[])
+    ORDER BY receipt_id`, [receiptIds])).rows;
+  return rows.map((row) => ({
+    receiptId: String(row.receipt_id),
+    status: String(row.status),
+    canonicalizationOutcome: String(row.canonicalization_outcome),
+    providerUnitCount: Number(row.provider_unit_count),
+    curationDecisionCount: Number(row.curation_decision_count),
+    curationCoverageComplete: row.curation_coverage_complete === true,
+    admissionComplete: row.admission_complete === true,
+    attempts: Number(row.attempts),
+    candidateCount: Array.isArray(row.candidate_ids) ? row.candidate_ids.length : 0,
+    candidateIds: Array.isArray(row.candidate_ids) ? row.candidate_ids.map(String) : [],
+    canonicalMemoryCount: Array.isArray(row.canonical_memory_ids) ? row.canonical_memory_ids.length : 0,
+    canonicalMemoryIds: Array.isArray(row.canonical_memory_ids) ? row.canonical_memory_ids.map(String) : [],
+    archiveChecksumPresent: typeof row.raw_archive_checksum === "string" && row.raw_archive_checksum.length > 0,
+  }));
+}
+
+async function assertCanonicalCommitCanary(pool, result, summaries) {
+  if (!requireCanonicalCommit) return { required: false, verified: false, candidateProvenanceMatches: 0, canonicalProvenanceMatches: 0 };
+  if (targetSourceId === undefined) throw new Error("canonical commit canary requires targeted source selection");
+  if (result.processedThisRun !== 1 || result.ingestedThisRun !== 1) {
+    throw new Error("canonical commit canary must process and ingest exactly one Experience");
+  }
+  if (summaries.length !== 1) throw new Error("canonical commit canary must resolve exactly one receipt");
+  const summary = summaries[0];
+  if (summary.status !== "complete" || summary.canonicalizationOutcome !== "committed") {
+    throw new Error(`canonical commit canary did not commit: status=${summary.status} outcome=${summary.canonicalizationOutcome}`);
+  }
+  if (!summary.curationCoverageComplete || !summary.admissionComplete) {
+    throw new Error("canonical commit canary lacks complete curation/admission coverage");
+  }
+  if (summary.candidateCount < 1 || summary.canonicalMemoryCount < 1 || !summary.archiveChecksumPresent) {
+    throw new Error("canonical commit canary lacks candidate/canonical/archive evidence");
+  }
+  const experienceId = result.state.checkpoint.lastExperienceId;
+  if (!experienceId) throw new Error("canonical commit canary checkpoint lacks Experience identity");
+  const candidateProvenance = await pool.query(`SELECT count(*)::int AS n
+    FROM memory_candidates
+    WHERE candidate_id = ANY($1::text[])
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(source_experience_refs) AS ref
+        WHERE ref->>'sourceType'='normalized_experience' AND ref->>'sourceId'=$2
+      )`, [summary.candidateIds, experienceId]);
+  const canonicalProvenance = await pool.query(`SELECT count(*)::int AS n
+    FROM memory_revisions
+    WHERE memory_id = ANY($1::text[])
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(source_experience_refs) AS ref
+        WHERE ref->>'sourceType'='normalized_experience' AND ref->>'sourceId'=$2
+      )`, [summary.canonicalMemoryIds, experienceId]);
+  const candidateMatches = Number(candidateProvenance.rows[0]?.n ?? 0);
+  const canonicalMatches = Number(canonicalProvenance.rows[0]?.n ?? 0);
+  if (candidateMatches < 1) throw new Error("canonical commit candidate provenance does not point back to the Adapter Experience");
+  if (canonicalMatches < 1) throw new Error("canonical commit revision provenance does not point back to the Adapter Experience");
+  return {
+    required: true,
+    verified: true,
+    candidateProvenanceMatches: candidateMatches,
+    canonicalProvenanceMatches: canonicalMatches,
+  };
+}
+
+const baseReader = new HermesSqliteReader(sourceDb);
+let reader = baseReader;
+if (targetSourceId !== undefined) {
+  const targetPayload = await baseReader.readSession(targetSourceId);
+  if (targetPlanEntry !== undefined) {
+    const checksum = reviewedTranscriptChecksum(targetPayload);
+    if (checksum !== targetPlanEntry.transcriptChecksum) {
+      throw new Error("targeted Hermes canary no longer matches the reviewed production pilot transcript checksum");
+    }
+  }
+  reader = {
+    inspect: () => baseReader.inspect(),
+    async listSessions(request) {
+      if (request.afterSessionId === undefined) {
+        return request.limit < 1 ? [] : [structuredClone(targetPayload.session)];
+      }
+      if (request.afterSessionId === targetSourceId) return [];
+      throw new Error("targeted Hermes canary received an unexpected cursor");
+    },
+    async readSession(sessionId) {
+      if (sessionId !== targetSourceId) {
+        throw new Error("targeted Hermes canary attempted to read a foreign session");
+      }
+      return baseReader.readSession(sessionId);
+    },
+  };
+}
 const sourceAdapter = new HermesSourceAdapter({ reader, version: "0.1.0" });
 const inspection = await sourceAdapter.inspect();
 await probePostgres();
@@ -415,6 +612,9 @@ console.log(`sourceDb=read-only schemaVersion=${inspection.metadata.schemaVersio
 console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(databaseUrl)).slice(0, 12)} schema=${schema} schemaState=${existingSchema.state}`);
 console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
 console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars}`);
+console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (targetCategory ? `reviewed-category:${targetCategory}` : "targeted")}`);
+if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
+console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
 
 const eligibility = migrationEligibility();
 const destinationId = migrationId(hindsightConnection, eligibility.version);
@@ -485,6 +685,8 @@ try {
   const result = await runner.run({ maxUnits });
   const after = await canonicalCounts(pool);
   const receiptIds = result.units.flatMap((unit) => unit.receiptId ? [unit.receiptId] : []);
+  const receipts = await receiptSummaries(pool, receiptIds);
+  const canonicalCanary = await assertCanonicalCommitCanary(pool, result, receipts);
   const report = {
     contract: "dlmf/hermes-bounded-historical-migration/v1",
     status: "PASS",
@@ -498,6 +700,14 @@ try {
       sessionCount: inspection.metadata.sessionCount ?? null,
       messageCount: inspection.metadata.messageCount ?? null,
       databaseBytes: inspection.metadata.databaseBytes ?? null,
+      targetSelection: targetSourceId === undefined
+        ? { mode: "cursor" }
+        : {
+            mode: targetCategory === undefined ? "targeted" : "reviewed-category",
+            category: targetCategory ?? null,
+            sourceFingerprint: sha256(targetSourceId).slice(0, 16),
+            reviewedTranscriptChecksum: targetPlanEntry?.transcriptChecksum ?? null,
+          },
     },
     destination: {
       migrationId: destinationId,
@@ -514,6 +724,8 @@ try {
       ingestedThisRun: result.ingestedThisRun,
       skippedThisRun: result.skippedThisRun,
       receiptIds,
+      receiptSummaries: receipts.map(({ candidateIds, canonicalMemoryIds, ...summary }) => summary),
+      canonicalCanary,
       cumulativeProcessed: result.state.processedUnits,
       cumulativeIngested: result.state.ingestedUnits,
       cumulativeSkipped: result.state.skippedUnits,
@@ -534,7 +746,11 @@ try {
   console.log(`processed=${result.processedThisRun} ingested=${result.ingestedThisRun} skipped=${result.skippedThisRun} complete=${result.state.complete}`);
   console.log(`receipts=${before.receipts}->${after.receipts} candidates=${before.candidates}->${after.candidates} heads=${before.heads}->${after.heads} revisions=${before.revisions}->${after.revisions}`);
   console.log(`receiptIds=${receiptIds.join(",") || "none"}`);
-  console.log(`checkpointExperience=${result.state.checkpoint.lastExperienceId ?? "none"}`);
+  for (const receipt of receipts) {
+    console.log(`receipt=${receipt.receiptId} status=${receipt.status} outcome=${receipt.canonicalizationOutcome} providerUnits=${receipt.providerUnitCount} curation=${receipt.curationDecisionCount} candidates=${receipt.candidateCount} canonical=${receipt.canonicalMemoryCount} attempts=${receipt.attempts}`);
+  }
+  console.log(`canonicalCanary=${canonicalCanary.required ? (canonicalCanary.verified ? "PASS" : "FAIL") : "not-required"} candidateProvenance=${canonicalCanary.candidateProvenanceMatches} canonicalProvenance=${canonicalCanary.canonicalProvenanceMatches}`);
+  console.log(`checkpointExperienceFingerprint=${result.state.checkpoint.lastExperienceId ? sha256(result.state.checkpoint.lastExperienceId).slice(0, 16) : "none"}`);
   console.log(`state=${statePath}`);
   console.log(`report=${reportPath}`);
   console.log("HERMES_BOUNDED_MIGRATION=PASS");
