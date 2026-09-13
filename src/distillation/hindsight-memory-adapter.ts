@@ -171,6 +171,12 @@ export interface HindsightMemoryAdapterOptions {
   reflectBudget?: HindsightBudget;
   asyncRetainPollIntervalMs?: number;
   asyncRetainTimeoutMs?: number;
+  /**
+   * full_plus_source_actor preserves the existing mixed-transcript + direct-source extraction.
+   * source_actor_only skips mixed-transcript provider extraction while the upstream DLMF raw
+   * archive still preserves the complete experience. This is useful for direct-memory lanes.
+   */
+  distillationProjectionMode?: "full_plus_source_actor" | "source_actor_only";
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -349,6 +355,13 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     if ((options.asyncRetainTimeoutMs ?? 600_000) < 1) {
       throw new ValidationError("Hindsight asyncRetainTimeoutMs must be positive");
     }
+    if (
+      options.distillationProjectionMode !== undefined
+      && options.distillationProjectionMode !== "full_plus_source_actor"
+      && options.distillationProjectionMode !== "source_actor_only"
+    ) {
+      throw new ValidationError("Unsupported Hindsight distillationProjectionMode");
+    }
     this.adapterVersion = options.adapterVersion;
     this.providerVersion = options.providerVersion;
   }
@@ -452,36 +465,41 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       dlmf_policy_version: request.distillationPolicyVersion,
       dlmf_provider_run_id: providerRunId,
     };
-    const fullSourceOperationId = deterministicOperationId(
-      `${distillation}|full-source|${request.experience.checksum}|${request.distillationPolicyVersion}|${documentId}|${request.experience.content}`,
-    );
-    const retained = await this.options.client.retain(distillation, request.experience.content, {
-      ...(timestamp === undefined ? {} : { timestamp }),
-      context: request.experience.contentType,
-      documentId,
-      async: true,
-      operationId: fullSourceOperationId,
-      tags: ["dlmf", "distillation"],
-      metadata: commonMetadata,
-    });
-    const acceptedFullSourceOperationId = assertAsyncRetainAccepted(
-      retained,
-      distillation,
-      "full-source",
-    );
-    if (acceptedFullSourceOperationId !== fullSourceOperationId) {
-      throw new Error("Hindsight full-source returned an unexpected operation_id");
-    }
-    await this.waitForAsyncRetain(
-      distillation,
-      acceptedFullSourceOperationId,
-      "full-source",
-    );
-
-    const documentMemories = await this.listDocumentMemories(distillation, documentId);
     const userSegments = (request.experience.sourceSegments ?? []).filter(
       (segment) => segment.actor === "user" && segment.content.trim().length > 0,
     );
+    const documentMemories: HindsightMemoryUnit[] = [];
+    const projectionMode = this.options.distillationProjectionMode ?? "full_plus_source_actor";
+    if (projectionMode === "full_plus_source_actor") {
+      const fullSourceOperationId = deterministicOperationId(
+        `${distillation}|full-source|${request.experience.checksum}|${request.distillationPolicyVersion}|${documentId}|${request.experience.content}`,
+      );
+      const retained = await this.options.client.retain(distillation, request.experience.content, {
+        ...(timestamp === undefined ? {} : { timestamp }),
+        context: request.experience.contentType,
+        documentId,
+        async: true,
+        operationId: fullSourceOperationId,
+        tags: ["dlmf", "distillation"],
+        metadata: commonMetadata,
+      });
+      const acceptedFullSourceOperationId = assertAsyncRetainAccepted(
+        retained,
+        distillation,
+        "full-source",
+      );
+      if (acceptedFullSourceOperationId !== fullSourceOperationId) {
+        throw new Error("Hindsight full-source returned an unexpected operation_id");
+      }
+      await this.waitForAsyncRetain(
+        distillation,
+        acceptedFullSourceOperationId,
+        "full-source",
+      );
+      documentMemories.push(
+        ...(await this.listDocumentMemories(distillation, documentId)),
+      );
+    }
     if (userSegments.length > 0) {
       const userDocumentId = `${documentId}:source-actor:user`;
       const userContent = userSegments.map((segment) => segment.content.trim()).join("\n\n");

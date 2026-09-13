@@ -653,6 +653,67 @@ test("MD-010 retry identity: deterministic user projection operation IDs are sta
   assert.notEqual(operationIdsA[0], operationIdB);
 });
 
+test("MD-004 source-actor-only lane skips mixed transcript extraction while preserving direct user provenance", async () => {
+  const sourceId = "session-source-actor-only";
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: "User: I prefer dark mode.\nAssistant: Understood.",
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-source-actor-only",
+      checksum: "checksum-source-actor-only",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+        { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+      ],
+    },
+    distillationPolicyVersion: "distill-source-actor-only-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const userDocumentId = `hermes_session:${sourceId}:source-actor:user`;
+  const client = new FakeHindsightClient();
+  client.listMemoriesResponse = {
+    items: [{
+      id: "hs-direct-pref",
+      bank_id: "nancy:distillation",
+      text: "I prefer dark mode.",
+      type: "world",
+      document_id: userDocumentId,
+      metadata: {
+        dlmf_projection_kind: "source_actor",
+        dlmf_source_actor: "user",
+      },
+    }],
+    total: 1,
+    limit: 1000,
+    offset: 0,
+  };
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-source-actor-only-v1",
+    providerVersion: "test-provider",
+    distillationProjectionMode: "source_actor_only",
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  const result = await adapter.distill(request);
+  assert.equal(client.retainCalls.length, 1);
+  assert.equal(client.retainCalls[0]?.options?.documentId, userDocumentId);
+  assert.equal(client.retainCalls[0]?.content, "I prefer dark mode.");
+  assert.equal(client.listMemoriesCalls.length, 1);
+  assert.equal(client.listMemoriesCalls[0]?.options?.documentId, userDocumentId);
+  assert.equal(result.providerUnits.length, 1);
+  assert.equal(result.providerUnits[0]?.memoryClass, "preference");
+  assert.equal(result.providerUnits[0]?.epistemicStatus, "user_asserted");
+  assert.equal(result.providerUnits[0]?.speakerProvenance, "user");
+});
+
 test("MD-004 async full-source retain fails closed before provider enumeration", async () => {
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();

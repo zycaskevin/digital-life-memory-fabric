@@ -69,6 +69,12 @@ const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
 const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 20);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
+const hindsightAsyncTimeoutMs = boundedInt(
+  process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
+  1_800_000,
+  60_000,
+  7_200_000,
+);
 const explicitTargetSourceId = firstText(process.env.DLMF_MIGRATION_TARGET_SOURCE_ID);
 const targetCategory = firstText(process.env.DLMF_MIGRATION_TARGET_CATEGORY);
 if (explicitTargetSourceId !== undefined && targetCategory !== undefined) {
@@ -93,6 +99,11 @@ if (targetCategory !== undefined) {
   targetSourceId = targetPlanEntry.sessionId;
 }
 const requireCanonicalCommit = process.env.DLMF_MIGRATION_REQUIRE_CANONICAL_COMMIT === "1";
+const distillationProjectionMode = firstText(process.env.DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE)
+  || "full_plus_source_actor";
+if (!new Set(["full_plus_source_actor", "source_actor_only"]).has(distillationProjectionMode)) {
+  throw new Error("DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE must be full_plus_source_actor or source_actor_only");
+}
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
   || "dlmf-hermes-migration-pilot-bounded-v2";
 
@@ -461,6 +472,9 @@ function migrationId(connection, eligibilityVersion) {
     hindsight: endpointShape(connection.baseUrl),
     hindsightBankPrefix,
     eligibilityVersion,
+    ...(distillationProjectionMode === "source_actor_only"
+      ? { distillationProjectionMode }
+      : {}),
     sourceSelection: targetSourceId === undefined
       ? { mode: "cursor" }
       : {
@@ -495,7 +509,7 @@ async function receiptSummaries(pool, receiptIds) {
   if (receiptIds.length === 0) return [];
   const rows = (await pool.query(`SELECT
       receipt_id, status, canonicalization_outcome, provider_unit_count, curation_decision_count,
-      curation_coverage_complete, admission_complete, attempts, candidate_ids, canonical_memory_ids,
+      curation_coverage_complete, admission_complete, curation_outcomes, attempts, candidate_ids, canonical_memory_ids,
       raw_archive_checksum
     FROM memory_distillation_receipts
     WHERE receipt_id = ANY($1::text[])
@@ -508,6 +522,9 @@ async function receiptSummaries(pool, receiptIds) {
     curationDecisionCount: Number(row.curation_decision_count),
     curationCoverageComplete: row.curation_coverage_complete === true,
     admissionComplete: row.admission_complete === true,
+    curationOutcomes: row.curation_outcomes && typeof row.curation_outcomes === "object"
+      ? structuredClone(row.curation_outcomes)
+      : {},
     attempts: Number(row.attempts),
     candidateCount: Array.isArray(row.candidate_ids) ? row.candidate_ids.length : 0,
     candidateIds: Array.isArray(row.candidate_ids) ? row.candidate_ids.map(String) : [],
@@ -525,11 +542,17 @@ async function assertCanonicalCommitCanary(pool, result, summaries) {
   }
   if (summaries.length !== 1) throw new Error("canonical commit canary must resolve exactly one receipt");
   const summary = summaries[0];
-  if (summary.status !== "complete" || summary.canonicalizationOutcome !== "committed") {
+  const fullyCommitted = summary.status === "complete"
+    && summary.canonicalizationOutcome === "committed"
+    && summary.admissionComplete;
+  const committedWithPendingReview = summary.status === "awaiting_review"
+    && summary.canonicalizationOutcome === "pending_review"
+    && !summary.admissionComplete;
+  if (!fullyCommitted && !committedWithPendingReview) {
     throw new Error(`canonical commit canary did not commit: status=${summary.status} outcome=${summary.canonicalizationOutcome}`);
   }
-  if (!summary.curationCoverageComplete || !summary.admissionComplete) {
-    throw new Error("canonical commit canary lacks complete curation/admission coverage");
+  if (!summary.curationCoverageComplete) {
+    throw new Error("canonical commit canary lacks complete curation coverage");
   }
   if (summary.candidateCount < 1 || summary.canonicalMemoryCount < 1 || !summary.archiveChecksumPresent) {
     throw new Error("canonical commit canary lacks candidate/canonical/archive evidence");
@@ -557,6 +580,10 @@ async function assertCanonicalCommitCanary(pool, result, summaries) {
   return {
     required: true,
     verified: true,
+    receiptStatus: summary.status,
+    canonicalizationOutcome: summary.canonicalizationOutcome,
+    admissionComplete: summary.admissionComplete,
+    pendingReviewCount: Number(summary.curationOutcomes?.pending_review ?? 0),
     candidateProvenanceMatches: candidateMatches,
     canonicalProvenanceMatches: canonicalMatches,
   };
@@ -611,10 +638,11 @@ console.log(`node=${process.version}`);
 console.log(`sourceDb=read-only schemaVersion=${inspection.metadata.schemaVersion} sessions=${inspection.metadata.sessionCount} messages=${inspection.metadata.messageCount}`);
 console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(databaseUrl)).slice(0, 12)} schema=${schema} schemaState=${existingSchema.state}`);
 console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
-console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars}`);
+console.log(`bounds=maxUnits:${maxUnits},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs}`);
 console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (targetCategory ? `reviewed-category:${targetCategory}` : "targeted")}`);
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
 console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
+console.log(`distillationProjectionMode=${distillationProjectionMode}`);
 
 const eligibility = migrationEligibility();
 const destinationId = migrationId(hindsightConnection, eligibility.version);
@@ -648,6 +676,8 @@ try {
     providerVersion: String(hindsightVersion.api_version || hindsightVersion.version || "unknown"),
     recallBudget: "mid",
     reflectBudget: "mid",
+    asyncRetainTimeoutMs: hindsightAsyncTimeoutMs,
+    distillationProjectionMode,
   });
   const retrievalPort = new HindsightCanonicalProjectionPort({
     client: clientPort,
@@ -662,7 +692,9 @@ try {
     agentId,
     runtimeId,
     policies: {
-      distillationPolicyVersion: "hermes-migration-pilot-distill-v2",
+      distillationPolicyVersion: distillationProjectionMode === "source_actor_only"
+        ? "hermes-migration-pilot-distill-v3-source-actor-only"
+        : "hermes-migration-pilot-distill-v2",
       canonicalizationPolicyVersion: "hermes-migration-pilot-canonical-v2",
       admissionPolicyVersion: "hermes-migration-pilot-admission-v2",
       retentionPolicyVersion: "hermes-migration-pilot-retention-v2",
@@ -716,8 +748,9 @@ try {
       lifeDid,
       memoryNamespace: namespace,
       canonicalAuthority: "digital-life-memory-fabric",
+      distillationProjectionMode,
     },
-    bounds: { maxUnits, maxEvents, maxChars },
+    bounds: { maxUnits, maxEvents, maxChars, hindsightAsyncTimeoutMs },
     run: {
       status: result.status,
       processedThisRun: result.processedThisRun,
