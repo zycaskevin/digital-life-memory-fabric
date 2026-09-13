@@ -361,10 +361,37 @@ An independent empty migration-state root replayed source positions `1-750` agai
 
 This closes the Direct750 gate. The large skip increase in positions `501-750` is source-distribution driven (mostly empty Hermes sessions), not policy drift or lost experience.
 
+## Direct Memory Lane Direct1000 acceptance — 2026-09-13
+
+The Direct Memory Lane completed source positions `751-1000` without changing the frozen source snapshot, migration fingerprint, PostgreSQL destination, Hindsight bank, `source_actor_only` policy, direct-user eligibility bounds (`50` events / `60K` characters), lookahead `8`, Gemma model, or Canonical governance policy.
+
+The deterministic Adapter+eligibility scan predicted exactly `576` eligible and `424` skipped Experience Units in the first 1,000 sources. The completed migration matched that prediction exactly:
+
+- `1000 processed / 576 ingested / 424 skipped`;
+- skip distribution: `400` `hermes_empty_session` and `24` `bounded_direct_source_char_limit`;
+- PostgreSQL: `576` receipts, `123` candidate rows, `117` Canonical Memory heads, and `118` revisions;
+- receipt outcomes: `87 complete/committed`, `487 complete/no_memory_worthy_content`, and `2 awaiting_review/pending_review`;
+- candidate states: `118 ACCEPTED`, `2 CONFLICT` retained as the pre-fix retry-race audit trail, and `3 PENDING` review-path candidates;
+- candidate classes: `122` user-asserted preferences and `1` user-asserted habit candidate row;
+- provenance closure: `123/123` candidate rows and `118/118` Canonical revisions retain source-experience provenance;
+- Hindsight Direct Lane bank: `1152/1152` operations completed = `576` retain children + `576` batch parents, `retry_total=0`;
+- canonical-admission remediation remains stable at `repairsNeeded=0`; no post-fix binding drift was detected.
+
+An independent empty migration-state root replayed source positions `1-1000` against the same destination, policies, bank, source snapshot, and provider identity. Replay deterministically rediscovered `1000 / 576 / 424` while preserving:
+
+- receipts `576 -> 576`;
+- candidates `123 -> 123`;
+- heads `117 -> 117`;
+- revisions `118 -> 118`;
+- Hindsight operations `1152 -> 1152`, all completed with `retry_total=0`;
+- admission remediation dry-run `repairsNeeded=0`.
+
+This closes the Direct1000 gate. Direct user-memory extraction is now proven source-resumable, receipt-idempotent, provider-replay-safe, Canonical-nonduplicating, and provenance-closed at 1,000-source scale.
+
 ## Next increment
 
-1. Continue the same Direct Memory Lane over source positions `751-1000` without changing migration identity, source bounds, lookahead, provider model, or governance policy.
-2. At Direct1000, require an independent empty-state replay with zero receipt/candidate/head/revision/Hindsight-operation growth and `repairsNeeded=0`.
-3. After the Direct1000 gate passes, run the Full-source Evidence Lane over the same first 1,000 sources in resumable batches using `full_source_only` and the selected `24K/12` chunk baseline.
-4. Compare direct/evidence throughput and long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
+1. Run the Full-source Evidence Lane over the same first `1,000` source positions with `full_source_only`, conservative full-source eligibility, and deterministic `24K/12` provider chunks.
+2. Execute evidence migration in resumable bounded batches; require mixed-evidence receipts to remain unable to acquire direct-user Canonical authority.
+3. At Evidence1000, require empty-state replay, zero duplicate Hindsight chunk operations, complete source provenance, and no unintended Canonical growth from mixed evidence.
+4. Compare Direct vs Evidence throughput/long-tail behavior before increasing beyond 1,000 or widening source eligibility bounds.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.
