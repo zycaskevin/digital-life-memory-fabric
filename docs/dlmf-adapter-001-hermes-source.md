@@ -309,6 +309,32 @@ The two historical rows created before this fix were remediated in one guarded P
 
 An isolated PostgreSQL schema UAT additionally proved that an already-canonicalized curation record retains its original candidate ID, canonical memory ID, outcome, semantic relation, target, and audit reason codes when a retry attempts to upsert the same record with a different candidate. The ephemeral schema was dropped after the assertion.
 
+
+## Direct Memory Lane Batch500 acceptance — 2026-09-13
+
+The Direct Memory Lane then continued over source positions `251-500` using the exact same frozen snapshot, migration identity, PostgreSQL destination, Hindsight bank prefix, `source_actor_only` policy, direct-user eligibility bounds (`50` user events / `60K` user characters), lookahead `8`, and the four-slot Ollama runtime. No new source or memory identity was created when the execution bridge restarted; the source-level state file remained authoritative and the run resumed from its durable checkpoint.
+
+Cumulative acceptance at source position `500`:
+
+- `500 processed / 480 ingested / 20 skipped`;
+- PostgreSQL: `480` receipts, `112` candidate rows, `106` Canonical Memory heads, and `107` revisions;
+- receipt outcomes: `78 complete/committed`, `400 complete/no_memory_worthy_content`, `2 awaiting_review/pending_review`;
+- candidate states: `107 ACCEPTED`, `2 CONFLICT` (the preserved pre-fix audit rows), and `3 PENDING` review-path candidates;
+- provenance: all `112` candidate rows and all `107` canonical revisions retain source-experience provenance;
+- Hindsight: `960/960` operation records completed = `480` retain children + `480` batch parents, `retry_total=0`;
+- canonical-admission binding monitor remained fixed at the two already-remediated historical receipts; no new mismatch was observed after commit `25dc16c`.
+
+An independent empty migration-state root replayed source positions `1-500` against the same destination, policies, Hindsight bank, and frozen snapshot. Replay deterministically rediscovered `500 / 480 / 20` while preserving:
+
+- receipts `480 -> 480`;
+- candidates `112 -> 112`;
+- heads `106 -> 106`;
+- revisions `107 -> 107`;
+- Hindsight operations `960 -> 960`, all completed, `retry_total=0`;
+- canonical-admission remediation dry-run remained `repairsNeeded=0`.
+
+This closes the Direct500 gate and proves that source checkpoint recovery is independent of the AEB job-tracking process, while receipt/canonical/provider identities remain replay-safe at 500-source scale.
+
 ## Next increment
 
 1. Replay the first `250` Direct Memory Lane sources from an independent empty migration-state root against the same destination/banks and require zero receipt/head/revision/operation growth.
