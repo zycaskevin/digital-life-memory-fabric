@@ -182,9 +182,10 @@ export interface HindsightMemoryAdapterOptions {
   /**
    * full_plus_source_actor preserves the existing mixed-transcript + direct-source extraction.
    * source_actor_only skips mixed-transcript provider extraction while the upstream DLMF raw
-   * archive still preserves the complete experience. This is useful for direct-memory lanes.
+   * archive still preserves the complete experience. full_source_only runs only the mixed
+   * transcript evidence lane and never emits the direct user projection.
    */
-  distillationProjectionMode?: "full_plus_source_actor" | "source_actor_only";
+  distillationProjectionMode?: "full_plus_source_actor" | "source_actor_only" | "full_source_only";
   /**
    * Optional provider-execution partitioning for the full-source evidence lane.
    * Chunks never become DLMF Experience identities; the source Experience, archive,
@@ -470,6 +471,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       options.distillationProjectionMode !== undefined
       && options.distillationProjectionMode !== "full_plus_source_actor"
       && options.distillationProjectionMode !== "source_actor_only"
+      && options.distillationProjectionMode !== "full_source_only"
     ) {
       throw new ValidationError("Unsupported Hindsight distillationProjectionMode");
     }
@@ -592,7 +594,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
     );
     const documentMemories: HindsightMemoryUnit[] = [];
     const projectionMode = this.options.distillationProjectionMode ?? "full_plus_source_actor";
-    if (projectionMode === "full_plus_source_actor") {
+    if (projectionMode !== "source_actor_only") {
       const chunking = this.options.fullSourceChunking;
       if (chunking === undefined) {
         const fullSourceOperationId = deterministicOperationId(
@@ -660,7 +662,7 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
         }
       }
     }
-    if (userSegments.length > 0) {
+    if (projectionMode !== "full_source_only" && userSegments.length > 0) {
       const userDocumentId = `${documentId}:source-actor:user`;
       const userContent = userSegments.map((segment) => segment.content.trim()).join("\n\n");
       const userProjectionOperationId = deterministicOperationId(

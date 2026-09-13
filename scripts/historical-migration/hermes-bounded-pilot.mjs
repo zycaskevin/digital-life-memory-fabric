@@ -66,7 +66,7 @@ const tenantId = process.env.DLMF_MIGRATION_TENANT_ID || "arthurverse-hermes-mig
 const lifeDid = process.env.DLMF_MIGRATION_LIFE_DID || "did:arthurverse:nancy";
 const agentId = process.env.DLMF_MIGRATION_AGENT_ID || "nancy";
 const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
-const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 100);
+const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 1000);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
 const hindsightAsyncTimeoutMs = boundedInt(
@@ -101,8 +101,8 @@ if (targetCategory !== undefined) {
 const requireCanonicalCommit = process.env.DLMF_MIGRATION_REQUIRE_CANONICAL_COMMIT === "1";
 const distillationProjectionMode = firstText(process.env.DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE)
   || "full_plus_source_actor";
-if (!new Set(["full_plus_source_actor", "source_actor_only"]).has(distillationProjectionMode)) {
-  throw new Error("DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE must be full_plus_source_actor or source_actor_only");
+if (!new Set(["full_plus_source_actor", "source_actor_only", "full_source_only"]).has(distillationProjectionMode)) {
+  throw new Error("DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE must be full_plus_source_actor, source_actor_only, or full_source_only");
 }
 const chunkMaxCharsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_CHARS);
 const chunkMaxSegmentsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_SEGMENTS);
@@ -117,6 +117,9 @@ const fullSourceChunking = chunkMaxCharsRaw === undefined
     };
 if (distillationProjectionMode === "source_actor_only" && fullSourceChunking !== undefined) {
   throw new Error("full-source chunking cannot be enabled when distillationProjectionMode=source_actor_only");
+}
+if (distillationProjectionMode === "full_source_only" && fullSourceChunking === undefined) {
+  throw new Error("distillationProjectionMode=full_source_only requires bounded full-source chunking");
 }
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
   || "dlmf-hermes-migration-pilot-bounded-v2";
@@ -506,9 +509,9 @@ function migrationId(connection, eligibilityVersion) {
     hindsight: endpointShape(connection.baseUrl),
     hindsightBankPrefix,
     eligibilityVersion,
-    ...(distillationProjectionMode === "source_actor_only"
-      ? { distillationProjectionMode }
-      : {}),
+    ...(distillationProjectionMode === "full_plus_source_actor"
+      ? {}
+      : { distillationProjectionMode }),
     ...(fullSourceChunking === undefined ? {} : { fullSourceChunking }),
     sourceSelection: targetSourceId === undefined
       ? { mode: "cursor" }
@@ -739,9 +742,11 @@ try {
     policies: {
       distillationPolicyVersion: distillationProjectionMode === "source_actor_only"
         ? "hermes-migration-pilot-distill-v3-source-actor-only"
-        : fullSourceChunking === undefined
-          ? "hermes-migration-pilot-distill-v2"
-          : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`,
+        : distillationProjectionMode === "full_source_only"
+          ? `hermes-migration-pilot-distill-v5-full-source-evidence-only:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`
+          : fullSourceChunking === undefined
+            ? "hermes-migration-pilot-distill-v2"
+            : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`,
       canonicalizationPolicyVersion: "hermes-migration-pilot-canonical-v2",
       admissionPolicyVersion: "hermes-migration-pilot-admission-v2",
       retentionPolicyVersion: "hermes-migration-pilot-retention-v2",

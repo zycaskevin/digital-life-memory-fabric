@@ -219,10 +219,64 @@ This closes the chunking requirement while preserving the source-level invariant
 
 `one source Experience -> one DLMF identity / archive / receipt / checkpoint -> N bounded provider chunks`.
 
+## Stage100 acceptance — 2026-09-13
+
+The first 100-source stage used the frozen snapshot with `full_plus_source_actor`, `maxEvents=80`, `maxChars=60000`, and bounded Full-source Evidence chunks of `12000` characters / `6` source fragments. The deliberately conservative source bounds were selected from a content-free dry-run: exactly `27` of the first `100` Experience Units were eligible for Memory Intelligence and `73` were explicitly skipped by policy.
+
+Acceptance evidence:
+
+- source-level migration: `100 processed / 27 ingested / 73 skipped`;
+- PostgreSQL: `27` terminal receipts, `0` provider errors, `970` provider units and `970` curation decisions;
+- governance: `3` canonical candidates and `967` supporting-evidence-only decisions;
+- canonical state: `3` candidates / `3` heads / `3` revisions, with `3/3` candidate provenance and `3/3` Canonical Memory provenance pointing back to Adapter-produced `NormalizedExperience` evidence;
+- receipt outcomes: `2` committed receipts and `25` `no_memory_worthy_content` receipts;
+- Hindsight: `196/196` operations completed with `retry_total=0`;
+- provider execution: `98` logical retains = `71` bounded full-source chunks + `27` direct-user projections;
+- observed child-retain duration: p50 `12.3s`, p90 `69.7s`, max `633.9s`; first-to-last provider wall span approximately `60.9` minutes.
+
+An independent empty migration-state root then replayed the same first 100 Experience Units against the exact same destination, policy, Hindsight banks, and source snapshot. Replay completed in approximately `2.4s`:
+
+- `100 processed / 27 ingested / 73 skipped` were deterministically rediscovered;
+- receipts: `27 -> 27`;
+- candidates: `3 -> 3`;
+- heads: `3 -> 3`;
+- revisions: `3 -> 3`;
+- Hindsight operations: `196 -> 196`;
+- provider retries remained `0`.
+
+This proves source traversal replay, receipt idempotency, chunk-operation reuse, Canonical non-duplication, and provenance closure at the 100-Experience scale.
+
+### Chunk-size tuning
+
+The same real Experience used for the 12K chunk UAT was repeated with `24000` characters / `12` fragments per chunk. The full-source lane dropped from `4` chunks to `2`, plus one unchanged direct-user projection. End-to-end wall time changed only slightly (`330.2s -> 321.6s`), but total Hindsight operation records dropped from `10` to `6`, all with zero retry/error. For larger staged migrations, `24K/12` is therefore the preferred starting point because it reduces provider scheduling/operation pressure without a material latency penalty in the canary.
+
+## Lane separation for 1,000-stage
+
+Stage100 proved that `full_plus_source_actor` is correct, but it also measured the cost of coupling both provider workloads. At the current conservative `80 events / 60K chars` bound, the first 1,000 Experience Units contain `284` eligible full-source sessions. With 12K chunks that would require roughly `515` full-source chunks + `284` user projections; 24K reduces the estimated full-source chunk count to approximately `378`, but the combined lane would still create roughly `662` logical provider retains and inherit long-tail operations.
+
+The 1,000-stage therefore separates execution while preserving one source Experience identity and provenance:
+
+- `source_actor_only` = Direct Memory Lane, allowed to produce governed Canonical Memory;
+- `full_source_only` = Full-source Evidence Lane, chunked and intended for mixed/synthesized supporting evidence only;
+- `full_plus_source_actor` remains the compatibility/default mode and the already-proven combined-path reference.
+
+`full_source_only` is a Memory Intelligence execution mode, not a Source Adapter exception. It must use bounded full-source chunking in the migration pilot. The complete `NormalizedExperience` remains archived once per receipt and every provider unit still points to the same source Experience.
+
+Repository acceptance after adding the evidence-only lane: `173` tests, `0` failures (`8` environment-gated skips).
+
+
+### Full-source-only Live canary
+
+A real frozen-snapshot Experience was then run with `distillationProjectionMode=full_source_only` and the selected `24K/12` chunk baseline. Hindsight emitted only two deterministic `full-source:chunk:*` documents and no `source-actor:user` document. Both chunk operations completed with zero retry/error. DLMF received `78` provider units / `78` curation decisions and completed the receipt as `no_memory_worthy_content` with `0` candidates and `0` Canonical revisions, confirming that mixed evidence did not acquire direct-user authority.
+
+An independent replay state root re-ran the same Experience against the same destination in approximately `3.5s`; the receipt count remained `1 -> 1`, Canonical state remained zero, and Hindsight remained exactly `4` operation records (`2` batch parents + `2` retain children), all completed, `retry_total=0`, and `userProjectionOps=0`.
+
+This proves the Full-source Evidence Lane can be scaled independently of the Direct Memory Lane while preserving the same Adapter Experience provenance and fail-closed Canonical boundary.
+
 ## Next increment
 
-1. Run a `100`-Experience staged migration with `full_plus_source_actor`, bounded Full-source Evidence chunks, and the Direct Memory Lane enabled.
-2. Validate cumulative skip/ingest distribution, checkpoint restart, provider operation reuse, Canonical provenance, and no duplicate receipt/head/revision growth on replay.
-3. Review provider throughput and chunk-size distribution before selecting the 1,000-Experience settings.
-4. After 100-Experience retry/replay/provenance acceptance, increase to `1,000` and then the full frozen snapshot.
+1. Run a live `full_source_only` chunk canary and replay to verify that no direct-user projection is emitted and no Canonical Memory is forced from mixed evidence.
+2. Run the first 1,000 Experience Units through the Direct Memory Lane with bounded direct-user eligibility; validate checkpoint/replay/Canonical provenance independently of the evidence workload.
+3. Run the Full-source Evidence Lane over the same 1,000 source range in resumable bounded batches using the selected `24K/12` chunk baseline.
+4. Compare throughput and long-tail provider behavior before increasing beyond 1,000 or widening the source eligibility bounds.
 5. Keep live incremental synchronization separate; `incrementalSync` remains `partial` until mutable-session change detection is designed.
