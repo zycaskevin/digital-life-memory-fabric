@@ -943,8 +943,20 @@ await mkdir(archiveRoot, { recursive: true, mode: 0o700 });
 await chmod(archiveRoot, 0o700);
 
 const pool = await openBootstrappedPilotSchema();
+const migrationLockClient = await pool.connect();
+let migrationWriterLockHeld = false;
 let runtime;
 try {
+  const lock = await migrationLockClient.query(
+    `SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired`,
+    [destinationId],
+  );
+  if (lock.rows[0]?.acquired !== true) {
+    throw new Error("migration destination already has an active writer");
+  }
+  migrationWriterLockHeld = true;
+  console.log(`migrationWriterLock=acquired:${migrationFingerprint}`);
+
   const semanticReviewRemediation = await verifiedInvalidCandidateRemediation(
     pool,
     semanticReviewDecisionManifest,
@@ -1117,6 +1129,13 @@ try {
   console.log(`report=${reportPath}`);
   console.log("HERMES_BOUNDED_MIGRATION=PASS");
 } finally {
+  if (migrationWriterLockHeld) {
+    await migrationLockClient.query(
+      `SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released`,
+      [destinationId],
+    ).catch(() => undefined);
+  }
+  migrationLockClient.release();
   if (runtime !== undefined) await runtime.close();
   else await pool.end();
 }
