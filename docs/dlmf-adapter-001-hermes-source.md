@@ -596,6 +596,25 @@ Phase-2 continues from the frozen Phase-1 source checkpoint while sharing the sa
 
 A second successor state, seeded independently from the same Phase-1@1200 predecessor, replayed positions `1201-1300` and preserved the physical destination exactly: receipts `681 -> 681`, candidates `124 -> 124`, heads `121 -> 121`, revisions `123 -> 123`, and Hindsight operations `48 -> 48`. The Phase-2 gate is therefore source-resumable, provider-idempotent, Canonical-nonduplicating, provenance-closed, and contract-versioned.
 
+## Direct Phase-2 gate: source positions 1301-1500 — 2026-09-14
+
+Phase-2 continued under the exact same Contract v2 identity established at source position `1200`: Source Evidence contract `normalized-experience-source-evidence-v2`, policy fingerprint `ad74a049c4548676`, migration fingerprint `7760a46680a499ae`, `source_actor_only + retain`, `50` user events / `60K` user characters, Gemma4:26b, Ollama `np4 × 64K`, bounded concurrency `8`, and the single-writer advisory lock.
+
+The deterministic Adapter+eligibility scan predicted positions `1301-1500` as `43` eligible / `157` skipped. Durable execution matched exactly and advanced the successor state from `1300` to `1500`, yielding cumulative successor counters `1500 processed / 684 ingested / 816 skipped`.
+
+Phase-2 acceptance through source position `1500` is:
+
+- `67` Contract-v2 receipts over `67` distinct source Experiences;
+- receipt outcomes: `8 complete/committed`, `57 complete/no_memory_worthy_content`, and `2 awaiting_review/pending_review`;
+- `1,314` provider units received exactly `1,314` curation decisions;
+- the Contract-v2 path created `10` candidate IDs / `10` Canonical Memory IDs, with `10/10` candidate provenance and `10/10` Canonical revision provenance back to `NormalizedExperience`;
+- curation admitted `9` direct-user preference candidates and `1` direct-user habit candidate, while general, technical, project, event, and transient units remained supporting evidence;
+- the Phase-2 Hindsight bank contains `134/134` completed operation records = `67` retain children + `67` batch parents, with `retry_total=0`.
+
+The independent successor replay state first closed `1201-1300`, then replayed positions `1301-1500` with the same Phase-1 predecessor and Contract-v2 fingerprint. The latter replay rediscovered `200 processed / 43 ingested / 157 skipped` while preserving receipts `724 -> 724`, candidates `131 -> 131`, heads `128 -> 128`, revisions `130 -> 130`, and Hindsight operations `134 -> 134`. No provider extraction or Canonical state was duplicated.
+
+This closes the Direct1500 gate and proves that a policy-bound successor migration can continue an existing Digital Life across a Source Evidence contract boundary without restarting source history, reusing an invalid checkpoint identity, or duplicating Canonical Memory.
+
 ## Next increment
 
 1. Continue Direct Phase-2 from the accepted source position `1300` successor checkpoint using the unchanged frozen snapshot, Source Evidence contract v2, policy-bound migration identity, `source_actor_only + retain`, `50` user-event / `60K` user-character bounds, Gemma4:26b, Ollama `np4 × 64K`, bounded concurrency, and the single-writer advisory lock.
