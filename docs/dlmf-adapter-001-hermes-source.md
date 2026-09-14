@@ -676,3 +676,20 @@ Acceptance through source position `2500` is:
 The accepted replay state was resumed from source position `2300` and replayed positions `2301-2500`. It rediscovered `200 processed / 188 ingested / 12 skipped` while preserving receipts `1065 -> 1065`, candidates `158 -> 158`, heads `154 -> 154`, revisions `157 -> 157`, and Hindsight operations `816 -> 816`.
 
 This closes the Direct2500 gate and demonstrates stable Contract-v2 behavior under a nearly all-eligible short-message workload.
+
+## Direct Phase-2 gate: source positions 2501-3000 — 2026-09-15
+
+This `500`-source Contract-v2 gate was deliberately chosen because the source-position scan showed a high count of eligible sessions but a very small total user-text payload. Sizing predicted `277` eligible / `223` skipped; durable execution matched exactly and advanced the successor state to `3000 processed / 1302 ingested / 1698 skipped`.
+
+Acceptance through source position `3000` is:
+
+- Contract-v2 contains `685` receipts over `685` distinct source Experiences;
+- receipt outcomes: `33 complete/committed`, `645 complete/no_memory_worthy_content`, and `7 awaiting_review/pending_review`;
+- `4,027` provider units received exactly `4,027` curation decisions;
+- Contract-v2 references `41` candidate IDs / `41` Canonical Memory IDs, with `41/41` candidate provenance and `41/41` Canonical revision provenance;
+- cumulative physical destination: `1,342` receipts, `162` candidate rows, `158` Canonical heads, and `161` revisions;
+- the Phase-2 Hindsight bank contains `1000/1000` completed operation records = `500` retain children + `500` batch parents, with `retry_total=0`.
+
+The accepted replay state was resumed from source position `2500` and replayed positions `2501-3000`. It rediscovered `500 processed / 277 ingested / 223 skipped` while preserving receipts `1342 -> 1342`, candidates `162 -> 162`, heads `158 -> 158`, revisions `161 -> 161`, and Hindsight operations `1000 -> 1000`.
+
+This closes the Direct3000 gate.
