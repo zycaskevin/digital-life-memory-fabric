@@ -2,7 +2,8 @@
 
 Canonical Architecture Amendment v0.1
 
-Date: 2026-09-12  
+Date: 2026-09-12
+
 Status: Proposed Canonical Baseline
 
 ## 1. Core boundary

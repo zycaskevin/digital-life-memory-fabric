@@ -1,7 +1,9 @@
 # DLMF Provider Extraction Artifacts v0.1
 
-**Date:** 2026-09-14  
-**Status:** Engineering Contract  
+**Date:** 2026-09-14
+
+**Status:** Engineering Contract
+
 **Scope:** Memory Intelligence execution / retry reproducibility
 
 ## Purpose

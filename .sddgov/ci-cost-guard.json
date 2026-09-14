@@ -6,7 +6,7 @@
     "environment": {},
     "commands": [
       ["bash", "scripts/run-ci-local-green.sh"],
-      ["git", "diff", "--check", "origin/feat/dlmf-adapter-framework-main"]
+      ["git", "diff", "--check", "origin/main...HEAD"]
     ]
   },
   "hosted": {
