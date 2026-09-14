@@ -29,6 +29,17 @@ test("different source systems cannot collide on the same source-local id", () =
   );
 });
 
+test("experience identity rejects reserved tuple separators", () => {
+  assert.throws(
+    () => experienceIdFor({ ...source, sourceType: "conversation\u001fsession" }),
+    /reserved identity separator/,
+  );
+  assert.throws(
+    () => experienceIdFor({ ...source, sourceSystem: "hermes\u001fconversation" }),
+    /reserved identity separator/,
+  );
+});
+
 test("source fingerprint is deterministic and content-sensitive", () => {
   assert.deepEqual(sha256SourceFingerprint("same"), sha256SourceFingerprint("same"));
   assert.notDeepEqual(sha256SourceFingerprint("same"), sha256SourceFingerprint("changed"));

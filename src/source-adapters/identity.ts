@@ -4,6 +4,9 @@ import type { ExperienceId, SourceFingerprint, SourceIdentity } from "./contract
 function requireNonEmpty(label: string, value: string): string {
   const normalized = value.trim();
   if (normalized.length === 0) throw new Error(`${label} must not be empty`);
+  if (normalized.includes("\u001f")) {
+    throw new Error(`${label} must not contain the reserved identity separator`);
+  }
   return normalized;
 }
 

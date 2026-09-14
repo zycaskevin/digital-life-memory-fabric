@@ -245,7 +245,7 @@ async function main() {
   console.log(JSON.stringify(receipt));
 }
 
-main().catch((error) => {
-  console.error(`HERMES_SOURCE_ADAPTER_LIVE_UAT=FAIL: ${error instanceof Error ? error.message : String(error)}`);
+main().catch(() => {
+  console.error("HERMES_SOURCE_ADAPTER_LIVE_UAT=FAIL");
   process.exitCode = 1;
 });
