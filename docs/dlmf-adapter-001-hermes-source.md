@@ -624,3 +624,21 @@ This closes the Direct1500 gate and proves that a policy-bound successor migrati
 5. Treat Phase-1 transition rows as forensic audit history; do not physically delete them merely to make counters prettier. Canonical truth is governed by heads/revisions, not by erasing execution history.
 6. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
 7. Keep historical migration completion, Digital-Life-Stack activation, hosted CI/merge, production scheduling, credentials, retention, and rollback as separate operational gates.
+
+## Direct Phase-2 gate: source positions 1501-2000 — 2026-09-15
+
+Phase-2 continued under the same Contract-v2 identity, Source Evidence contract, Hindsight bank, Canonical store, and single-writer boundary. The read-only sizing predicted positions `1501-2000` as `89` eligible / `411` skipped, and durable execution matched exactly.
+
+The accepted cumulative successor state is:
+
+- `2000 processed / 773 ingested / 1227 skipped`;
+- Phase-2 (`1201-2000`) therefore contains `156` terminal Contract-v2 receipts over `156` distinct source Experiences;
+- Phase-2 receipt outcomes are `19 complete/committed`, `131 complete/no_memory_worthy_content`, and `6 awaiting_review/pending_review`;
+- `2,864` provider units received exactly `2,864` curation decisions;
+- Phase-2 references `27` candidate IDs and `27` Canonical Memory IDs, with `27/27` candidate provenance and `27/27` Canonical revision provenance resolving back to `NormalizedExperience`;
+- the cumulative physical destination now contains `813` receipts, `148` candidate rows, `144` Canonical heads, and `147` revisions;
+- the Phase-2 Hindsight bank contains `312/312` completed operation records = `156` retain children + `156` batch parents, with `retry_total=0`.
+
+An independent successor replay was seeded again from the frozen Phase-1@1200 predecessor and replayed the full Contract-v2 prefix `1201-2000` (`800` source positions). Replay completed in approximately `4.4s`, deterministically rediscovered `800 processed / 156 ingested / 644 skipped`, and preserved receipts `813 -> 813`, candidates `148 -> 148`, heads `144 -> 144`, revisions `147 -> 147`, and Hindsight operations `312 -> 312` with `retry_total=0`.
+
+This closes the Direct2000 gate. Contract-v2 continuation is now proven across `800` source positions without receipt growth, provider replay, Canonical duplication, provenance drift, or source-checkpoint regression.
