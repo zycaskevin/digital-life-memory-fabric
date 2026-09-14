@@ -54,6 +54,25 @@ function actorFor(
   }
 }
 
+function eventEvidence(event: ExperienceEvent): string | undefined {
+  if (typeof event.content === "string" && event.content.trim().length > 0) {
+    return event.content.trim();
+  }
+  const metadata = event.metadata ?? {};
+  const toolEvidence = [
+    ["Tool name", metadata.toolName],
+    ["Tool call ID", metadata.toolCallId],
+    ["Tool calls", metadata.toolCalls],
+  ] as const;
+  const projected: string[] = [];
+  for (const [label, value] of toolEvidence) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      projected.push(`${label}: ${value.trim()}`);
+    }
+  }
+  return projected.length === 0 ? undefined : projected.join("\n");
+}
+
 function textEventSegments(experience: NormalizedExperience): Array<{
   segment: DistillationSourceSegment;
   rendered: string;
@@ -61,8 +80,8 @@ function textEventSegments(experience: NormalizedExperience): Array<{
   const actors = new Map(experience.actors.map((actor) => [actor.actorId, actor]));
   const results: Array<{ segment: DistillationSourceSegment; rendered: string }> = [];
   for (const event of experience.events) {
-    if (typeof event.content !== "string" || event.content.trim().length === 0) continue;
-    const content = event.content.trim();
+    const content = eventEvidence(event);
+    if (content === undefined) continue;
     const actor = actorFor(event.actorId, actors);
     const observedAt = exactTimestamp(event.occurredAt);
     results.push({

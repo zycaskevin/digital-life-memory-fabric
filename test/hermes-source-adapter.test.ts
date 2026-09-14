@@ -68,7 +68,7 @@ class FakeHermesReader implements HermesStateReader {
   readCalls: string[] = [];
 
   async inspect() {
-    return { schemaVersion: "42", tables: ["sessions", "messages"], sessionCount: 11216, messageCount: 997238 };
+    return { schemaVersion: "42", tables: ["sessions", "messages"], columns: structuredClone(requiredColumns), sessionCount: 11216, messageCount: 997238 };
   }
 
   async listSessions(request: { afterSessionId?: string; limit: number }) {
@@ -83,6 +83,11 @@ class FakeHermesReader implements HermesStateReader {
   }
 }
 
+const requiredColumns = {
+  sessions: ["id","source","profile_name","title","message_count","tool_call_count","started_at","ended_at","last_activity_at","end_reason","archived","expiry_finalized","hidden","parent_session_id","chat_id","chat_type","thread_id","user_id"],
+  messages: ["id","session_id","role","content","tool_call_id","tool_calls","tool_name","timestamp","finish_reason","reasoning","platform_message_id","_compressed_summary","active","compacted","display_kind","display_metadata"],
+};
+
 const fixedClock = () => new Date("2026-09-12T13:10:00.000Z");
 
 test("ADAPTER-001 inspect exposes Hermes capabilities without leaking schema into DLMF Core", async () => {
@@ -95,6 +100,22 @@ test("ADAPTER-001 inspect exposes Hermes capabilities without leaking schema int
   assert.equal(inspection.capabilities.toolEvents, "full");
   assert.equal(inspection.capabilities.deletionDetection, "unknown");
   assert.equal(inspection.metadata.sessionCount, 11216);
+});
+
+test("ADAPTER-001 inspect rejects Hermes schemas missing queried columns", async () => {
+  const reader = new FakeHermesReader();
+  reader.inspect = async () => ({
+    schemaVersion: "old",
+    tables: ["sessions", "messages"],
+    columns: {
+      sessions: requiredColumns.sessions.filter((column) => column !== "expiry_finalized"),
+      messages: requiredColumns.messages.filter((column) => column !== "_compressed_summary"),
+    },
+    sessionCount: 11216,
+    messageCount: 997238,
+  });
+  const adapter = new HermesSourceAdapter({ reader, clock: fixedClock });
+  await assert.rejects(() => adapter.inspect(), /missing required columns/);
 });
 
 test("ADAPTER-001 discover is bounded, cursor-based, and uses stable DLMF experience identity", async () => {
@@ -163,7 +184,7 @@ test("ADAPTER-001 treats out-of-range numeric timestamps as unknown", async () =
     ],
   };
   const reader: HermesStateReader = {
-    inspect: async () => ({ tables: ["sessions", "messages"] }),
+    inspect: async () => ({ tables: ["sessions", "messages"], columns: structuredClone(requiredColumns) }),
     listSessions: async () => [badSession],
     readSession: async () => badPayload,
   };

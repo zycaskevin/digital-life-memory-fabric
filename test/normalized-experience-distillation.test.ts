@@ -122,6 +122,34 @@ test("normalized experience bridges source-neutrally into role-aware transcript 
   assert.deepEqual(metadata.provenance, experience.provenance);
 });
 
+test("normalized experience preserves content-free structured tool-call evidence", () => {
+  const toolOnly: NormalizedExperience = {
+    ...structuredClone(experience),
+    events: [
+      ...structuredClone(experience.events),
+      {
+        eventId: "evt-tool-only",
+        eventType: "tool_or_message",
+        actorId: "agent",
+        occurredAt: { certainty: "unknown" },
+        metadata: {
+          toolName: "inspect",
+          toolCallId: "call-42",
+          toolCalls: '[{"name":"inspect","arguments":{"scope":"bounded"}}]',
+        },
+      },
+    ],
+  };
+  const input = normalizedExperienceToTranscriptInput(toolOnly, context);
+  const segment = input.sourceSegments?.at(-1);
+  assert.equal(segment?.segmentId, "evt-tool-only");
+  assert.equal(segment?.actor, "assistant");
+  assert.match(segment?.content ?? "", /Tool name: inspect/);
+  assert.match(segment?.content ?? "", /Tool call ID: call-42/);
+  assert.match(segment?.content ?? "", /"scope":"bounded"/);
+  assert.match(input.content, /Assistant:\nTool name: inspect/);
+});
+
 test("normalized experience fallback content remains source-neutral and conservative", () => {
   const fallback: NormalizedExperience = {
     ...structuredClone(experience),

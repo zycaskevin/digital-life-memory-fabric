@@ -64,6 +64,7 @@ export interface HermesSessionPayload {
 export interface HermesSchemaInspection {
   schemaVersion?: string;
   tables: string[];
+  columns: Record<string, string[]>;
   sessionCount?: number;
   messageCount?: number;
 }
@@ -73,6 +74,11 @@ export interface HermesStateReader {
   listSessions(request: { afterSessionId?: string; limit: number }): Promise<HermesSessionRow[]>;
   readSession(sessionId: string): Promise<HermesSessionPayload>;
 }
+
+const REQUIRED_HERMES_COLUMNS = {
+  sessions: ["id","source","profile_name","title","message_count","tool_call_count","started_at","ended_at","last_activity_at","end_reason","archived","expiry_finalized","hidden","parent_session_id","chat_id","chat_type","thread_id","user_id"],
+  messages: ["id","session_id","role","content","tool_call_id","tool_calls","tool_name","timestamp","finish_reason","reasoning","platform_message_id","_compressed_summary","active","compacted","display_kind","display_metadata"],
+} as const;
 
 function timestamp(value: number | string | undefined, evidence: string): ExperienceTimestamp {
   if (value === undefined || value === null || value === "") return { certainty: "unknown" };
@@ -139,6 +145,13 @@ export class HermesSourceAdapter implements MemorySourceAdapter<HermesSessionPay
     const tables = new Set(source.tables);
     if (!tables.has("sessions") || !tables.has("messages")) {
       throw new Error("Hermes state source must expose sessions and messages tables");
+    }
+    for (const [table, required] of Object.entries(REQUIRED_HERMES_COLUMNS)) {
+      const available = new Set(source.columns[table] ?? []);
+      const missing = required.filter((column) => !available.has(column));
+      if (missing.length > 0) {
+        throw new Error(`Hermes ${table} table is missing required columns: ${missing.join(", ")}`);
+      }
     }
     return {
       adapterName: this.name,

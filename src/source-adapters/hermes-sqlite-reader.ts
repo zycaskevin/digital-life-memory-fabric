@@ -23,10 +23,19 @@ export class HermesSqliteReader implements HermesStateReader {
     return this.#withDb((db) => {
       const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{name: unknown}>).map((x) => String(x.name));
       const has = (name: string) => tables.includes(name);
+      const columns = Object.fromEntries(
+        ["sessions", "messages"]
+          .filter(has)
+          .map((table) => [
+            table,
+            (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: unknown }>)
+              .map((column) => String(column.name)),
+          ]),
+      );
       const schema = has("schema_version") ? db.prepare("SELECT version FROM schema_version LIMIT 1").get() as {version?: unknown} | undefined : undefined;
       const sessionCount = has("sessions") ? num((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as {n: unknown}).n) : undefined;
       const messageCount = has("messages") ? num((db.prepare("SELECT COUNT(*) AS n FROM messages").get() as {n: unknown}).n) : undefined;
-      return { tables, ...(schema?.version === undefined ? {} : { schemaVersion: String(schema.version) }), ...(sessionCount === undefined ? {} : { sessionCount }), ...(messageCount === undefined ? {} : { messageCount }) };
+      return { tables, columns, ...(schema?.version === undefined ? {} : { schemaVersion: String(schema.version) }), ...(sessionCount === undefined ? {} : { sessionCount }), ...(messageCount === undefined ? {} : { messageCount }) };
     });
   }
 
