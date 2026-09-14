@@ -688,8 +688,8 @@ Acceptance through source position `3000` is:
 - `4,027` provider units received exactly `4,027` curation decisions;
 - Contract-v2 references `41` candidate IDs / `41` Canonical Memory IDs, with `41/41` candidate provenance and `41/41` Canonical revision provenance;
 - cumulative physical destination: `1,342` receipts, `162` candidate rows, `158` Canonical heads, and `161` revisions;
-- the Phase-2 Hindsight bank contains `1000/1000` completed operation records = `500` retain children + `500` batch parents, with `retry_total=0`.
+- the Phase-2 Hindsight bank contains `1370/1370` completed operation records = `685` retain children + `685` batch parents, with `retry_total=0`.
 
-The accepted replay state was resumed from source position `2500` and replayed positions `2501-3000`. It rediscovered `500 processed / 277 ingested / 223 skipped` while preserving receipts `1342 -> 1342`, candidates `162 -> 162`, heads `158 -> 158`, revisions `161 -> 161`, and Hindsight operations `1000 -> 1000`.
+The accepted replay state was resumed from source position `2500` and replayed positions `2501-3000`. It rediscovered `500 processed / 277 ingested / 223 skipped` while preserving receipts `1342 -> 1342`, candidates `162 -> 162`, heads `158 -> 158`, revisions `161 -> 161`, and Hindsight operations `1370 -> 1370`.
 
 This closes the Direct3000 gate.
