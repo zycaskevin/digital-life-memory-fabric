@@ -180,6 +180,10 @@ const stateBaseRoot = resolve(
   process.env.DLMF_MIGRATION_STATE_ROOT
     || join(home, ".local", "state", "dlmf", "hermes-historical-migration", schema),
 );
+const successorStateFrom = firstText(process.env.DLMF_MIGRATION_SUCCESSOR_STATE_FROM);
+if (successorStateFrom !== undefined && targetSourceId !== undefined) {
+  throw new Error("successor migration state is only supported for cursor migration");
+}
 const archiveBaseRoot = resolve(
   process.env.DLMF_MIGRATION_ARCHIVE_ROOT
     || join(home, ".local", "share", "dlmf", "hermes-historical-migration", schema),
@@ -962,7 +966,47 @@ const archiveRoot = join(archiveBaseRoot, migrationFingerprint, "raw");
 const statePath = join(stateRoot, "state.json");
 const reportPath = join(stateRoot, "latest-report.json");
 const stateExists = existsSync(statePath);
-console.log(`migrationFingerprint=${migrationFingerprint} state=${stateExists ? "resumable" : "new"}`);
+let successorSeedState;
+let successorPredecessorFingerprint;
+if (!stateExists && successorStateFrom !== undefined) {
+  const predecessorPath = resolve(successorStateFrom);
+  if (predecessorPath === statePath) {
+    throw new Error("successor predecessor state must differ from the target state");
+  }
+  const predecessor = await new JsonFileSourceMigrationStateStore(predecessorPath).load();
+  if (predecessor === null) throw new Error("successor predecessor state does not exist");
+  for (const [field, actual, expected] of [
+    ["adapterName", predecessor.adapterName, inspection.adapterName],
+    ["adapterVersion", predecessor.adapterVersion, inspection.adapterVersion],
+    ["sourceSystem", predecessor.sourceSystem, inspection.sourceSystem],
+    ["sourceType", predecessor.sourceType, inspection.sourceType],
+    ["eligibilityPolicyVersion", predecessor.eligibilityPolicyVersion, eligibility.version],
+  ]) {
+    if (actual !== expected) {
+      throw new Error(`successor predecessor ${field} mismatch`);
+    }
+  }
+  if (predecessor.complete) throw new Error("cannot continue from a source-exhausted predecessor state");
+  if (predecessor.migrationId === destinationId) {
+    throw new Error("successor predecessor already uses the target migration identity");
+  }
+  if (!predecessor.checkpoint.cursor || predecessor.processedUnits < 1) {
+    throw new Error("successor predecessor lacks a durable cursor checkpoint");
+  }
+  const now = new Date().toISOString();
+  successorSeedState = {
+    ...predecessor,
+    migrationId: destinationId,
+    checkpoint: { ...predecessor.checkpoint, updatedAt: now },
+    updatedAt: now,
+  };
+  successorPredecessorFingerprint = sha256(predecessor.migrationId).slice(0, 16);
+}
+const stateMode = stateExists ? "resumable" : successorSeedState === undefined ? "new" : "successor-ready";
+console.log(`migrationFingerprint=${migrationFingerprint} state=${stateMode}`);
+if (successorSeedState !== undefined) {
+  console.log(`successorState=ready predecessor=${successorPredecessorFingerprint} processed=${successorSeedState.processedUnits} ingested=${successorSeedState.ingestedUnits} skipped=${successorSeedState.skippedUnits}`);
+}
 
 if (preflightOnly) {
   console.log("HERMES_BOUNDED_MIGRATION_PREFLIGHT=PASS");
@@ -971,6 +1015,9 @@ if (preflightOnly) {
 
 await mkdir(stateRoot, { recursive: true, mode: 0o700 });
 await chmod(stateRoot, 0o700);
+if (!stateExists && successorSeedState !== undefined) {
+  await new JsonFileSourceMigrationStateStore(statePath).save(successorSeedState);
+}
 await mkdir(archiveRoot, { recursive: true, mode: 0o700 });
 await chmod(archiveRoot, 0o700);
 
