@@ -512,9 +512,9 @@ Several proposed throughput shortcuts were tested against real accepted Canonica
 
 1. Deterministic durable-language gate: selected roughly `27%` of Direct1000 sources but recovered only `52/89` known accepted-source labels (`58.4%` recall).
 2. Qwen3 Embedding 8B semantic gate: five-fold holdout recall was `87/89` (`97.75%`) while still selecting roughly `77%` of Direct sources. Union with the deterministic gate still missed the same two known Canonical-positive sources; it is therefore not allowed to auto-skip Hindsight.
-3. Qwen3.8:27b generation backend: a real 45-character Direct source remained in provider processing after `292s`, while Gemma4:26b completed the same retained source in `11.8s`. The isolated Qwen sidecar was stopped and is not a migration candidate.
-4. Gemma `np8 × 32K`: the large direct-source canary completed a retain in `598.2s`, within the existing `np4 × 64K` stochastic range (`463.6s` and `610.4s`). On an eight-source controlled throughput benchmark, `np4` completed in `115.4s` and `np8` in `104.3s`, only a `9.6%` wall-time improvement. This does not justify halving per-slot context or changing the production-like baseline.
-5. Hindsight direct-source `dry_run`: the large canary reduced extraction+governance time to `211.7s`, but a matched 20-source A/B recovered only `7/10` retain-positive sources (`70%` recall), despite `0/10` false positives. It is therefore not a safe replacement for retained Direct extraction.
+3. Qwen3.8:27b retain backend: a same-source A/B measured Qwen retain at approximately `317.7s` versus Gemma at `11.8s`. A second warm tiny-source canary completed Qwen in about `18.3s`, but Qwen produced `0` Canonical Memory where Gemma produced a governed Canonical preference. The alternate retain model is therefore rejected for both throughput instability and recall degradation.
+4. Gemma `np8 × 32K`: an isolated Ollama/Hindsight runtime proved true `-np8` execution and completed the same eight real Direct sources with `retry_total=0` in `133.327s` wall time, with median child-retain latency `124.2s`. A clean `np4 × 64K` run over the same eight sources completed in `128.613s` with median latency `90.6s`; one transient Ollama connect failure retried successfully, yet the `np4` batch still finished faster. The experiment therefore rejects `np8`: GPU contention raises per-request latency enough to erase the extra parallelism.
+5. Hindsight direct-source `dry_run`: the matched 20-source A/B recovered only `7/10` retain-positive sources (`70%` recall), despite `0/10` false positives; median execution was about `14.7s`. It is useful as an extraction diagnostic, but it is not a safe replacement or auto-skip gate for retained Direct extraction.
 
 The accepted historical-migration provider baseline remains **Gemma4:26b, Ollama `np4`, 64K context per slot, Hindsight retained `source_actor_only` extraction**. Performance optimization must not lower known Canonical recall.
 
@@ -538,11 +538,70 @@ An independent empty-state replay of the clean shadow completed in approximately
 
 `direct1000_shadow_v3` is therefore the accepted continuation baseline for source positions `1001+`. The contaminated v1 schema remains forensic evidence only; it is not deleted and is not Canonical authority.
 
+## Direct Phase-1 continuation through source position 1200 — 2026-09-14
+
+The clean shadow-v3 Direct Lane continued from `1000` through source position `1200` under the original Direct source-evidence contract. The accepted Phase-1 checkpoint is:
+
+- `1200 processed / 617 ingested / 583 skipped`;
+- positions `1001-1200` created `41` receipts: `40 complete/no_memory_worthy_content` and `1 complete/committed`;
+- those receipts contained `591` provider units and exactly `591` curation decisions;
+- the accepted cumulative Canonical state before the later contract-transition replay was `617` receipts, `120` candidate rows, `118` Canonical heads, and `119` revisions;
+- all `120/120` candidate rows and `119/119` revisions retained source-experience provenance.
+
+The Phase-1 durable state is frozen at source position `1200`. It remains the reviewed predecessor checkpoint for later migration contracts; it must not be silently reused under a changed Source Evidence or policy contract.
+
+## Source Evidence contract transition and forensic preservation — 2026-09-14
+
+Later source-adapter hardening preserved previously omitted tool-only evidence in `NormalizedExperience.sourceSegments`. That change is correct source preservation, but the historical migration identity did not yet include a Source Evidence contract or the policy bundle. A replay of positions `1001-1200` therefore reused the Phase-1 migration fingerprint while computing new receipt idempotency keys from the enriched segments.
+
+The transition replay produced exactly `40` duplicate receipts and one equivalent Canonical merge. Forensic verification proved that this was identity drift rather than new Canonical truth:
+
+- every new receipt had an older receipt for the same source Experience;
+- the single new candidate was an `ACCEPTED` equivalent preference merge into an existing memory;
+- revision `2` of that memory has exactly the same canonical text, content hash, semantic fingerprint, and semantic key as revision `1`;
+- the new revision only adds a second raw-archive/source-evidence reference;
+- there were no conflicts, semantic-review decisions, insight promotions, or provider materializations;
+- the outbox row for commit `120` remained `PENDING` with `attempts=0`, and there were no device checkpoints acknowledging it.
+
+A destructive physical cleanup was intentionally not forced through the execution-policy boundary. The transition records remain append-only forensic evidence. They are not treated as an independent life history, and the Canonical head identity did not change. Phase-1 is therefore frozen at the reviewed source checkpoint rather than retroactively pretending the evidence contract never changed.
+
+## Hermes Historical Migration Contract v2 — 2026-09-14
+
+Migration execution identity is now explicitly policy-bound. Branch `fix/hermes-migration-contract-identity-v2` contains commits `03957e7` and `f89c724`, both pushed to the remote branch. The contract binds the migration fingerprint to:
+
+- `sourceEvidenceContractVersion`;
+- distillation policy version;
+- Canonical governance policy version;
+- admission policy identity;
+- retention policy version;
+- curation provider version;
+- semantic policy version;
+- existing source selection, Hindsight bank, projection mode, chunking, scope, runtime, and eligibility identity.
+
+Direct retain under the new Source Evidence contract uses `hermes-migration-pilot-distill-v7-source-actor-only:normalized-experience-source-evidence-v2`. Preflight against the same Phase-1 schema/bank/state root produces a new migration fingerprint instead of treating the old state as resumable; changing only the Source Evidence contract version changes the fingerprint again.
+
+Contract v2 also adds a controlled successor-state path. A successor may inherit only the validated Adapter checkpoint and cumulative source counters from a non-exhausted predecessor; the new state receives the new migration identity. Preflight is read-only and reports `successor-ready`; apply atomically materializes the successor state before continuing. This creates an auditable boundary between processing contracts without restarting the person's history or rebuilding existing Canonical Memory.
+
+## Direct Phase-2 gate: source positions 1201-1300 — 2026-09-14
+
+Phase-2 continues from the frozen Phase-1 source checkpoint while sharing the same PostgreSQL Canonical store and namespace. It uses a new Hindsight bank, new migration state/archive roots, Source Evidence contract v2, and the policy-bound migration identity. The initial read-only sizing predicted exactly `24` eligible / `76` skipped sources, and the durable run matched exactly:
+
+- successor cumulative state: `1300 processed / 641 ingested / 659 skipped`;
+- Phase-2 delta: `100 processed / 24 ingested / 76 skipped`;
+- `24/24` Phase-2 receipts are terminal: `3 complete/committed` and `21 complete/no_memory_worthy_content`;
+- `463` provider units received exactly `463` curation decisions;
+- Phase-2 created `3` governed Canonical memories: `2` user-asserted preferences and `1` user-asserted habit;
+- candidate provenance `3/3` and Canonical revision provenance `3/3` point back to the Adapter Experiences;
+- the Phase-2 Hindsight bank contains `48/48` completed operations = `24` retain children + `24` batch parents, with `retry_total=0`.
+
+A second successor state, seeded independently from the same Phase-1@1200 predecessor, replayed positions `1201-1300` and preserved the physical destination exactly: receipts `681 -> 681`, candidates `124 -> 124`, heads `121 -> 121`, revisions `123 -> 123`, and Hindsight operations `48 -> 48`. The Phase-2 gate is therefore source-resumable, provider-idempotent, Canonical-nonduplicating, provenance-closed, and contract-versioned.
+
 ## Next increment
 
-1. Continue the Direct Memory Lane from the accepted `direct1000_shadow_v3` checkpoint at source position `1000`, using the unchanged frozen snapshot, `source_actor_only + retain`, `50` user-event / `60K` user-character bounds, Gemma4:26b, Ollama `np4 × 64K`, bounded concurrency, and the single-writer advisory lock.
-2. Execute Direct full migration in independently accepted bounded source prefixes. Every gate must preserve receipt/provider idempotency, Canonical non-duplication, provenance closure, and fail-closed checkpoint semantics; no recall-reducing prefilter is authorized.
-3. Defer the remaining Full-source Evidence backfill until Direct Canonical migration is closed, unless an explicit operational need requires supporting evidence sooner. Evidence remains recomputable from the frozen source/raw archive and does not gain Canonical authority under the current policy.
-4. Keep the original Direct1000 v1 destination as forensic evidence only. All continuation work must use the clean shadow-v3 destination or an explicitly reviewed successor.
-5. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
-6. Keep migration completion, Digital-Life-Stack activation, hosted CI/merge, production scheduling, credentials, retention, and rollback as separate operational gates.
+1. Continue Direct Phase-2 from the accepted source position `1300` successor checkpoint using the unchanged frozen snapshot, Source Evidence contract v2, policy-bound migration identity, `source_actor_only + retain`, `50` user-event / `60K` user-character bounds, Gemma4:26b, Ollama `np4 × 64K`, bounded concurrency, and the single-writer advisory lock.
+2. Before every larger prefix, run a read-only sizing pass. Continue in independently accepted bounded gates and require receipt/provider replay, Canonical non-duplication, provenance closure, and fail-closed checkpoints.
+3. Do not authorize deterministic, embedding, Qwen-classifier, or Hindsight dry-run auto-skips: every tested shortcut missed known Canonical-positive sources. They may only prioritize work, never remove Experiences from Canonical-capable processing.
+4. Keep the Full-source Evidence lane deferred after the closed Evidence1000 gate unless an explicit operational need requires supporting evidence sooner. The frozen source/raw archive preserves the ability to backfill it later.
+5. Treat Phase-1 transition rows as forensic audit history; do not physically delete them merely to make counters prettier. Canonical truth is governed by heads/revisions, not by erasing execution history.
+6. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
+7. Keep historical migration completion, Digital-Life-Stack activation, hosted CI/merge, production scheduling, credentials, retention, and rollback as separate operational gates.
