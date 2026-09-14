@@ -132,6 +132,45 @@ test("normalized experience rejects non-canonical source identity whitespace", (
   }
 });
 
+test("normalized experience rejects malformed provenance source fingerprints", () => {
+  const experienceId = experienceIdFor(source);
+  const value: NormalizedExperience = {
+    sourceSystem: source.sourceSystem,
+    sourceType: source.sourceType,
+    sourceId: source.sourceId,
+    experienceId,
+    startedAt: { certainty: "unknown" },
+    endedAt: { certainty: "unknown" },
+    actors: [],
+    events: [],
+    content: [],
+    metadata: {},
+    provenance: {
+      source,
+      sourceFingerprint: sha256SourceFingerprint("x"),
+      adapterName: "test",
+      adapterVersion: "1",
+      discoveredAt: "2026-09-12T00:00:00.000Z",
+      readAt: "2026-09-12T00:00:00.000Z",
+      normalizedAt: "2026-09-12T00:00:00.000Z",
+    },
+  };
+  const malformed = [
+    { algorithm: "sha256", value: "x" },
+    { algorithm: "md5", value: "a".repeat(64) },
+  ] as unknown as Array<NormalizedExperience["provenance"]["sourceFingerprint"]>;
+
+  for (const sourceFingerprint of malformed) {
+    assert.throws(
+      () => assertNormalizedExperience({
+        ...value,
+        provenance: { ...value.provenance, sourceFingerprint },
+      }),
+      /source fingerprint/,
+    );
+  }
+});
+
 test("normalized experience rejects exact time without a value", () => {
   const experienceId = experienceIdFor(source);
   const value: NormalizedExperience = {

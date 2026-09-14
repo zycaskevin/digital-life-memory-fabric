@@ -30,6 +30,18 @@ export function assertNormalizedExperience(value: NormalizedExperience): void {
     throw new Error("provenance source identity must match normalized source identity");
   }
 
+  const sourceFingerprint = value.provenance.sourceFingerprint as unknown;
+  if (
+    sourceFingerprint === null
+    || typeof sourceFingerprint !== "object"
+    || Array.isArray(sourceFingerprint)
+    || (sourceFingerprint as { algorithm?: unknown }).algorithm !== "sha256"
+    || typeof (sourceFingerprint as { value?: unknown }).value !== "string"
+    || !/^[0-9a-f]{64}$/.test((sourceFingerprint as { value: string }).value)
+  ) {
+    throw new Error("provenance source fingerprint must be a lowercase sha256 digest");
+  }
+
   for (const timestamp of [value.startedAt, value.endedAt]) {
     if (timestamp.certainty === "exact" && timestamp.value === undefined) {
       throw new Error("exact timestamp requires a value");

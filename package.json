@@ -5,7 +5,7 @@
   "description": "Provider-neutral canonical memory and synchronization layer for one Digital Life.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
