@@ -642,3 +642,20 @@ The accepted cumulative successor state is:
 An independent successor replay was seeded again from the frozen Phase-1@1200 predecessor and replayed the full Contract-v2 prefix `1201-2000` (`800` source positions). Replay completed in approximately `4.4s`, deterministically rediscovered `800 processed / 156 ingested / 644 skipped`, and preserved receipts `813 -> 813`, candidates `148 -> 148`, heads `144 -> 144`, revisions `147 -> 147`, and Hindsight operations `312 -> 312` with `retry_total=0`.
 
 This closes the Direct2000 gate. Contract-v2 continuation is now proven across `800` source positions without receipt growth, provider replay, Canonical duplication, provenance drift, or source-checkpoint regression.
+
+## Direct Phase-2 gate: source positions 2001-2300 — 2026-09-15
+
+The next Contract-v2 gate covered `300` source positions. Read-only sizing predicted `64` eligible / `236` skipped, and durable execution matched exactly. The successor state advanced to `2300 processed / 837 ingested / 1463 skipped`.
+
+Acceptance through source position `2300` is:
+
+- Contract-v2 contains `220` receipts over `220` distinct source Experiences;
+- cumulative physical destination: `877` receipts, `155` candidate rows, `151` Canonical heads, and `154` revisions;
+- Contract-v2 provider output contains `3,229` provider units and exactly `3,229` curation decisions;
+- Contract-v2 references `34` candidate IDs / `34` Canonical Memory IDs, with `34/34` candidate provenance and `34/34` Canonical revision provenance back to `NormalizedExperience`;
+- receipt outcomes: `26 complete/committed`, `188 complete/no_memory_worthy_content`, and `6 awaiting_review/pending_review`;
+- the Phase-2 Hindsight bank contains `440/440` completed operation records = `220` retain children + `220` batch parents, with `retry_total=0`.
+
+The accepted replay state that had already replayed Contract-v2 through source position `2000` was resumed for positions `2001-2300`. Replay rediscovered `300 processed / 64 ingested / 236 skipped` while preserving receipts `877 -> 877`, candidates `155 -> 155`, heads `151 -> 151`, revisions `154 -> 154`, and Hindsight operations `440 -> 440` with `retry_total=0`.
+
+This closes the Direct2300 gate.
