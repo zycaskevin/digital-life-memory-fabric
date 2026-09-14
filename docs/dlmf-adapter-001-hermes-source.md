@@ -710,3 +710,20 @@ Acceptance through source position `3200` is:
 The accepted replay state was resumed from source position `3000` and replayed positions `3001-3200`. It rediscovered `200 processed / 108 ingested / 92 skipped` while preserving receipts `1450 -> 1450`, candidates `169 -> 169`, heads `165 -> 165`, revisions `168 -> 168`, and Hindsight operations `1586 -> 1586`.
 
 This closes the Direct3200 gate.
+
+## Direct Phase-2 gate: source positions 3201-3500 — 2026-09-15
+
+This `300`-source Contract-v2 gate was intentionally isolated before the heavier post-3500 region. Read-only sizing predicted `268` eligible / `32` skipped, and durable execution matched exactly, advancing the successor state to `3500 processed / 1678 ingested / 1822 skipped`.
+
+Acceptance through source position `3500` is:
+
+- Contract-v2 contains `1,061` receipts over `1,061` distinct source Experiences;
+- receipt outcomes: `58 complete/committed`, `988 complete/no_memory_worthy_content`, and `15 awaiting_review/pending_review`;
+- `5,579` provider units received exactly `5,579` curation decisions;
+- Contract-v2 references `70` candidate IDs / `70` Canonical Memory IDs, with `70/70` candidate provenance and `70/70` Canonical revision provenance back to `NormalizedExperience`;
+- cumulative physical destination: `1,718` receipts, `191` candidate rows, `187` Canonical heads, and `190` revisions;
+- the Phase-2 Hindsight bank contains `2,122/2,122` completed operation records = `1,061` retain children + `1,061` batch parents, with `retry_total=0`.
+
+The accepted replay state was resumed from source position `3200` and replayed positions `3201-3500`. It rediscovered `300 processed / 268 ingested / 32 skipped` while preserving receipts `1718 -> 1718`, candidates `191 -> 191`, heads `187 -> 187`, revisions `190 -> 190`, and Hindsight operations `2122 -> 2122` with `retry_total=0`.
+
+This closes the Direct3500 gate. Contract-v2 is now proven through `2,300` successor source positions (`1201-3500`) with source checkpoint continuity, single-writer ownership, provider idempotency, Canonical non-duplication, provenance closure, and deterministic replay.
