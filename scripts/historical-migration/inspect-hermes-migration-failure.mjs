@@ -49,16 +49,6 @@ function hash(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex").slice(0, 16);
 }
 
-function sanitizeDiagnostic(value) {
-  if (typeof value !== "string" || value.length === 0) return "none";
-  return value
-    .replace(/https?:\/\/[^\s"']+/gu, "<url>")
-    .replace(/\b(?:exp|dist|cand|mem)_[A-Za-z0-9_-]+\b/gu, "<id>")
-    .replace(/\b[0-9a-f]{32,}\b/giu, "<hash>")
-    .replace(/[\r\n\t]+/gu, " ")
-    .slice(0, 240);
-}
-
 const pool = new Pool({
   connectionString: databaseUrl,
   options: `-c search_path=${schema}`,
@@ -105,7 +95,6 @@ try {
         `errorFingerprint=${latest.message ? hash(latest.message) : "none"}`,
       ].join(" "),
     );
-    if (latest.message) console.log(`diagnostic[${index}]=${sanitizeDiagnostic(latest.message)}`);
   }
   console.log("HERMES_MIGRATION_FAILURE_INSPECT=PASS");
 } finally {

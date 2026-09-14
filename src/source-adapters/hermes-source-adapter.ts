@@ -81,7 +81,9 @@ function timestamp(value: number | string | undefined, evidence: string): Experi
   if (Number.isFinite(numeric)) millis = numeric > 10_000_000_000 ? numeric : numeric * 1000;
   else millis = Date.parse(String(value));
   if (!Number.isFinite(millis)) return { certainty: "unknown" };
-  return { value: new Date(millis).toISOString(), certainty: "exact", evidence };
+  const instant = new Date(millis);
+  if (!Number.isFinite(instant.getTime())) return { certainty: "unknown" };
+  return { value: instant.toISOString(), certainty: "exact", evidence };
 }
 
 function stableJson(value: unknown): string {

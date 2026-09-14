@@ -146,6 +146,35 @@ test("ADAPTER-001 read/fingerprint/normalize preserves messages, tool evidence, 
   assert.deepEqual(normalized.actors.map((x) => x.kind).sort(), ["assistant", "tool", "user"]);
 });
 
+test("ADAPTER-001 treats out-of-range numeric timestamps as unknown", async () => {
+  const badSession = {
+    ...structuredClone(session),
+    startedAt: 1e20,
+    endedAt: 1e20,
+    lastActivityAt: 1e20,
+  };
+  const badPayload = {
+    session: badSession,
+    messages: [
+      {
+        ...structuredClone(payload.messages[0]!),
+        timestamp: 1e20,
+      },
+    ],
+  };
+  const reader: HermesStateReader = {
+    inspect: async () => ({ tables: ["sessions", "messages"] }),
+    listSessions: async () => [badSession],
+    readSession: async () => badPayload,
+  };
+  const adapter = new HermesSourceAdapter({ reader, clock: fixedClock });
+  const unit = (await adapter.discover({ limit: 1 })).units[0]!;
+  assert.equal(unit.startedAt.certainty, "unknown");
+  assert.equal(unit.endedAt.certainty, "unknown");
+  const normalized = await adapter.normalize(await adapter.read(unit));
+  assert.equal(normalized.events[0]?.occurredAt.certainty, "unknown");
+});
+
 test("ADAPTER-001 rejects foreign units and unbounded discovery", async () => {
   const adapter = new HermesSourceAdapter({ reader: new FakeHermesReader(), clock: fixedClock });
   await assert.rejects(() => adapter.discover({ limit: 1001 }), /between 1 and 1000/);
