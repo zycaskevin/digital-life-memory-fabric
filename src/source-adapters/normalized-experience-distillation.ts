@@ -54,7 +54,7 @@ function actorFor(
   }
 }
 
-function eventEvidence(event: ExperienceEvent): string | undefined {
+export function experienceEventEvidence(event: ExperienceEvent): string | undefined {
   if (typeof event.content === "string" && event.content.trim().length > 0) {
     return event.content.trim();
   }
@@ -80,7 +80,7 @@ function textEventSegments(experience: NormalizedExperience): Array<{
   const actors = new Map(experience.actors.map((actor) => [actor.actorId, actor]));
   const results: Array<{ segment: DistillationSourceSegment; rendered: string }> = [];
   for (const event of experience.events) {
-    const content = eventEvidence(event);
+    const content = experienceEventEvidence(event);
     if (content === undefined) continue;
     const actor = actorFor(event.actorId, actors);
     const observedAt = exactTimestamp(event.occurredAt);
@@ -97,14 +97,20 @@ function textEventSegments(experience: NormalizedExperience): Array<{
   return results;
 }
 
-function fallbackContentSegments(experience: NormalizedExperience): Array<{
+function fallbackContentSegments(
+  experience: NormalizedExperience,
+  excludedText: ReadonlySet<string> = new Set(),
+): Array<{
   segment: DistillationSourceSegment;
   rendered: string;
 }> {
   const results: Array<{ segment: DistillationSourceSegment; rendered: string }> = [];
+  const seen = new Set(excludedText);
   for (const [index, item] of experience.content.entries()) {
     if (typeof item.text !== "string" || item.text.trim().length === 0) continue;
     const content = item.text.trim();
+    if (seen.has(content)) continue;
+    seen.add(content);
     results.push({
       segment: {
         segmentId: `normalized-content:${index}`,
@@ -147,8 +153,13 @@ export function normalizedExperienceToTranscriptInput(
   assertNormalizedExperience(experience);
   requireContext(context);
 
-  let projected = textEventSegments(experience);
-  if (projected.length === 0) projected = fallbackContentSegments(experience);
+  const projected = textEventSegments(experience);
+  projected.push(
+    ...fallbackContentSegments(
+      experience,
+      new Set(projected.map((item) => item.segment.content)),
+    ),
+  );
   if (projected.length === 0) {
     throw new Error("NormalizedExperience contains no textual evidence eligible for distillation");
   }

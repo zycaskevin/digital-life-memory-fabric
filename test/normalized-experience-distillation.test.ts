@@ -52,7 +52,10 @@ const experience: NormalizedExperience = {
       content: "Delivery receipt recorded.",
     },
   ],
-  content: [{ mediaType: "text/plain", text: "duplicate fallback must not be appended" }],
+  content: [
+    { mediaType: "text/plain", text: "I prefer concise answers." },
+    { mediaType: "text/plain", text: "Attachment text is independent evidence." },
+  ],
   metadata: { sourceNativeField: "must remain opaque to DLMF Core" },
   provenance: {
     source,
@@ -94,7 +97,8 @@ test("normalized experience bridges source-neutrally into role-aware transcript 
   assert.match(input.content, /User \[2026-09-12T12:00:01.000Z\]:\nI prefer concise answers\./);
   assert.match(input.content, /Assistant:\nAcknowledged\./);
   assert.match(input.content, /Service:\nDelivery receipt recorded\./);
-  assert.doesNotMatch(input.content, /duplicate fallback/);
+  assert.match(input.content, /Unknown:\nAttachment text is independent evidence\./);
+  assert.equal(input.content.match(/I prefer concise answers\./g)?.length, 1);
   assert.deepEqual(input.sourceSegments, [
     {
       segmentId: "evt-source-1",
@@ -111,6 +115,11 @@ test("normalized experience bridges source-neutrally into role-aware transcript 
       segmentId: "evt-source-3",
       actor: "unknown",
       content: "Delivery receipt recorded.",
+    },
+    {
+      segmentId: "normalized-content:1",
+      actor: "unknown",
+      content: "Attachment text is independent evidence.",
     },
   ]);
   assert.equal(input.createdAt, "2026-09-12T12:00:00.000Z");
@@ -141,7 +150,7 @@ test("normalized experience preserves content-free structured tool-call evidence
     ],
   };
   const input = normalizedExperienceToTranscriptInput(toolOnly, context);
-  const segment = input.sourceSegments?.at(-1);
+  const segment = input.sourceSegments?.find((item) => item.segmentId === "evt-tool-only");
   assert.equal(segment?.segmentId, "evt-tool-only");
   assert.equal(segment?.actor, "assistant");
   assert.match(segment?.content ?? "", /Tool name: inspect/);

@@ -141,6 +141,28 @@ function receipt(experienceId: string, status: DistillationReceipt["status"] = "
   } as Pick<DistillationReceipt, "receiptId" | "status">;
 }
 
+test("textual migration eligibility includes renderable tool metadata", () => {
+  const discovered = unit("tool-only");
+  const experience = normalized(
+    { sourceId: "tool-only", fingerprint: "tool-only" },
+    discovered,
+  );
+  experience.events = [{
+    eventId: "tool-only:1",
+    eventType: "tool_or_message",
+    occurredAt: { certainty: "unknown" },
+    metadata: {
+      toolName: "bounded-inspect",
+      toolCalls: '[{"name":"bounded-inspect"}]',
+    },
+  }];
+
+  assert.deepEqual(
+    new TextualExperienceMigrationEligibilityPolicy().assess(experience),
+    { eligible: true, reasonCode: "textual_evidence" },
+  );
+});
+
 test("historical migration checkpoints each unit and resumes after a normalized-content skip", async () => {
   const adapter = new FakeAdapter();
   const stateStore = new MemoryStateStore();

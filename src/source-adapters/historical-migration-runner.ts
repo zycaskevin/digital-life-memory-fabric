@@ -13,6 +13,7 @@ import type {
   SourceMigrationState,
   SourceMigrationStateStore,
 } from "./source-migration.js";
+import { experienceEventEvidence } from "./normalized-experience-distillation.js";
 import { assertNormalizedExperience } from "./validation.js";
 
 export class TextualExperienceMigrationEligibilityPolicy
@@ -22,7 +23,7 @@ export class TextualExperienceMigrationEligibilityPolicy
 
   assess(experience: NormalizedExperience) {
     const eventText = experience.events.some(
-      (event) => typeof event.content === "string" && event.content.trim().length > 0,
+      (event) => experienceEventEvidence(event) !== undefined,
     );
     const contentText = experience.content.some(
       (content) => typeof content.text === "string" && content.text.trim().length > 0,
