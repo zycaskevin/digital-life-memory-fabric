@@ -127,6 +127,9 @@ const distillationProjectionMode = firstText(process.env.DLMF_MIGRATION_DISTILLA
 if (!new Set(["full_plus_source_actor", "source_actor_only", "full_source_only"]).has(distillationProjectionMode)) {
   throw new Error("DLMF_MIGRATION_DISTILLATION_PROJECTION_MODE must be full_plus_source_actor, source_actor_only, or full_source_only");
 }
+const sourceEvidenceContractVersion = firstText(
+  process.env.DLMF_MIGRATION_SOURCE_EVIDENCE_CONTRACT_VERSION,
+) || "normalized-experience-source-evidence-v2";
 const chunkMaxCharsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_CHARS);
 const chunkMaxSegmentsRaw = firstText(process.env.DLMF_MIGRATION_FULL_SOURCE_CHUNK_MAX_SEGMENTS);
 if (chunkMaxSegmentsRaw !== undefined && chunkMaxCharsRaw === undefined) {
@@ -146,6 +149,32 @@ if (distillationProjectionMode === "full_source_only" && fullSourceChunking === 
 }
 const hindsightBankPrefix = process.env.DLMF_MIGRATION_HINDSIGHT_BANK_PREFIX
   || "dlmf-hermes-migration-pilot-bounded-v2";
+
+const distillationPolicyVersion = distillationProjectionMode === "source_actor_only"
+  ? `hermes-migration-pilot-distill-v7-source-actor-only:${sourceEvidenceContractVersion}`
+  : distillationProjectionMode === "full_source_only"
+    ? `hermes-migration-pilot-distill-v5-full-source-evidence-only:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`
+    : fullSourceChunking === undefined
+      ? "hermes-migration-pilot-distill-v2"
+      : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`;
+const canonicalizationPolicyVersion = "hermes-migration-pilot-canonical-v2";
+const admissionPolicyIdentity = semanticReviewDecisionManifest === undefined
+  ? "hermes-migration-pilot-admission-v2"
+  : `hermes-migration-pilot-admission-v3-reviewed-invalid:${semanticReviewDecisionManifest.fingerprint.slice(0, 16)}`;
+const retentionPolicyVersion = "hermes-migration-pilot-retention-v2";
+const curationProviderVersion = "hermes-migration-pilot-curation-v2";
+const migrationContract = {
+  contractVersion: "hermes-historical-migration-v2",
+  sourceEvidenceContractVersion,
+  policyVersions: {
+    distillation: distillationPolicyVersion,
+    canonicalization: canonicalizationPolicyVersion,
+    admission: admissionPolicyIdentity,
+    retention: retentionPolicyVersion,
+    curation: curationProviderVersion,
+    semantic: "dlmf-semantic-v6",
+  },
+};
 
 const stateBaseRoot = resolve(
   process.env.DLMF_MIGRATION_STATE_ROOT
@@ -721,6 +750,7 @@ function migrationId(connection, eligibilityVersion) {
     hindsight: endpointShape(connection.baseUrl),
     hindsightBankPrefix,
     eligibilityVersion,
+    migrationContract,
     ...(distillationProjectionMode === "full_plus_source_actor"
       ? {}
       : { distillationProjectionMode }),
@@ -914,6 +944,8 @@ console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (target
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
 console.log(`requireCanonicalCommit=${requireCanonicalCommit}`);
 console.log(`distillationProjectionMode=${distillationProjectionMode}`);
+console.log(`sourceEvidenceContractVersion=${sourceEvidenceContractVersion}`);
+console.log(`migrationPolicyFingerprint=${sha256(JSON.stringify(migrationContract)).slice(0, 16)}`);
 console.log(
   `semanticReviewRemediation=${
     semanticReviewDecisionManifest === undefined
@@ -992,20 +1024,14 @@ try {
     agentId,
     runtimeId,
     policies: {
-      distillationPolicyVersion: distillationProjectionMode === "source_actor_only"
-        ? "hermes-migration-pilot-distill-v3-source-actor-only"
-        : distillationProjectionMode === "full_source_only"
-          ? `hermes-migration-pilot-distill-v5-full-source-evidence-only:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`
-          : fullSourceChunking === undefined
-            ? "hermes-migration-pilot-distill-v2"
-            : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`,
-      canonicalizationPolicyVersion: "hermes-migration-pilot-canonical-v2",
+      distillationPolicyVersion,
+      canonicalizationPolicyVersion,
       admissionPolicyVersion,
-      retentionPolicyVersion: "hermes-migration-pilot-retention-v2",
+      retentionPolicyVersion,
     },
     distillationProvider,
     retrievalPort,
-    curationProviderVersion: "hermes-migration-pilot-curation-v2",
+    curationProviderVersion,
     ...(semanticReviewRemediation === undefined
       ? {}
       : { semanticReviewRemediation }),
