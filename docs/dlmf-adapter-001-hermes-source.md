@@ -499,10 +499,50 @@ The observed first-to-last operation spans include deliberate pauses between sta
 
 This closes the Evidence1000 gate. Full-source mixed evidence is source-resumable, receipt-idempotent, chunk-operation replay-safe, provenance-closed, curation-complete, and unable to create unintended Canonical Memory at 1,000-source scale.
 
+## Full snapshot sizing and throughput optimization closure — 2026-09-14
+
+A read-only scan over the complete frozen Hermes snapshot (`11,269` sessions) was used to size the remaining historical migration without invoking Hindsight or writing memory state. Under the already accepted conservative policies:
+
+- Direct Memory Lane: `9,029` eligible / `2,240` skipped. Skip reasons are `1,823` empty sessions, `315` direct-user event-limit, `100` direct-user character-limit, `1` hidden session, and `1` session with no user text.
+- Full-source Evidence Lane: `4,506` eligible / `6,763` skipped. Skip reasons are `1,823` empty sessions, `3,012` event-limit, `1,927` character-limit, and `1` hidden session.
+- Evidence `24K/12` chunking would create `6,185` deterministic provider chunks (`3,432` one-chunk Experiences, `640` two-chunk, `294` three-chunk, `115` four-chunk, `20` five-chunk, `4` six-chunk, and `1` seven-chunk Experience).
+- Direct user-only text grows from `1,856,163` characters in the first 1,000 sources to `37,038,289` characters over the full snapshot. Evidence rendered chunk text grows from `3,662,495` to `61,108,850` characters. Full migration therefore cannot be costed accurately from session count alone.
+
+Several proposed throughput shortcuts were tested against real accepted Canonical outcomes and rejected because memory recall has priority over speed:
+
+1. Deterministic durable-language gate: selected roughly `27%` of Direct1000 sources but recovered only `52/89` known accepted-source labels (`58.4%` recall).
+2. Qwen3 Embedding 8B semantic gate: five-fold holdout recall was `87/89` (`97.75%`) while still selecting roughly `77%` of Direct sources. Union with the deterministic gate still missed the same two known Canonical-positive sources; it is therefore not allowed to auto-skip Hindsight.
+3. Qwen3.8:27b generation backend: a real 45-character Direct source remained in provider processing after `292s`, while Gemma4:26b completed the same retained source in `11.8s`. The isolated Qwen sidecar was stopped and is not a migration candidate.
+4. Gemma `np8 × 32K`: the large direct-source canary completed a retain in `598.2s`, within the existing `np4 × 64K` stochastic range (`463.6s` and `610.4s`). On an eight-source controlled throughput benchmark, `np4` completed in `115.4s` and `np8` in `104.3s`, only a `9.6%` wall-time improvement. This does not justify halving per-slot context or changing the production-like baseline.
+5. Hindsight direct-source `dry_run`: the large canary reduced extraction+governance time to `211.7s`, but a matched 20-source A/B recovered only `7/10` retain-positive sources (`70%` recall), despite `0/10` false positives. It is therefore not a safe replacement for retained Direct extraction.
+
+The accepted historical-migration provider baseline remains **Gemma4:26b, Ollama `np4`, 64K context per slot, Hindsight retained `source_actor_only` extraction**. Performance optimization must not lower known Canonical recall.
+
+Operationally, full Direct migration has priority over full Evidence backfill. Under the current accepted policy, Full-source Evidence is synthesized/mixed and cannot create Canonical Memory; its first 1,000-source gate already proves the lane's replay/provenance boundary. Deferring the remaining Evidence backfill does not delete source experience or change Canonical authority: the frozen source and raw/archive contracts remain available for later evidence materialization.
+
+## Clean Direct1000 Shadow v3 acceptance — 2026-09-14
+
+The original `dlmf_pilot_hermes_adapter_direct1000_v1` destination passed its historical 1,000-source acceptance gate, but later replay/identity experiments contaminated that physical pilot schema after acceptance. Its current forensic state is `756` receipts over `576` distinct sources, `191` candidate rows (`180` accepted), `117` heads, and `180` revisions. It must not be used as the continuation destination for full historical migration.
+
+A clean replacement destination, `dlmf_pilot_hermes_adapter_direct1000_shadow_v3`, was rebuilt from the same frozen snapshot, Direct namespace, policy versions, and existing Hindsight Direct bank. The provider bank already contained all first-1,000 deterministic retains, so the rebuild performed no new model extraction (`1,152/1,152` existing Hindsight operations remained completed, `retry_total=0`). The clean source result is:
+
+- `1000 processed / 576 ingested / 424 skipped`;
+- exactly `576` receipts over `576` distinct source Experiences;
+- receipt outcomes: `87 complete/committed`, `487 complete/no_memory_worthy_content`, and `2 awaiting_review/pending_review`, with zero receipt errors;
+- `119` candidate rows: `118 ACCEPTED`, `1 CONFLICT`, and `0 PENDING` candidate rows;
+- accepted candidate classes: `117` user preferences and `1` user habit;
+- `117` Canonical heads and `118` revisions;
+- provenance closure: `119/119` candidate rows and `118/118` revisions retain source-experience provenance.
+
+An independent empty-state replay of the clean shadow completed in approximately `8.1s` and preserved receipts `576 -> 576`, candidates `119 -> 119`, heads `117 -> 117`, revisions `118 -> 118`, and Hindsight operations `1,152 -> 1,152`. No new provider work or Canonical state was created.
+
+`direct1000_shadow_v3` is therefore the accepted continuation baseline for source positions `1001+`. The contaminated v1 schema remains forensic evidence only; it is not deleted and is not Canonical authority.
+
 ## Next increment
 
-1. Keep the proven Direct/Evidence bounds and lane separation unchanged unless a separately reviewed policy change authorizes wider eligibility or a sample beyond 1,000.
-2. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
-3. Validate the Digital-Life-Stack consumer against current live refs, isolated disposable PostgreSQL, schema replay, startup/readiness, DLMF-unavailable behavior, authority-bypass rejection, and rollback.
-4. Run hosted CI and independent review against the exact release candidate before PR/merge; keep local green, merge, deployment, and production activation as separate claims.
-5. Do not use this pilot evidence to activate production migration automatically. Production scheduling, credentials, retention policy, and rollback execution remain separate operational gates.
+1. Continue the Direct Memory Lane from the accepted `direct1000_shadow_v3` checkpoint at source position `1000`, using the unchanged frozen snapshot, `source_actor_only + retain`, `50` user-event / `60K` user-character bounds, Gemma4:26b, Ollama `np4 × 64K`, bounded concurrency, and the single-writer advisory lock.
+2. Execute Direct full migration in independently accepted bounded source prefixes. Every gate must preserve receipt/provider idempotency, Canonical non-duplication, provenance closure, and fail-closed checkpoint semantics; no recall-reducing prefilter is authorized.
+3. Defer the remaining Full-source Evidence backfill until Direct Canonical migration is closed, unless an explicit operational need requires supporting evidence sooner. Evidence remains recomputable from the frozen source/raw archive and does not gain Canonical authority under the current policy.
+4. Keep the original Direct1000 v1 destination as forensic evidence only. All continuation work must use the clean shadow-v3 destination or an explicitly reviewed successor.
+5. Design mutable-session change detection before claiming full live incremental synchronization; `incrementalSync` remains `partial`, and deletion detection remains `unknown`.
+6. Keep migration completion, Digital-Life-Stack activation, hosted CI/merge, production scheduling, credentials, retention, and rollback as separate operational gates.
