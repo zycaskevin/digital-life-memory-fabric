@@ -1,3 +1,5 @@
+// DEPRECATED / DEVELOPMENT-ONLY: historical PM-001F compatibility tooling.
+// Relationship OS is not a current DLMF consumer. Do not use for new migration/deployment work.
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool } from "pg";

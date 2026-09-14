@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "profile": "solo-fast",
+  "local_green": {
+    "command_timeout_seconds": 900,
+    "environment": {},
+    "commands": [
+      ["bash", "scripts/run-ci-local-green.sh"],
+      ["git", "diff", "--check", "origin/main...HEAD"]
+    ]
+  },
+  "hosted": {
+    "max_runs_per_work_package": 1,
+    "max_reruns_per_revision": 1,
+    "expected_minutes": 5,
+    "full_matrix": "manual_or_ready_for_review",
+    "post_merge_verification": "manual_only"
+  },
+  "workflow_controls": {
+    "require_concurrency": true,
+    "cancel_in_progress": true,
+    "require_job_timeouts": true,
+    "require_read_only_permissions": true,
+    "skip_draft_pull_requests": true,
+    "exempt_workflows": [],
+    "write_permission_exceptions": {}
+  }
+}

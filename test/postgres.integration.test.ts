@@ -74,6 +74,10 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0007_insight_promotion_governance.sql",
       "utf8",
     );
+    const providerExtractionArtifactMigration = await readFile(
+      "migrations/0008_provider_extraction_artifacts.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
@@ -81,6 +85,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     await pool.query(semanticGovernanceMigration);
     await pool.query(semanticReviewMigration);
     await pool.query(promotionGovernanceMigration);
+    await pool.query(providerExtractionArtifactMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
@@ -150,6 +155,25 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     assert.equal(loadedReceipt?.admissionComplete, true);
     assert.equal(loadedReceipt?.curationCoverageComplete, true);
     assert.equal(loadedReceipt?.semanticPolicyVersion, "test-semantic-v1");
+    await assert.rejects(
+      pool.query(
+        `UPDATE memory_distillation_receipts
+            SET provider_extraction_ref = 'file:///provider-artifact.json',
+                provider_extraction_checksum = NULL
+          WHERE receipt_id = 'dist_pg_receipt_1'`,
+      ),
+      /memory_distillation_receipts_provider_extraction_pair_check/,
+    );
+    await assert.rejects(
+      pool.query(
+        `UPDATE memory_distillation_receipts
+            SET provider_extraction_ref = NULL,
+                provider_extraction_checksum = $1
+          WHERE receipt_id = 'dist_pg_receipt_1'`,
+        [`sha256:${"a".repeat(64)}`],
+      ),
+      /memory_distillation_receipts_provider_extraction_pair_check/,
+    );
 
     const curationRecords = new PostgresMemoryCurationRecordStore(pool);
     await curationRecords.put({

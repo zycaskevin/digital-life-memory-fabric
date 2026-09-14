@@ -49,7 +49,11 @@ export interface RelationshipOsDlmfRuntime {
 }
 
 /**
- * Production composition for the Relationship OS ingress.
+ * @deprecated Historical/development-only PM-001F compatibility composition.
+ * Relationship OS is not a current DLMF consumer; retain only for audit and
+ * regression compatibility. Do not use for new deployment or migration work.
+ *
+ * Historical production composition for the Relationship OS ingress.
  *
  * The caller supplies deployment resources and credentials. This factory only
  * composes existing DLMF authorities: PostgreSQL canonical state, raw archive,

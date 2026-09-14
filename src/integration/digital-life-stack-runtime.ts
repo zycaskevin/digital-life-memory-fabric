@@ -5,14 +5,18 @@ import { DeterministicCanonicalAdmissionPolicy } from "../curation/deterministic
 import { PostgresMemoryCurationRecordStore } from "../curation/postgres-memory-curation-record-store.js";
 import { EvidenceBoundMemoryGovernance } from "../distillation/governance.js";
 import type { MemoryDistillationProvider } from "../distillation/memory-distillation-provider.js";
+import type { ProviderExtractionArtifactStore } from "../distillation/provider-extraction-artifact-store.js";
 import { PostgresDistillationReceiptStore } from "../distillation/postgres-distillation-receipt-store.js";
 import { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
-import type { MemoryRevision } from "../domain/types.js";
+import type { MemoryRevision, MemoryScope } from "../domain/types.js";
 import type { MemoryRetrievalPort } from "../retrieval/types.js";
+import { NormalizedExperienceDistillationBridge } from "../source-adapters/normalized-experience-distillation.js";
+import type { NormalizedExperienceIngestor } from "../source-adapters/source-migration.js";
 import { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import { PostgresSemanticReviewStore } from "../review/postgres-semantic-review-store.js";
 import { SemanticReviewQueueService } from "../review/semantic-review-service.js";
+import type { SemanticReviewRemediationPolicy } from "../review/semantic-review-remediation.js";
 import { PostgresCanonicalMemoryStore } from "../store/postgres-canonical-memory-store.js";
 import { CanonicalVerifier } from "../verification/canonical-verifier.js";
 import {
@@ -29,8 +33,10 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   runtimeId?: string;
   policies: DigitalLifeStackDlmfPolicies;
   distillationProvider: MemoryDistillationProvider;
+  providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
   retrievalPort: CanonicalProjectionPort;
   curationProviderVersion?: string;
+  semanticReviewRemediation?: SemanticReviewRemediationPolicy;
 }
 
 export interface CanonicalProjectionPort extends MemoryRetrievalPort {
@@ -39,6 +45,8 @@ export interface CanonicalProjectionPort extends MemoryRetrievalPort {
 
 export interface DigitalLifeStackDlmfRuntime {
   ingress: DigitalLifeStackDlmfIngress;
+  /** DLMF-internal adapter/migration ingress. This is not exposed by the HTTP contract. */
+  createNormalizedExperienceIngestor(scope: MemoryScope): NormalizedExperienceIngestor;
   close(): Promise<void>;
 }
 
@@ -63,6 +71,9 @@ export function createDigitalLifeStackDlmfRuntime(
     receiptStore: new PostgresDistillationReceiptStore(options.pool),
     archive: new FilesystemRawExperienceArchiveProvider(options.archiveRoot),
     provider: options.distillationProvider,
+    ...(options.providerExtractionArtifactStore === undefined
+      ? {}
+      : { providerExtractionArtifactStore: options.providerExtractionArtifactStore }),
     curationProvider: new ConservativeMemoryCurationProvider(
       options.curationProviderVersion ?? "dls-conservative-v1",
     ),
@@ -74,6 +85,9 @@ export function createDigitalLifeStackDlmfRuntime(
       options.policies.canonicalizationPolicyVersion,
     ),
     semanticReviewQueue,
+    ...(options.semanticReviewRemediation === undefined
+      ? {}
+      : { semanticReviewRemediation: options.semanticReviewRemediation }),
   });
   const projectingDistillation = new CanonicalProjectionDistillationPort(
     distillation,
@@ -85,10 +99,11 @@ export function createDigitalLifeStackDlmfRuntime(
     options.retrievalPort,
   );
   const readiness = new PostgresDlmfReadiness(options.pool);
+  const trustedRuntimeId = options.runtimeId ?? "digital-life-stack";
   const ingress = new DigitalLifeStackDlmfIngress({
     bearerToken: options.bearerToken,
     agentId: options.agentId,
-    runtimeId: options.runtimeId ?? "digital-life-stack",
+    runtimeId: trustedRuntimeId,
     policies: options.policies,
     distillation: projectingDistillation,
     retrieval,
@@ -96,6 +111,18 @@ export function createDigitalLifeStackDlmfRuntime(
   });
   return {
     ingress,
+    createNormalizedExperienceIngestor(scope) {
+      return new NormalizedExperienceDistillationBridge({
+        distillation: projectingDistillation,
+        scope,
+        origin: {
+          lifeDid: scope.lifeDid,
+          agentId: options.agentId,
+          runtimeId: trustedRuntimeId,
+        },
+        policies: options.policies,
+      });
+    },
     close: () => canonicalStore.close(),
   };
 }
@@ -144,9 +171,10 @@ class PostgresDlmfReadiness implements DigitalLifeStackDlmfReadiness {
     const migrations = (await this.pool.query(
       "SELECT migration_name FROM dlfm_schema_migrations ORDER BY migration_name",
     )).rows.map((value) => String(value.migration_name));
-    const ready = migrations.length === 2
+    const ready = migrations.length === 3
       && migrations[0] === "0006_semantic_review_queue.sql"
-      && migrations[1] === "0007_insight_promotion_governance.sql";
-    return { ready, schemaState: ready ? "current-0007" : "stale-or-future" };
+      && migrations[1] === "0007_insight_promotion_governance.sql"
+      && migrations[2] === "0008_provider_extraction_artifacts.sql";
+    return { ready, schemaState: ready ? "current-0008" : "stale-or-future" };
   }
 }

@@ -36,6 +36,10 @@ export interface RelationshipOsDlmfIngressOptions {
 }
 
 /**
+ * @deprecated Historical/development-only PM-001F compatibility surface.
+ * Relationship OS is not a current DLMF consumer. Do not use this class to
+ * define new production integration, migration, deployment, or restart work.
+ *
  * Narrow authenticated ingress for Relationship OS private turns.
  *
  * The HTTP boundary owns authentication, bounded parsing and caller scope

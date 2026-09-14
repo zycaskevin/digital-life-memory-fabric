@@ -687,15 +687,19 @@ async function probeHindsightTenantAuth(baseUrl, authCandidates) {
 }
 
 async function resolveHindsightConnection({ probeAuth = true } = {}) {
-  const config = await readHermesHindsightConfig();
-  const hermesEnv = readSimpleEnvFile(join(hermesHome, ".env"));
-  const mode = String(config.mode || "cloud");
+  const explicitUrl = nonEmptyString(process.env.DLMF_PILOT_HINDSIGHT_URL)
+    ? process.env.DLMF_PILOT_HINDSIGHT_URL
+    : undefined;
+  // Explicit provider configuration is authoritative. Do not couple a provider URL
+  // override back to Hermes private configuration; Source and Intelligence are
+  // independent DLMF boundaries.
+  const config = explicitUrl === undefined ? await readHermesHindsightConfig() : {};
+  const hermesEnv = explicitUrl === undefined ? readSimpleEnvFile(join(hermesHome, ".env")) : {};
+  const mode = explicitUrl === undefined ? String(config.mode || "cloud") : "explicit";
   const defaultUrl = mode === "local" || mode === "local_embedded" || mode === "local_external"
     ? "http://localhost:8888"
     : "https://api.hindsight.vectorize.io";
-  const baseUrl = String(
-    process.env.DLMF_PILOT_HINDSIGHT_URL || config.api_url || config.apiUrl || defaultUrl,
-  ).replace(/\/$/, "");
+  const baseUrl = String(explicitUrl || config.api_url || config.apiUrl || defaultUrl).replace(/\/$/, "");
 
   const authCandidates = dedupeAuthCandidates([
     ...(nonEmptyString(process.env.DLMF_PILOT_HINDSIGHT_API_KEY)
@@ -709,7 +713,6 @@ async function resolveHindsightConnection({ probeAuth = true } = {}) {
       : []),
     { source: "no_auth", apiKey: undefined },
   ]);
-
   const selected = probeAuth
     ? await probeHindsightTenantAuth(baseUrl, authCandidates)
     : {
@@ -991,6 +994,7 @@ async function createPilotPostgres(databaseUrl) {
     "migrations/0005_semantic_governance.sql",
     "migrations/0006_semantic_review_queue.sql",
     "migrations/0007_insight_promotion_governance.sql",
+    "migrations/0008_provider_extraction_artifacts.sql",
   ]) {
     await pool.query(await readFile(resolve(migration), "utf8"));
   }

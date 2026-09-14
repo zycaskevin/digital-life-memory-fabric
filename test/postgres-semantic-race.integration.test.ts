@@ -124,6 +124,7 @@ maybeTest("DLMF-SG-002 PostgreSQL multiprocess semantic-key loser retries as mer
       "migrations/0005_semantic_governance.sql",
       "migrations/0006_semantic_review_queue.sql",
       "migrations/0007_insight_promotion_governance.sql",
+      "migrations/0008_provider_extraction_artifacts.sql",
     ]) {
       await migrationPool.query(await readFile(migration, "utf8"));
     }

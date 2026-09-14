@@ -20,6 +20,7 @@ import {
   ReflectiveMemoryService,
   TranscriptDistillationService,
   ValidationError,
+  type DistillationRequest,
   type HindsightClientPort,
   type HindsightRecallResponse,
   type HindsightListMemoriesResponse,
@@ -32,6 +33,7 @@ import {
   type ReflectResult,
   type TranscriptDistillationInput,
 } from "../src/index.js";
+import { sha256 } from "../src/domain/utils.js";
 
 const scope: MemoryScope = {
   tenantId: "tenant_md",
@@ -396,10 +398,14 @@ test("MD-010 remediation: role-aware user projection preserves direct assertions
     assert.doesNotMatch(client.retainCalls[1]?.content ?? "", /configure that for you/);
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_source_actor, "user");
     assert.equal(client.retainCalls[1]?.options?.metadata?.dlmf_epistemic_status, undefined);
+    assert.equal(client.retainCalls[0]?.options?.async, true);
+    assert.match(client.retainCalls[0]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
     assert.equal(client.retainCalls[1]?.options?.async, true);
     assert.match(client.retainCalls[1]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
-    assert.equal(client.operationStatusCalls.length, 1);
-    assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[1]?.options?.operationId);
+    assert.notEqual(client.retainCalls[0]?.options?.operationId, client.retainCalls[1]?.options?.operationId);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[0]?.options?.operationId);
+    assert.equal(client.operationStatusCalls[1]?.operationId, client.retainCalls[1]?.options?.operationId);
     assert.equal(client.listMemoriesCalls.length, 2);
     assert.equal(client.recallCalls.length, 0);
 
@@ -591,13 +597,342 @@ test("SG-003: user projection separates source actor from epistemic status and r
   });
 });
 
+test("MD-010 retry identity: deterministic user projection operation IDs are stable within a bank and isolated across banks", async () => {
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId: "session-bank-scoped-operation-id",
+      content: "User: I prefer dark mode.\nAssistant: Understood.",
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-bank-scoped-operation-id",
+      checksum: "checksum-bank-scoped-operation-id",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+        { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+      ],
+    },
+    distillationPolicyVersion: "distill-bank-scoped-operation-id-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+
+  const clientA = new FakeHindsightClient();
+  const adapterA = new HindsightMemoryAdapter({
+    client: clientA,
+    adapterVersion: "hindsight-adapter-bank-scope-v1",
+    providerVersion: "test-provider",
+    banks: {
+      distillationBankId: () => "bank-a:distillation",
+      projectionBankId: () => "bank-a:projection",
+    },
+  });
+  await adapterA.distill(request);
+  await adapterA.distill(request);
+  const operationIdsA = clientA.retainCalls
+    .filter((call) => call.options?.documentId?.endsWith(":source-actor:user") === true)
+    .map((call) => call.options?.operationId);
+  assert.equal(operationIdsA.length, 2);
+  assert.ok(operationIdsA[0]);
+  assert.equal(operationIdsA[0], operationIdsA[1]);
+
+  const clientB = new FakeHindsightClient();
+  const adapterB = new HindsightMemoryAdapter({
+    client: clientB,
+    adapterVersion: "hindsight-adapter-bank-scope-v1",
+    providerVersion: "test-provider",
+    banks: {
+      distillationBankId: () => "bank-b:distillation",
+      projectionBankId: () => "bank-b:projection",
+    },
+  });
+  await adapterB.distill(request);
+  const operationIdB = clientB.retainCalls.find(
+    (call) => call.options?.documentId?.endsWith(":source-actor:user") === true,
+  )?.options?.operationId;
+  assert.ok(operationIdB);
+  assert.notEqual(operationIdsA[0], operationIdB);
+});
+
+test("MD-004 source-actor-only lane skips mixed transcript extraction while preserving direct user provenance", async () => {
+  const sourceId = "session-source-actor-only";
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: "User: I prefer dark mode.\nAssistant: Understood.",
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-source-actor-only",
+      checksum: "checksum-source-actor-only",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+        { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+      ],
+    },
+    distillationPolicyVersion: "distill-source-actor-only-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const userDocumentId = `hermes_session:${sourceId}:source-actor:user`;
+  const client = new FakeHindsightClient();
+  client.listMemoriesResponse = {
+    items: [{
+      id: "hs-direct-pref",
+      bank_id: "nancy:distillation",
+      text: "I prefer dark mode.",
+      type: "world",
+      document_id: userDocumentId,
+      metadata: {
+        dlmf_projection_kind: "source_actor",
+        dlmf_source_actor: "user",
+      },
+    }],
+    total: 1,
+    limit: 1000,
+    offset: 0,
+  };
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-source-actor-only-v1",
+    providerVersion: "test-provider",
+    distillationProjectionMode: "source_actor_only",
+    fullSourceChunking: { maxChars: 256, maxSegments: 1 },
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  const result = await adapter.distill(request);
+  assert.equal(client.retainCalls.length, 1);
+  assert.equal(client.retainCalls[0]?.options?.documentId, userDocumentId);
+  assert.equal(client.retainCalls[0]?.content, "I prefer dark mode.");
+  assert.equal(client.listMemoriesCalls.length, 1);
+  assert.equal(client.listMemoriesCalls[0]?.options?.documentId, userDocumentId);
+  assert.equal(result.providerUnits.length, 1);
+  assert.equal(result.providerUnits[0]?.memoryClass, "preference");
+  assert.equal(result.providerUnits[0]?.epistemicStatus, "user_asserted");
+  assert.equal(result.providerUnits[0]?.speakerProvenance, "user");
+});
+
+test("MD-004 chunked full-source evidence is bounded and replay-stable without changing Experience identity", async () => {
+  const sourceId = "session-full-source-chunked";
+  const longAssistantContent = "A".repeat(900);
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: `Assistant: ${longAssistantContent}`,
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-full-source-chunked",
+      checksum: "checksum-full-source-chunked",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        {
+          segmentId: "hermes_message:chunked-1",
+          actor: "assistant",
+          content: longAssistantContent,
+          observedAt: "2026-09-03T02:00:00.000Z",
+        },
+      ],
+    },
+    distillationPolicyVersion: "distill-full-source-chunked-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const client = new FakeHindsightClient();
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-full-source-chunked-v1",
+    providerVersion: "test-provider",
+    fullSourceChunking: { maxChars: 256, maxSegments: 2 },
+    asyncRetainPollIntervalMs: 1,
+    sleep: async () => undefined,
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  const first = await adapter.distill(request);
+  assert.equal(first.providerUnits.length, 0);
+  const firstCalls = structuredClone(client.retainCalls);
+  assert.ok(firstCalls.length > 1);
+  for (const [index, call] of firstCalls.entries()) {
+    assert.ok(call.content.length <= 256, `chunk ${index + 1} exceeded maxChars`);
+    assert.match(call.options?.documentId ?? "", /:full-source:chunk:\d{4}:[0-9a-f]{16}$/);
+    assert.equal(call.options?.async, true);
+    assert.ok(call.options?.operationId);
+    assert.equal(call.options?.metadata?.dlmf_projection_kind, "full_source_chunk");
+    assert.equal(call.options?.metadata?.dlmf_chunk_index, String(index + 1));
+    assert.equal(call.options?.metadata?.dlmf_chunk_count, String(firstCalls.length));
+    assert.match(call.options?.metadata?.dlmf_chunk_fingerprint ?? "", /^[0-9a-f]{64}$/);
+  }
+  assert.equal(client.listMemoriesCalls.length, firstCalls.length);
+
+  await adapter.distill(request);
+  const replayCalls = client.retainCalls.slice(firstCalls.length);
+  assert.equal(replayCalls.length, firstCalls.length);
+  assert.deepEqual(
+    replayCalls.map((call) => call.options?.documentId),
+    firstCalls.map((call) => call.options?.documentId),
+  );
+  assert.deepEqual(
+    replayCalls.map((call) => call.options?.operationId),
+    firstCalls.map((call) => call.options?.operationId),
+  );
+  assert.deepEqual(
+    replayCalls.map((call) => call.content),
+    firstCalls.map((call) => call.content),
+  );
+});
+
+test("MD-004 chunked full-source evidence respects maxSegments across stable source fragments", async () => {
+  const sourceId = "session-full-source-segment-bounded";
+  const segments = ["one", "two", "three"].map((value, index) => ({
+    segmentId: `hermes_message:${index + 1}`,
+    actor: "assistant" as const,
+    content: value.repeat(20),
+  }));
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: segments.map((segment) => segment.content).join("\n"),
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-full-source-segment-bounded",
+      checksum: "checksum-full-source-segment-bounded",
+      sourceSegments: segments,
+    },
+    distillationPolicyVersion: "distill-full-source-segment-bounded-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const client = new FakeHindsightClient();
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-full-source-segment-bounded-v1",
+    fullSourceChunking: { maxChars: 512, maxSegments: 1 },
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  await adapter.distill(request);
+  assert.equal(client.retainCalls.length, 3);
+  assert.deepEqual(
+    client.retainCalls.map((call) => call.options?.metadata?.dlmf_chunk_fragment_count),
+    ["1", "1", "1"],
+  );
+});
+
+test("MD-004 full-source-only lane skips direct user projection and remains mixed evidence", async () => {
+  const sourceId = "session-full-source-only";
+  const request: DistillationRequest = {
+    experience: {
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      content: "User: I prefer dark mode.\nAssistant: Understood.",
+      contentType: "text/plain; profile=hermes-transcript",
+      archiveRef: "archive://session-full-source-only",
+      checksum: "checksum-full-source-only",
+      observedAt: "2026-09-03T02:00:00.000Z",
+      sourceSegments: [
+        { segmentId: "hermes_message:1", actor: "user", content: "I prefer dark mode." },
+        { segmentId: "hermes_message:2", actor: "assistant", content: "Understood." },
+      ],
+    },
+    distillationPolicyVersion: "distill-full-source-only-v1",
+    requestedAt: "2026-09-13T00:00:00.000Z",
+  };
+  const documentId = `hermes_session:${sourceId}`;
+  const client = new FakeHindsightClient();
+  client.listMemoriesResponse = {
+    items: [{
+      id: "hs-mixed-evidence",
+      bank_id: "nancy:distillation",
+      text: "The conversation discusses dark mode.",
+      type: "observation",
+      document_id: documentId,
+      metadata: { dlmf_plane: "distillation" },
+    }],
+    total: 1,
+    limit: 1000,
+    offset: 0,
+  };
+  const adapter = new HindsightMemoryAdapter({
+    client,
+    adapterVersion: "hindsight-full-source-only-v1",
+    providerVersion: "test-provider",
+    distillationProjectionMode: "full_source_only",
+    banks: {
+      distillationBankId: () => "nancy:distillation",
+      projectionBankId: () => "nancy:projection",
+    },
+  });
+
+  const result = await adapter.distill(request);
+  assert.equal(client.retainCalls.length, 1);
+  assert.equal(client.retainCalls[0]?.options?.documentId, documentId);
+  assert.equal(client.retainCalls.some((call) => call.options?.documentId?.endsWith(":source-actor:user")), false);
+  assert.equal(client.listMemoriesCalls.length, 1);
+  assert.equal(client.listMemoriesCalls[0]?.options?.documentId, documentId);
+  assert.equal(result.providerUnits.length, 1);
+  assert.equal(result.providerUnits[0]?.speakerProvenance, "mixed");
+  assert.equal(result.providerUnits[0]?.epistemicStatus, "synthesized");
+});
+
+test("MD-004 async full-source retain fails closed before provider enumeration", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const client = new FakeHindsightClient();
+    client.operationStatuses = ["processing", "failed"];
+    const adapter = new HindsightMemoryAdapter({
+      client,
+      adapterVersion: "hindsight-adapter-full-source-async-v1",
+      providerVersion: "test-provider",
+      asyncRetainPollIntervalMs: 1,
+      sleep: async () => undefined,
+      banks: {
+        distillationBankId: () => "nancy:distillation",
+        projectionBankId: () => "nancy:canonical-projection",
+      },
+    });
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider: adapter,
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+
+    const receipt = await service.run(transcriptInput("session-full-source-async-failure", "distill-full-source-async-v1"));
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.errors.at(-1)?.stage, "provider");
+    assert.match(receipt.errors.at(-1)?.message ?? "", /full-source async retain failed/);
+    assert.equal(client.retainCalls.length, 1);
+    assert.equal(client.retainCalls[0]?.options?.async, true);
+    assert.ok(client.retainCalls[0]?.options?.operationId);
+    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(receipt.providerUnitCount, 0);
+    assert.deepEqual(receipt.candidateIds, []);
+    assert.deepEqual(receipt.canonicalMemoryIds, []);
+    assert.equal((await store.listChangesAfter(scope, 0)).length, 0);
+  });
+});
+
 test("MD-010 remediation: role projection async retain fails closed until provider operation completes", async () => {
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();
     const receipts = new InMemoryDistillationReceiptStore();
     const client = new FakeHindsightClient();
     const sourceId = "session-role-aware-async-failure";
-    client.operationStatuses = ["processing", "failed"];
+    client.operationStatuses = ["completed", "processing", "failed"];
     const adapter = new HindsightMemoryAdapter({
       client,
       adapterVersion: "hindsight-adapter-role-aware-async-v3",
@@ -627,7 +962,7 @@ test("MD-010 remediation: role projection async retain fails closed until provid
     assert.equal(receipt.status, "failed");
     assert.equal(receipt.errors.at(-1)?.stage, "provider");
     assert.match(receipt.errors.at(-1)?.message ?? "", /user-source-projection async retain failed/);
-    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls.length, 3);
     assert.equal(receipt.providerUnitCount, 0);
     assert.deepEqual(receipt.candidateIds, []);
     assert.deepEqual(receipt.canonicalMemoryIds, []);
@@ -776,6 +1111,38 @@ test("MD-005 policy version is bound to the actual canonical governance policy",
       /does not match governance policy/,
     );
     assert.equal(client.retainCalls.length, 0);
+  });
+});
+
+test("MD-005 legacy receipt identity is unchanged when semantic review remediation is disabled", async () => {
+  await withArchive(async (archive) => {
+    const client = new FakeHindsightClient();
+    const service = new TranscriptDistillationService({
+      canonicalStore: new InMemoryCanonicalMemoryStore(),
+      receiptStore: new InMemoryDistillationReceiptStore(),
+      archive,
+      provider: createAdapter(client),
+      ...curationComponents(),
+      governance: new EvidenceBoundMemoryGovernance("canonicalize-v1"),
+    });
+    const sourceId = "session-legacy-idempotency";
+    const receipt = await service.run(transcriptInput(sourceId));
+    const legacyKey = sha256({
+      scope,
+      sourceExperienceId: `hermes_session:${sourceId}`,
+      distillationPolicyVersion: "distill-v1",
+      canonicalizationPolicyVersion: "canonicalize-v1",
+      provider: "hindsight",
+      curationProvider: "dlmf-conservative-curation",
+      curationProviderVersion: "test-curation-v1",
+      admissionPolicyVersion: "admission-v1",
+      semanticPolicyVersion: "dlmf-semantic-v6",
+      sourceSegmentFingerprint: null,
+    });
+    assert.equal(
+      receipt.receiptId,
+      `dist_${legacyKey.slice("sha256:".length)}`,
+    );
   });
 });
 
@@ -1624,5 +1991,106 @@ test("MD-009 forgetting guard: tombstoned canonical semantics cannot be resurrec
     );
     assert.equal((await store.listChangesAfter(scope, 0)).length, 2, "no resurrection commit may be emitted");
     assert.equal((await store.getHead(memoryId))?.status, "tombstoned");
+  });
+});
+
+test("MD-010 retry reuses a canonicalized curation binding instead of creating a second candidate", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const receipts = new InMemoryDistillationReceiptStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    let providerRun = 0;
+    const provider: MemoryDistillationProvider = {
+      name: "retry-provider",
+      adapterVersion: "retry-adapter-v1",
+      providerVersion: "1",
+      async distill(request) {
+        providerRun += 1;
+        const unit = (providerUnitRef: string, text: string, memoryKind: string) => ({
+          providerUnitRef,
+          candidateType: "preference_candidate" as const,
+          memoryClass: "preference" as const,
+          memoryKind,
+          proposedContent: { text },
+          evidenceRefs: [{ sourceType: "retry-provider", sourceRef: providerUnitRef }],
+          epistemicStatus: "user_asserted" as const,
+          speakerProvenance: "user" as const,
+          producer: {
+            kind: "provider" as const,
+            id: "retry-provider",
+            providerName: "retry-provider",
+            adapterVersion: "retry-adapter-v1",
+            providerVersion: "1",
+          },
+          sourceExperienceRefs: [{
+            sourceType: request.experience.sourceType,
+            sourceId: request.experience.sourceId,
+            archiveRef: request.experience.archiveRef,
+            checksum: request.experience.checksum,
+          }],
+        });
+        return {
+          providerName: "retry-provider",
+          providerRunId: `retry_run_${providerRun}`,
+          adapterVersion: "retry-adapter-v1",
+          providerVersion: "1",
+          providerUnits: [
+            unit("retry-dark", "I prefer dark mode.", "theme"),
+            unit("retry-concise", "I prefer concise answers.", "answer_style"),
+          ],
+          warnings: [],
+        };
+      },
+      async recall() { return []; },
+      async reflect() { throw new Error("not used"); },
+    };
+    const baseGovernance = new EvidenceBoundMemoryGovernance("canonicalize-retry-v1");
+    let failConciseOnce = true;
+    const governance = {
+      policyVersion: baseGovernance.policyVersion,
+      async evaluate(candidate: Parameters<EvidenceBoundMemoryGovernance["evaluate"]>[0]) {
+        if (failConciseOnce && candidate.proposedContent.text.includes("concise")) {
+          failConciseOnce = false;
+          throw new Error("simulated post-first-commit failure");
+        }
+        return baseGovernance.evaluate(candidate);
+      },
+    };
+    const service = new TranscriptDistillationService({
+      canonicalStore: store,
+      receiptStore: receipts,
+      archive,
+      provider,
+      curationProvider: new ConservativeMemoryCurationProvider("retry-curation-v1"),
+      curationStore,
+      admissionPolicy: new DeterministicCanonicalAdmissionPolicy("retry-admission-v1"),
+      governance,
+    });
+    const input = transcriptInput("session-canonicalized-retry-binding", "retry-distill-v1");
+    input.canonicalizationPolicyVersion = "canonicalize-retry-v1";
+    input.admissionPolicyVersion = "retry-admission-v1";
+
+    const first = await service.run(input);
+    assert.equal(first.status, "failed");
+    assert.equal(first.canonicalMemoryIds.length, 1);
+    const firstRecords = await curationStore.listByReceipt(first.receiptId);
+    const darkBefore = firstRecords.find((record) => record.providerUnitRef === "retry-dark");
+    assert.ok(darkBefore?.candidateId);
+    assert.ok(darkBefore?.canonicalMemoryId);
+    const originalCandidateId = darkBefore.candidateId;
+    const originalCanonicalId = darkBefore.canonicalMemoryId;
+
+    const retry = await service.run(input);
+    assert.equal(retry.status, "complete");
+    assert.equal(retry.canonicalMemoryIds.length, 2);
+    const retryRecords = await curationStore.listByReceipt(retry.receiptId);
+    const darkAfter = retryRecords.find((record) => record.providerUnitRef === "retry-dark");
+    assert.equal(darkAfter?.candidateId, originalCandidateId);
+    assert.equal(darkAfter?.canonicalMemoryId, originalCanonicalId);
+    assert.equal(darkAfter?.outcome, "canonical_candidate");
+    assert.equal(providerRun, 2);
+    assert.equal(await curationStore.verifyCanonicalAdmission(
+      (await store.getCandidate(originalCandidateId))!,
+    ), true);
   });
 });

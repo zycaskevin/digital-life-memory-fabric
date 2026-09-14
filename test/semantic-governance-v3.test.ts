@@ -10,6 +10,7 @@ import {
   DeterministicCanonicalAdmissionPolicy,
   DeterministicSemanticMemoryGovernance,
   EvidenceBoundMemoryGovernance,
+  ExactInvalidCandidateSemanticReviewRemediation,
   FilesystemRawExperienceArchiveProvider,
   InMemoryCanonicalMemoryStore,
   InMemoryDistillationReceiptStore,
@@ -20,6 +21,8 @@ import {
   TranscriptDistillationService,
   ValidationError,
   reviewedSemanticConceptIds,
+  semanticReviewCandidateFingerprint,
+  semanticReviewProviderUnitFingerprint,
   type DistillationRequest,
   type DistillationResult,
   type MemoryDistillationProvider,
@@ -29,6 +32,7 @@ import {
   type RecallRequest,
   type ReflectRequest,
   type ReflectResult,
+  type SemanticReviewRemediationPolicy,
   type SpeakerProvenance,
   type TranscriptDistillationInput,
 } from "../src/index.js";
@@ -120,6 +124,7 @@ function service(
   curationStore: InMemoryMemoryCurationRecordStore,
   units: ProviderMemoryUnit[],
   semanticReviewQueue?: SemanticReviewQueueService,
+  semanticReviewRemediation?: SemanticReviewRemediationPolicy,
 ): TranscriptDistillationService {
   return new TranscriptDistillationService({
     canonicalStore: store,
@@ -131,6 +136,7 @@ function service(
     admissionPolicy: new DeterministicCanonicalAdmissionPolicy("pilot-admission-v1"),
     governance: new EvidenceBoundMemoryGovernance("pilot-canonicalize-v1"),
     ...(semanticReviewQueue === undefined ? {} : { semanticReviewQueue }),
+    ...(semanticReviewRemediation === undefined ? {} : { semanticReviewRemediation }),
   });
 }
 
@@ -374,6 +380,140 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
     assert.equal(reviewCases[0]?.curationRecordId, negative?.recordId);
     assert.equal(reviewCases[0]?.trigger, "pending_review");
     assert.equal(reviewCases[0]?.canonicalWritePerformed, false);
+  });
+});
+
+test("DLMF-SG-007 applies an exact invalid-candidate decision only to a new remediation receipt", async () => {
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+
+    const seedReceipt = await service(archive, store, curationStore, [
+      unit(
+        "nancy_inline_seed",
+        "User prefers inline Nancy commentary within the story.",
+      ),
+    ]).run(input("semantic-review-remediation-seed"));
+    const existingMemoryId = seedReceipt.canonicalMemoryIds[0];
+    assert.ok(existingMemoryId);
+
+    const sourceId = "semantic-review-remediation-target";
+    const invalidUnit = unit(
+      "nancy_inline_invalid",
+      "User prefers no inline Nancy commentary within the story.",
+    );
+    const rematerializedInvalidUnit: ProviderMemoryUnit = {
+      ...invalidUnit,
+      evidenceRefs: [{
+        sourceType: "hindsight",
+        sourceRef: "different-provider-run-evidence",
+      }],
+    };
+    assert.notEqual(
+      semanticReviewProviderUnitFingerprint(invalidUnit),
+      semanticReviewProviderUnitFingerprint(rematerializedInvalidUnit),
+    );
+    const classified = new DeterministicSemanticMemoryGovernance().classify(invalidUnit);
+    const binding = {
+      reviewCaseId: "semrev_exact_invalid_candidate",
+      reviewDecisionId: "semdec_owner_invalid_candidate",
+      sourceCurationRecordId: "cur_exact_invalid_candidate",
+      reviewCaseVersion: 2,
+      disposition: "invalid_candidate" as const,
+      scope,
+      sourceType: "hermes_session",
+      sourceId,
+      providerUnitRef: invalidUnit.providerUnitRef,
+      reviewedCandidateFingerprint: semanticReviewCandidateFingerprint({
+        scope,
+        sourceType: "hermes_session",
+        sourceId,
+        providerUnitRef: invalidUnit.providerUnitRef,
+        providerUnitText: invalidUnit.proposedContent.text,
+        semanticKey: classified.semanticKey,
+        semanticPolicyVersion: "dlmf-semantic-v6",
+        memoryType: classified.memoryType,
+        speakerProvenance: classified.speakerProvenance,
+        semanticRelation: "contradicts",
+        targetMemoryId: existingMemoryId,
+      }),
+      semanticKey: classified.semanticKey,
+      semanticPolicyVersion: "dlmf-semantic-v6",
+      memoryType: classified.memoryType,
+      speakerProvenance: classified.speakerProvenance,
+      semanticRelation: "contradicts" as const,
+      targetMemoryId: existingMemoryId,
+    };
+    const remediation = new ExactInvalidCandidateSemanticReviewRemediation([binding]);
+    assert.equal(
+      await remediation.resolveInvalidCandidate({
+        ...binding,
+        reviewedCandidateFingerprint: "sha256:mismatched",
+      }),
+      undefined,
+    );
+
+    const remediationService = service(
+      archive,
+      store,
+      curationStore,
+      [
+        unit("remediation_canonical", "User prefers dark mode."),
+        rematerializedInvalidUnit,
+      ],
+      undefined,
+      remediation,
+    );
+    const receipt = await remediationService.run(input(sourceId));
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.canonicalizationOutcome, "committed");
+    assert.equal(receipt.admissionComplete, true);
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
+    assert.equal(receipt.curationOutcomes.rejected, 1);
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(receipt.candidateIds.length, 1);
+    assert.equal(receipt.canonicalMemoryIds.length, 1);
+    assert.notEqual(receipt.canonicalMemoryIds[0], existingMemoryId);
+
+    const invalidRecord = (await curationStore.listByReceipt(receipt.receiptId))
+      .find((record) => record.providerUnitRef === invalidUnit.providerUnitRef);
+    assert.equal(invalidRecord?.outcome, "rejected");
+    assert.equal(invalidRecord?.memoryWorthy, false);
+    assert.equal(invalidRecord?.semanticRelation, "contradicts");
+    assert.equal(invalidRecord?.targetMemoryId, existingMemoryId);
+    assert.equal(
+      invalidRecord?.reasonCodes.includes("review_remediation:invalid_candidate"),
+      true,
+    );
+    assert.equal(
+      invalidRecord?.reasonCodes.includes(
+        "review_remediation:binding:semdec_owner_invalid_candidate",
+      ),
+      true,
+    );
+
+    const changesBeforeReplay = await store.listChangesAfter(scope, 0);
+    const replay = await remediationService.run(input(sourceId));
+    assert.equal(replay.receiptId, receipt.receiptId);
+    assert.deepEqual(replay.candidateIds, receipt.candidateIds);
+    assert.deepEqual(replay.canonicalMemoryIds, receipt.canonicalMemoryIds);
+    assert.deepEqual(await store.listChangesAfter(scope, 0), changesBeforeReplay);
+
+    const mismatchedRemediation = new ExactInvalidCandidateSemanticReviewRemediation([{
+      ...binding,
+      reviewedCandidateFingerprint: "sha256:mismatched",
+    }]);
+    const failClosedReceipt = await service(
+      archive,
+      store,
+      curationStore,
+      [invalidUnit],
+      undefined,
+      mismatchedRemediation,
+    ).run(input(sourceId));
+    assert.equal(failClosedReceipt.status, "awaiting_review");
+    assert.equal(failClosedReceipt.curationOutcomes.pending_review, 1);
+    assert.equal(failClosedReceipt.curationOutcomes.rejected, 0);
   });
 });
 

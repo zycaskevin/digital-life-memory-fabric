@@ -30,9 +30,20 @@ import {
   DeterministicSemanticMemoryGovernance,
   type SemanticMemoryGovernance,
 } from "../semantic/deterministic-semantic-governance.js";
+import {
+  semanticReviewCandidateFingerprint,
+  semanticReviewProviderUnitFingerprint,
+  type SemanticReviewRemediationPolicy,
+} from "../review/semantic-review-remediation.js";
 import type { DistillationReceiptStore } from "./distillation-receipt-store.js";
 import type { MemoryCandidateGovernance } from "./governance.js";
 import type { MemoryDistillationProvider } from "./memory-distillation-provider.js";
+import {
+  assertProviderExtractionArtifact,
+  providerExtractionArtifactIdentity,
+  type ProviderExtractionArtifact,
+  type ProviderExtractionArtifactStore,
+} from "./provider-extraction-artifact-store.js";
 import type {
   DistillationReceipt,
   DistillationReceiptId,
@@ -90,6 +101,8 @@ export interface TranscriptDistillationServiceOptions {
   canonicalAuthority?: CanonicalMemoryAuthority;
   semanticGovernance?: SemanticMemoryGovernance;
   semanticReviewQueue?: PendingSemanticReviewQueue;
+  semanticReviewRemediation?: SemanticReviewRemediationPolicy;
+  providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
   clock?: Clock;
   receiptIds?: DistillationReceiptIdFactory;
 }
@@ -220,23 +233,6 @@ function curationRecordId(receiptId: string, providerUnitRef: string): MemoryCur
   return `cur_${sha256({ receiptId, providerUnitRef }).slice("sha256:".length)}`;
 }
 
-function providerUnitFingerprint(unit: ProviderMemoryUnit): string {
-  return sha256({
-    providerUnitRef: unit.providerUnitRef,
-    candidateType: unit.candidateType,
-    memoryClass: unit.memoryClass,
-    memoryKind: unit.memoryKind,
-    memoryType: unit.memoryType ?? null,
-    speakerProvenance: unit.speakerProvenance ?? null,
-    semanticKey: unit.semanticKey ?? null,
-    proposedContent: unit.proposedContent,
-    providerDeclaredEpistemicStatus: unit.providerDeclaredEpistemicStatus ?? null,
-    attributedEpistemicStatus: unit.epistemicStatus,
-    epistemicAttributionBasis: unit.epistemicAttributionBasis ?? null,
-    evidenceRefs: unit.evidenceRefs,
-  });
-}
-
 export class TranscriptDistillationService {
   private readonly candidateService: MemoryCandidateService;
   private readonly canonicalAuthority: CanonicalMemoryAuthority;
@@ -285,6 +281,12 @@ export class TranscriptDistillationService {
       curationProviderVersion: this.options.curationProvider.version ?? null,
       admissionPolicyVersion: input.admissionPolicyVersion,
       semanticPolicyVersion: this.semanticGovernance.policyVersion,
+      ...(this.options.semanticReviewRemediation === undefined
+        ? {}
+        : {
+            semanticReviewRemediationIdentity:
+              this.options.semanticReviewRemediation.identity,
+          }),
       sourceSegmentFingerprint:
         input.sourceSegments === undefined ? null : sha256(input.sourceSegments),
     });
@@ -396,24 +398,74 @@ export class TranscriptDistillationService {
       await this.options.receiptStore.put(receipt);
 
       stage = "provider";
-      const result = await this.options.provider.distill({
-        experience: {
-          scope: archived.scope,
-          sourceType: archived.sourceType,
-          sourceId: archived.sourceId,
-          content: archived.content,
-          contentType: archived.contentType,
-          archiveRef: archived.archiveRef,
-          checksum: archived.checksum,
-          ...(archived.createdAt === undefined ? {} : { createdAt: archived.createdAt }),
-          ...(archived.observedAt === undefined ? {} : { observedAt: archived.observedAt }),
-          ...(archived.metadata === undefined ? {} : { metadata: archived.metadata }),
-          ...(input.sourceSegments === undefined ? {} : { sourceSegments: input.sourceSegments }),
-        },
+      const providerExperience = {
+        scope: archived.scope,
+        sourceType: archived.sourceType,
+        sourceId: archived.sourceId,
+        content: archived.content,
+        contentType: archived.contentType,
+        archiveRef: archived.archiveRef,
+        checksum: archived.checksum,
+        ...(archived.createdAt === undefined ? {} : { createdAt: archived.createdAt }),
+        ...(archived.observedAt === undefined ? {} : { observedAt: archived.observedAt }),
+        ...(archived.metadata === undefined ? {} : { metadata: archived.metadata }),
+        ...(input.sourceSegments === undefined ? {} : { sourceSegments: input.sourceSegments }),
+      };
+      const providerRequest = {
+        experience: providerExperience,
         distillationPolicyVersion: input.distillationPolicyVersion,
         requestedAt: this.clock.now(),
-      });
-      validateProviderResult(result, this.options.provider);
+      };
+      let result: DistillationResult;
+      const artifactStore = this.options.providerExtractionArtifactStore;
+      if (artifactStore === undefined) {
+        if (receipt.providerExtractionRef !== undefined || receipt.providerExtractionChecksum !== undefined) {
+          throw new ValidationError(
+            "receipt requires configured provider extraction artifact store",
+          );
+        }
+        result = await this.options.provider.distill(providerRequest);
+        validateProviderResult(result, this.options.provider);
+      } else {
+        const artifactIdentity = providerExtractionArtifactIdentity(
+          providerExperience,
+          this.options.provider,
+          input.distillationPolicyVersion,
+        );
+        let artifact: ProviderExtractionArtifact | undefined;
+        if (receipt.providerExtractionRef !== undefined || receipt.providerExtractionChecksum !== undefined) {
+          if (receipt.providerExtractionRef === undefined || receipt.providerExtractionChecksum === undefined) {
+            throw new ValidationError("receipt provider extraction artifact reference is incomplete");
+          }
+          artifact = await artifactStore.resolve(receipt.providerExtractionRef);
+          assertProviderExtractionArtifact(artifact, artifactIdentity);
+          if (artifact.checksum !== receipt.providerExtractionChecksum) {
+            throw new ValidationError("receipt provider extraction artifact checksum mismatch");
+          }
+        } else {
+          artifact = await artifactStore.get(artifactIdentity);
+        }
+        if (artifact === undefined) {
+          const extracted = await this.options.provider.distill(providerRequest);
+          validateProviderResult(extracted, this.options.provider);
+          artifact = await artifactStore.put({
+            identity: artifactIdentity,
+            result: extracted,
+            createdAt: this.clock.now(),
+          });
+        }
+        assertProviderExtractionArtifact(artifact, artifactIdentity);
+        result = structuredClone(artifact.result);
+        validateProviderResult(result, this.options.provider);
+        receipt = {
+          ...receipt,
+          providerExtractionRef: artifact.artifactRef,
+          providerExtractionChecksum: artifact.checksum,
+          providerRunId: result.providerRunId,
+          updatedAt: this.clock.now(),
+        };
+        await this.options.receiptStore.put(receipt);
+      }
       result.providerUnits = result.providerUnits.map((unit) => {
         const classified = this.semanticGovernance.classify(unit);
         return {
@@ -469,6 +521,10 @@ export class TranscriptDistillationService {
       stage = "admission";
       const outcomeCounts = emptyCurationOutcomeCounts();
       let exactDuplicates = 0;
+      const priorCurationRecords = new Map(
+        (await this.options.curationStore.listByReceipt(receipt.receiptId))
+          .map((record) => [record.recordId, record] as const),
+      );
 
       for (const unit of result.providerUnits) {
         const recordId = curationRecordId(receipt.receiptId, unit.providerUnitRef);
@@ -499,6 +555,58 @@ export class TranscriptDistillationService {
         }
         let candidateId: MemoryCurationRecord["candidateId"] | undefined;
         let canonicalMemoryId: MemoryId | undefined;
+
+        const priorCanonicalRecord = priorCurationRecords.get(recordId);
+        if (priorCanonicalRecord?.canonicalMemoryId !== undefined) {
+          const currentUnitFingerprint =
+            semanticReviewProviderUnitFingerprint(unit);
+          if (
+            priorCanonicalRecord.candidateId === undefined
+            || (priorCanonicalRecord.outcome !== "canonical_candidate"
+              && priorCanonicalRecord.outcome !== "canonical_merge")
+            || priorCanonicalRecord.providerUnitRef !== unit.providerUnitRef
+            || priorCanonicalRecord.providerUnitFingerprint !== currentUnitFingerprint
+            || priorCanonicalRecord.memoryType !== memoryType
+            || priorCanonicalRecord.speakerProvenance !== speakerProvenance
+            || priorCanonicalRecord.semanticKey !== semanticKey
+            || priorCanonicalRecord.admissionPolicyVersion !== input.admissionPolicyVersion
+            || priorCanonicalRecord.curationProvider !== this.options.curationProvider.name
+            || (priorCanonicalRecord.curationProviderVersion ?? undefined)
+              !== (this.options.curationProvider.version ?? undefined)
+          ) {
+            throw new ValidationError(
+              `canonicalized curation record drift detected for ${unit.providerUnitRef}`,
+            );
+          }
+          const priorCandidate = await this.options.canonicalStore.getCandidate(
+            priorCanonicalRecord.candidateId,
+          );
+          if (
+            priorCandidate === undefined
+            || priorCandidate.status !== "ACCEPTED"
+            || !(await this.options.curationStore.verifyCanonicalAdmission(priorCandidate))
+          ) {
+            throw new ValidationError(
+              `canonicalized curation record has invalid candidate binding for ${unit.providerUnitRef}`,
+            );
+          }
+          const priorHead = await this.options.canonicalStore.getHead(
+            priorCanonicalRecord.canonicalMemoryId,
+          );
+          if (priorHead === undefined || !sameScope(priorHead.scope, input.scope)) {
+            throw new ValidationError(
+              `canonicalized curation record has invalid canonical memory binding for ${unit.providerUnitRef}`,
+            );
+          }
+          candidateId = priorCanonicalRecord.candidateId;
+          canonicalMemoryId = priorCanonicalRecord.canonicalMemoryId;
+          if (!receipt.candidateIds.includes(candidateId)) receipt.candidateIds.push(candidateId);
+          if (!receipt.canonicalMemoryIds.includes(canonicalMemoryId)) {
+            receipt.canonicalMemoryIds.push(canonicalMemoryId);
+          }
+          outcomeCounts[priorCanonicalRecord.outcome] += 1;
+          continue;
+        }
 
         if (decision.semanticDisposition === "duplicate") {
           const targetMemoryId = decision.targetMemoryId;
@@ -685,7 +793,7 @@ export class TranscriptDistillationService {
                 providerRunId: result.providerRunId,
                 providerUnitRef: unit.providerUnitRef,
                 providerUnitText: unit.proposedContent.text,
-                providerUnitFingerprint: providerUnitFingerprint(unit),
+                providerUnitFingerprint: semanticReviewProviderUnitFingerprint(unit),
                 providerEpistemicStatus:
                   unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
                 attributedEpistemicBasis:
@@ -823,6 +931,63 @@ export class TranscriptDistillationService {
           }
         }
 
+        if (
+          decision.outcome === "pending_review" &&
+          semanticRelation !== undefined &&
+          this.options.semanticReviewRemediation !== undefined
+        ) {
+          const remediation =
+            await this.options.semanticReviewRemediation.resolveInvalidCandidate({
+              scope: input.scope,
+              sourceType: input.sourceType,
+              sourceId: input.sourceId,
+              providerUnitRef: unit.providerUnitRef,
+              reviewedCandidateFingerprint: semanticReviewCandidateFingerprint({
+                scope: input.scope,
+                sourceType: input.sourceType,
+                sourceId: input.sourceId,
+                providerUnitRef: unit.providerUnitRef,
+                providerUnitText: unit.proposedContent.text,
+                semanticKey,
+                semanticPolicyVersion: this.semanticGovernance.policyVersion,
+                memoryType,
+                speakerProvenance,
+                semanticRelation,
+                ...(decision.targetMemoryId === undefined
+                  ? {}
+                  : { targetMemoryId: decision.targetMemoryId }),
+              }),
+              semanticKey,
+              semanticPolicyVersion: this.semanticGovernance.policyVersion,
+              memoryType,
+              speakerProvenance,
+              semanticRelation,
+              ...(decision.targetMemoryId === undefined
+                ? {}
+                : { targetMemoryId: decision.targetMemoryId }),
+            });
+          if (remediation !== undefined) {
+            if (candidateId !== undefined || canonicalMemoryId !== undefined) {
+              throw new ValidationError(
+                `review remediation cannot replace an admitted candidate for ${unit.providerUnitRef}`,
+              );
+            }
+            decision = {
+              ...decision,
+              outcome: "rejected",
+              memoryWorthy: false,
+              reasonCodes: [
+                ...decision.reasonCodes,
+                "review_remediation:invalid_candidate",
+                `review_remediation:binding:${remediation.reviewDecisionId}`,
+              ],
+            };
+            receipt.warnings.push(
+              `review_remediation_applied:${remediation.reviewDecisionId}`,
+            );
+          }
+        }
+
         outcomeCounts[decision.outcome] += 1;
         const record: MemoryCurationRecord = {
           recordId,
@@ -834,7 +999,7 @@ export class TranscriptDistillationService {
           providerRunId: result.providerRunId,
           providerUnitRef: unit.providerUnitRef,
           providerUnitText: unit.proposedContent.text,
-          providerUnitFingerprint: providerUnitFingerprint(unit),
+          providerUnitFingerprint: semanticReviewProviderUnitFingerprint(unit),
           providerEpistemicStatus:
             unit.providerDeclaredEpistemicStatus ?? unit.epistemicStatus,
           attributedEpistemicBasis:
