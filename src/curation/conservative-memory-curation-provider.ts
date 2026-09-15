@@ -1,3 +1,5 @@
+import { isOneShotOperationalDirective } from "../semantic/memory-language-signals.js";
+import type { ProviderMemoryUnit } from "../distillation/types.js";
 import type {
   MemoryCurationProposal,
   MemoryCurationProvider,
@@ -7,7 +9,14 @@ import type {
   ProviderMemoryUnitOutcome,
 } from "./types.js";
 
-function classifyDurability(candidateType: string): MemoryDurability {
+function classifyDurability(unit: ProviderMemoryUnit): MemoryDurability {
+  if (
+    unit.memoryType === "transient_state" ||
+    isOneShotOperationalDirective(unit.proposedContent.text)
+  ) {
+    return "transient";
+  }
+  const candidateType = unit.candidateType;
   switch (candidateType) {
     case "preference_candidate":
     case "relationship_candidate":
@@ -57,11 +66,12 @@ function classifyOutcome(
 export class ConservativeMemoryCurationProvider implements MemoryCurationProvider {
   readonly name = "dlmf-conservative-curation";
 
-  constructor(readonly version = "md010-conservative-v2") {}
+  constructor(readonly version = "md010-conservative-v3-lifetime-governance") {}
 
   async curate(request: MemoryCurationRequest): Promise<MemoryCurationResult> {
     const proposals: MemoryCurationProposal[] = request.units.map((unit) => {
-      const durability = classifyDurability(unit.candidateType);
+      const operationalDirective = isOneShotOperationalDirective(unit.proposedContent.text);
+      const durability = classifyDurability(unit);
       const outcome = classifyOutcome(unit.epistemicStatus, durability);
       return {
         providerUnitRef: unit.providerUnitRef,
@@ -76,6 +86,9 @@ export class ConservativeMemoryCurationProvider implements MemoryCurationProvide
         reasonCodes: [
           `baseline_epistemic:${unit.epistemicStatus}`,
           `baseline_durability:${durability}`,
+          ...(operationalDirective
+            ? ["curation:lifetime:operational_directive_ephemeral"]
+            : []),
           `baseline_outcome:${outcome}`,
         ],
       };

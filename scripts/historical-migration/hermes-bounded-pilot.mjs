@@ -159,10 +159,10 @@ const distillationPolicyVersion = distillationProjectionMode === "source_actor_o
       : `hermes-migration-pilot-distill-v4-full-source-chunked:${fullSourceChunking.maxChars}:${fullSourceChunking.maxSegments}`;
 const canonicalizationPolicyVersion = "hermes-migration-pilot-canonical-v2";
 const admissionPolicyIdentity = semanticReviewDecisionManifest === undefined
-  ? "hermes-migration-pilot-admission-v2"
-  : `hermes-migration-pilot-admission-v3-reviewed-invalid:${semanticReviewDecisionManifest.fingerprint.slice(0, 16)}`;
+  ? "hermes-migration-pilot-admission-v4-lifetime-governance"
+  : `hermes-migration-pilot-admission-v5-reviewed-invalid-lifetime-governance:${semanticReviewDecisionManifest.fingerprint.slice(0, 16)}`;
 const retentionPolicyVersion = "hermes-migration-pilot-retention-v2";
-const curationProviderVersion = "hermes-migration-pilot-curation-v2";
+const curationProviderVersion = "hermes-migration-pilot-curation-v3-lifetime-governance";
 const migrationContract = {
   contractVersion: "hermes-historical-migration-v2",
   sourceEvidenceContractVersion,
@@ -172,7 +172,7 @@ const migrationContract = {
     admission: admissionPolicyIdentity,
     retention: retentionPolicyVersion,
     curation: curationProviderVersion,
-    semantic: "dlmf-semantic-v6",
+    semantic: "dlmf-semantic-v7",
   },
 };
 
@@ -1041,8 +1041,8 @@ try {
     semanticReviewDecisionManifest,
   );
   const admissionPolicyVersion = semanticReviewRemediation === undefined
-    ? "hermes-migration-pilot-admission-v2"
-    : `hermes-migration-pilot-admission-v3-reviewed-invalid:${
+    ? "hermes-migration-pilot-admission-v4-lifetime-governance"
+    : `hermes-migration-pilot-admission-v5-reviewed-invalid-lifetime-governance:${
         semanticReviewRemediation.identity.slice("sha256:".length, "sha256:".length + 16)
       }`;
   const clientPort = createHindsightPort(hindsightClient, hindsightConnection);

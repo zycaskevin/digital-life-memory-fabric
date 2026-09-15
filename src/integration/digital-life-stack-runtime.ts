@@ -75,7 +75,7 @@ export function createDigitalLifeStackDlmfRuntime(
       ? {}
       : { providerExtractionArtifactStore: options.providerExtractionArtifactStore }),
     curationProvider: new ConservativeMemoryCurationProvider(
-      options.curationProviderVersion ?? "dls-conservative-v1",
+      options.curationProviderVersion ?? "dls-conservative-v2-lifetime-governance",
     ),
     curationStore,
     admissionPolicy: new DeterministicCanonicalAdmissionPolicy(

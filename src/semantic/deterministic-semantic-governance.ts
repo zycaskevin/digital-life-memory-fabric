@@ -11,6 +11,7 @@ import type { ProviderMemoryUnit } from "../distillation/types.js";
 import {
   hasExplicitPreferenceAssertion,
   isNancyInlinePreferenceFamily,
+  isOneShotOperationalDirective,
 } from "./memory-language-signals.js";
 import {
   polarityForReviewedConcept,
@@ -113,6 +114,7 @@ function semanticTokens(value: string): Set<string> {
 
 function inferredMemoryType(unit: ProviderMemoryUnit): MemoryType {
   const text = unit.proposedContent.text;
+  if (isOneShotOperationalDirective(text)) return "transient_state";
   if (hasExplicitPreferenceAssertion(text) || isNancyInlinePreferenceFamily(text)) {
     return "preference";
   }
@@ -211,9 +213,10 @@ function isSubset(left: Set<string>, right: Set<string>): boolean {
 }
 
 export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGovernance {
-  constructor(readonly policyVersion = "dlmf-semantic-v6") {}
+  constructor(readonly policyVersion = "dlmf-semantic-v7") {}
 
   classify(unit: ProviderMemoryUnit): SemanticClassification {
+    const operationalDirective = isOneShotOperationalDirective(unit.proposedContent.text);
     const memoryType = inferredMemoryType(unit);
     const speakerProvenance = inferredSpeaker(unit);
     const epistemicStatus = attributedStatus(unit, memoryType, speakerProvenance);
@@ -235,6 +238,9 @@ export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGove
         `semantic:speaker_provenance:${speakerProvenance}`,
         `semantic:epistemic_status:${epistemicStatus}`,
         `semantic:polarity:${semanticPolarity}`,
+        ...(operationalDirective
+          ? ["semantic:lifetime:operational_directive_ephemeral"]
+          : []),
         ...(concept === undefined ? [] : [`semantic:concept:${concept.id}`]),
         ...(matchedConceptIds.length > 1
           ? [`semantic:concept_ambiguous:${matchedConceptIds.join(",")}`]
