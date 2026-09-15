@@ -72,6 +72,7 @@ export * from "./source-adapters/identity.js";
 export * from "./source-adapters/validation.js";
 export * from "./source-adapters/hermes-source-adapter.js";
 export * from "./source-adapters/hermes-sqlite-reader.js";
+export * from "./source-adapters/hermes-incremental-sync.js";
 export * from "./source-adapters/normalized-experience-distillation.js";
 export * from "./source-adapters/source-migration.js";
 export * from "./source-adapters/historical-migration-runner.js";

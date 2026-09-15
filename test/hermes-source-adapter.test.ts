@@ -96,7 +96,7 @@ test("ADAPTER-001 inspect exposes Hermes capabilities without leaking schema int
   assert.equal(inspection.sourceSystem, "hermes");
   assert.equal(inspection.sourceType, "conversation_session");
   assert.equal(inspection.capabilities.historicalImport, "full");
-  assert.equal(inspection.capabilities.incrementalSync, "partial");
+  assert.equal(inspection.capabilities.incrementalSync, "full");
   assert.equal(inspection.capabilities.toolEvents, "full");
   assert.equal(inspection.capabilities.deletionDetection, "unknown");
   assert.equal(inspection.metadata.sessionCount, 11216);
