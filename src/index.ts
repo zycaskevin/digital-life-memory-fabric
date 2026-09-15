@@ -12,6 +12,7 @@ export * from "./operations/types.js";
 export * from "./retrieval/types.js";
 export * from "./retrieval/verified-retrieval-service.js";
 export * from "./retrieval/hindsight-canonical-projection.js";
+export * from "./projection/obsidian-memory-projection.js";
 export * from "./ingress/relationship-os-http.js";
 export * from "./ingress/relationship-os-runtime.js";
 export * from "./integration/development-reference.js";
