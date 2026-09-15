@@ -29,6 +29,10 @@ const preflightOnly = args.has("--preflight");
 const apply = args.has("--apply");
 if (!preflightOnly && !apply) throw new Error("Use --preflight or --apply explicitly.");
 if (preflightOnly && apply) throw new Error("Choose only one mode.");
+const preflightProviderProbe = process.env.DLMF_MIGRATION_PREFLIGHT_PROVIDER_PROBE !== "0";
+if (apply && !preflightProviderProbe) {
+  throw new Error("DLMF_MIGRATION_PREFLIGHT_PROVIDER_PROBE=0 is preflight-only and cannot bypass apply provider validation");
+}
 
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (!Number.isInteger(nodeMajor) || nodeMajor < 22) {
@@ -71,7 +75,7 @@ const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
 const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 1000);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
-const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 8);
+const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 32);
 const hindsightAsyncTimeoutMs = boundedInt(
   process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
   1_800_000,
@@ -390,7 +394,7 @@ function dedupeAuthCandidates(candidates) {
   });
 }
 
-async function resolveHindsightConnection() {
+async function resolveHindsightConnection({ probe = true } = {}) {
   const explicitUrl = firstText(
     process.env.DLMF_MIGRATION_HINDSIGHT_URL,
     process.env.DLMF_PILOT_HINDSIGHT_URL,
@@ -420,6 +424,18 @@ async function resolveHindsightConnection() {
     { source: "no_auth", apiKey: undefined },
   ]);
 
+  if (!probe) {
+    const candidate = candidates[0] ?? { source: "no_auth", apiKey: undefined };
+    return {
+      baseUrl,
+      apiKey: candidate.apiKey,
+      authSource: `unverified:${candidate.source}`,
+      authFingerprint: secretFingerprint(candidate.apiKey),
+      mode,
+      probeValidated: false,
+    };
+  }
+
   const health = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
   if (!health.ok) throw new Error(`Hindsight health HTTP ${health.status}`);
 
@@ -436,6 +452,7 @@ async function resolveHindsightConnection() {
         authSource: candidate.source,
         authFingerprint: secretFingerprint(candidate.apiKey),
         mode,
+        probeValidated: true,
       };
     }
     const lower = body.toLowerCase();
@@ -928,21 +945,31 @@ const existingSchema = await inspectPilotSchema();
 if (existingSchema.exists && !existingSchema.ready) {
   throw new Error(`existing pilot schema is not current/ready: ${existingSchema.state}`);
 }
-const hindsightConnection = await resolveHindsightConnection();
-const HindsightClient = await loadHindsightClientConstructor();
-const hindsightClient = new HindsightClient({
-  baseUrl: hindsightConnection.baseUrl,
-  userAgent: "dlmf-hermes-migration-pilot/0.2",
-  ...(hindsightConnection.apiKey ? { apiKey: hindsightConnection.apiKey } : {}),
+const hindsightConnection = await resolveHindsightConnection({
+  probe: !preflightOnly || preflightProviderProbe,
 });
-const hindsightVersion = await hindsightClient.getVersion();
+let hindsightClient;
+let hindsightVersion;
+if (!preflightOnly || preflightProviderProbe) {
+  const HindsightClient = await loadHindsightClientConstructor();
+  hindsightClient = new HindsightClient({
+    baseUrl: hindsightConnection.baseUrl,
+    userAgent: "dlmf-hermes-migration-pilot/0.2",
+    ...(hindsightConnection.apiKey ? { apiKey: hindsightConnection.apiKey } : {}),
+  });
+  hindsightVersion = await hindsightClient.getVersion();
+}
 
 console.log("DLMF Hermes Historical Migration — Bounded Pilot");
 console.log(`mode=${preflightOnly ? "preflight" : "apply"}`);
 console.log(`node=${process.version}`);
 console.log(`sourceDb=read-only schemaVersion=${inspection.metadata.schemaVersion} sessions=${inspection.metadata.sessionCount} messages=${inspection.metadata.messageCount}`);
 console.log(`postgres=healthy targetFingerprint=${sha256(safeDatabaseIdentity(databaseUrl)).slice(0, 12)} schema=${schema} schemaState=${existingSchema.state}`);
-console.log(`hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`);
+console.log(
+  hindsightVersion === undefined
+    ? `hindsight=${endpointShape(hindsightConnection.baseUrl)} providerProbe=deferred`
+    : `hindsight=${endpointShape(hindsightConnection.baseUrl)} auth=${hindsightConnection.authSource}:${hindsightConnection.authFingerprint} version=${hindsightVersion.api_version || hindsightVersion.version || "unknown"}`,
+);
 console.log(`bounds=maxUnits:${maxUnits},concurrency:${migrationConcurrency},maxEvents:${maxEvents},maxChars:${maxChars},hindsightAsyncTimeoutMs:${hindsightAsyncTimeoutMs},fullSourceChunking:${fullSourceChunking === undefined ? "off" : `${fullSourceChunking.maxChars}chars/${fullSourceChunking.maxSegments}segments`}`);
 console.log(`sourceSelection=${targetSourceId === undefined ? "cursor" : (targetCategory ? `reviewed-category:${targetCategory}` : "targeted")}`);
 if (targetSourceId !== undefined) console.log(`targetFingerprint=${sha256(targetSourceId).slice(0, 16)}`);
