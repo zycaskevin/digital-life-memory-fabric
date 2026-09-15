@@ -745,3 +745,22 @@ Acceptance through source position `3600` is:
 The accepted replay state was resumed from source position `3500` and replayed positions `3501-3600`. It rediscovered `100 processed / 99 ingested / 1 skipped` while preserving receipts `1817 -> 1817`, candidates `203 -> 203`, heads `199 -> 199`, revisions `202 -> 202`, and Hindsight operations `2320 -> 2320`. The heaviest final retain remained fail-closed at the source checkpoint until its Hindsight operation reached terminal state; no later source position was committed ahead of it.
 
 This closes the Direct3600 gate. Contract-v2 remains source-resumable, provider-idempotent, Canonical-nonduplicating, provenance-closed, and replay-safe under the first sustained high-payload Direct workload.
+
+## Direct Phase-2 gate: source positions 3601-3700 — 2026-09-15
+
+The next high-payload gate covered `100` source positions. The read-only sizing pass predicted exactly `80` eligible / `20` skipped sources, approximately `918,861` eligible user characters, and a maximum eligible source of approximately `58K` characters. The durable run completed normally under systemd and advanced the successor state to `3700 processed / 1857 ingested / 1843 skipped`.
+
+Acceptance through source position `3700` is:
+
+- Contract-v2 contains `1,240` receipts over `1,240` distinct source Experiences;
+- cumulative receipt outcomes are `88 complete/committed`, `1,130 complete/no_memory_worthy_content`, and `22 awaiting_review/pending_review`;
+- Contract-v2 contains `9,328` provider units and exactly `9,328` curation decisions;
+- Contract-v2 references `112` candidate IDs / `107` Canonical Memory IDs, with all `112/112` candidate rows retaining `NormalizedExperience` provenance;
+- the `3601-3700` increment contains `80` receipts: `20 complete/committed`, `54 complete/no_memory_worthy_content`, and `6 awaiting_review/pending_review`;
+- that increment contains `2,646` provider units and exactly `2,646` curation decisions, references `30` candidate IDs / `25` Canonical Memory IDs, and closes provenance at `30/30` candidates and `25/25` Canonical Memory identities across `30` matching revisions;
+- the authoritative PostgreSQL destination contains `1,897` receipts, `233` candidate rows, `224` active Canonical heads, and `232` revisions;
+- the Phase-2 Hindsight bank contains `2,480/2,480` completed operations = `1,240` retain children + `1,240` batch parents, with `retry_total=0`.
+
+The independent accepted replay state was resumed from source position `3600` and replayed positions `3601-3700`. Because every corresponding DLMF receipt was already terminal (`complete` or `awaiting_review`), `TranscriptDistillationService` returned at the receipt-idempotency boundary before provider execution; the replay therefore required no local-model lease and did not contend with an unrelated active Hermes F1/Qwen workload. It deterministically rediscovered `100 processed / 80 ingested / 20 skipped` while preserving receipts `1897 -> 1897`, candidates `233 -> 233`, heads `224 -> 224`, revisions `232 -> 232`, and Hindsight operations `2480 -> 2480` with `retry_total=0`.
+
+This closes the Direct3700 gate. Bulk Direct migration is intentionally paused here while memory-lifetime governance is hardened against one-shot operational-directive leakage before source position `3701+` is authorized.
