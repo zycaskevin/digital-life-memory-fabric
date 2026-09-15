@@ -304,6 +304,24 @@ test("migration destination drift fails closed before resume", async () => {
   assert.deepEqual(stateStore.state, before);
 });
 
+test("historical migration accepts bounded scheduling lookahead through 128 and rejects larger windows", async () => {
+  const adapter = new FakeAdapter();
+  const stateStore = new MemoryStateStore();
+  const runner = new HistoricalExperienceMigrationRunner({
+    adapter,
+    stateStore,
+    migrationId: "fake-concurrency-bound-v1",
+    ingestor: { async ingest(experience) { return receipt(experience.experienceId); } },
+  });
+
+  const result = await runner.run({ maxUnits: 1, concurrency: 128 });
+  assert.equal(result.processedThisRun, 1);
+  await assert.rejects(
+    () => runner.run({ maxUnits: 1, concurrency: 129 }),
+    /concurrency must be an integer between 1 and 128/,
+  );
+});
+
 test("bounded concurrency uses parallel ingestion but advances only the contiguous source prefix", async () => {
   const adapter = new FakeAdapter();
   const stateStore = new MemoryStateStore();

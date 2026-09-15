@@ -75,7 +75,7 @@ const runtimeId = process.env.DLMF_MIGRATION_RUNTIME_ID || "hermes-gb10";
 const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 1000);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
-const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 32);
+const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 128);
 const hindsightAsyncTimeoutMs = boundedInt(
   process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
   1_800_000,
