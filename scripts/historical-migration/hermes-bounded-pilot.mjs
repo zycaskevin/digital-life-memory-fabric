@@ -78,7 +78,7 @@ const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000,
 const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 128);
 const hindsightAsyncTimeoutMs = boundedInt(
   process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
-  1_800_000,
+  7_200_000,
   60_000,
   7_200_000,
 );
