@@ -727,3 +727,21 @@ Acceptance through source position `3500` is:
 The accepted replay state was resumed from source position `3200` and replayed positions `3201-3500`. It rediscovered `300 processed / 268 ingested / 32 skipped` while preserving receipts `1718 -> 1718`, candidates `191 -> 191`, heads `187 -> 187`, revisions `190 -> 190`, and Hindsight operations `2122 -> 2122` with `retry_total=0`.
 
 This closes the Direct3500 gate. Contract-v2 is now proven through `2,300` successor source positions (`1201-3500`) with source checkpoint continuity, single-writer ownership, provider idempotency, Canonical non-duplication, provenance closure, and deterministic replay.
+
+
+## Direct Phase-2 gate: source positions 3501-3600 — 2026-09-15
+
+This heavier Direct gate intentionally isolated the first high-payload region after source position `3500`. Read-only sizing predicted `99` eligible / `1` skipped across `100` sources, with approximately `423K` eligible user characters and a maximum eligible source just under the `60K` Direct bound. Durable execution matched exactly and advanced the successor state to `3600 processed / 1777 ingested / 1823 skipped`.
+
+Acceptance through source position `3600` is:
+
+- Contract-v2 contains `1,160` receipts over `1,160` distinct source Experiences;
+- receipt outcomes: `68 complete/committed`, `1,076 complete/no_memory_worthy_content`, and `16 awaiting_review/pending_review`;
+- `6,682` provider units received exactly `6,682` curation decisions;
+- Contract-v2 references `82` candidate IDs / `82` Canonical Memory IDs, with `82/82` candidate provenance and `82/82` Canonical revision provenance back to `NormalizedExperience`;
+- cumulative physical destination: `1,817` receipts, `203` candidate rows, `199` Canonical heads, and `202` revisions;
+- the Phase-2 Hindsight bank contains `2,320/2,320` completed operation records = `1,160` retain children + `1,160` batch parents, with `retry_total=0`.
+
+The accepted replay state was resumed from source position `3500` and replayed positions `3501-3600`. It rediscovered `100 processed / 99 ingested / 1 skipped` while preserving receipts `1817 -> 1817`, candidates `203 -> 203`, heads `199 -> 199`, revisions `202 -> 202`, and Hindsight operations `2320 -> 2320`. The heaviest final retain remained fail-closed at the source checkpoint until its Hindsight operation reached terminal state; no later source position was committed ahead of it.
+
+This closes the Direct3600 gate. Contract-v2 remains source-resumable, provider-idempotent, Canonical-nonduplicating, provenance-closed, and replay-safe under the first sustained high-payload Direct workload.
