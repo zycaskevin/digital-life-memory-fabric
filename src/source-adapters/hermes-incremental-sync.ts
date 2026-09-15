@@ -92,9 +92,14 @@ export class HermesIncrementalSyncService {
         result.changed += 1;
         const read = await this.#adapter.read(unit);
         const normalized = await this.#adapter.normalize(read);
-        const receipt = await this.#ingestor.ingest(normalized);
-        result.receipts.push(receipt);
-        result.ingested += 1;
+        const hasTextualEvidence = normalized.events.some((event) => typeof event.content === "string" && event.content.trim().length > 0)
+          || normalized.content.some((content) => typeof content.text === "string" && content.text.trim().length > 0);
+        if (hasTextualEvidence) {
+          const receipt = await this.#ingestor.ingest(normalized);
+          result.receipts.push(receipt);
+          if (receipt.status !== "complete" && receipt.status !== "awaiting_review") continue;
+          result.ingested += 1;
+        }
         next.sessions[unit.source.sourceId] = normalized.provenance.sourceFingerprint.value;
         next.updatedAt = this.#clock().toISOString();
         await this.#checkpointStore.save(next);

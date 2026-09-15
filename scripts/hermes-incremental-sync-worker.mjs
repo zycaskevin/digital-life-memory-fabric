@@ -21,7 +21,8 @@ const { HindsightClient } = await import(pathToFileURL(clientModule).href);
 const hindsightClient = new HindsightClient({baseUrl:hindsightUrl,...(process.env.DLMF_DLS_HINDSIGHT_API_KEY?.trim()?{apiKey:process.env.DLMF_DLS_HINDSIGHT_API_KEY.trim()}:{})});
 const version=await hindsightClient.getVersion();
 const banks=new dlfm.DeterministicHindsightPlaneResolver(process.env.DLMF_DLS_HINDSIGHT_BANK_PREFIX||"dlmf-dls");
-const provider=new dlfm.HindsightMemoryAdapter({client:hindsightClient,banks,adapterVersion:process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION||"dls-hindsight-v1",providerVersion:String(version.api_version||version.version||"unknown"),recallBudget:"mid",reflectBudget:"mid"});
+const hindsightPort={retain:hindsightClient.retain.bind(hindsightClient),listMemories:hindsightClient.listMemories.bind(hindsightClient),recall:hindsightClient.recall.bind(hindsightClient),reflect:hindsightClient.reflect.bind(hindsightClient),async getOperationStatus(bankId,operationId){const response=await fetch(`${hindsightUrl}/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}`,{headers:process.env.DLMF_DLS_HINDSIGHT_API_KEY?.trim()?{Authorization:`Bearer ${process.env.DLMF_DLS_HINDSIGHT_API_KEY.trim()}`}:{},signal:AbortSignal.timeout(8000)});if(!response.ok)throw new Error(`Hindsight operation status HTTP ${response.status}`);return response.json();}};
+const provider=new dlfm.HindsightMemoryAdapter({client:hindsightPort,banks,adapterVersion:process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION||"dls-hindsight-v1",providerVersion:String(version.api_version||version.version||"unknown"),recallBudget:"mid",reflectBudget:"mid"});
 const pool=new Pool({connectionString:databaseUrl,options:`-c search_path=${schema}`,max:2,connectionTimeoutMillis:5000});
 try {
  const state=await inspectDigitalLifeStackSchema(pool); if(!state.ready) throw new Error(`DLMF schema not ready: ${state.state}`);
