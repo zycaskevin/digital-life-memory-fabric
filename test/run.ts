@@ -29,3 +29,4 @@ import "./source-migration.test.js";
 import "./historical-migration-runner.test.js";
 import "./hermes-historical-migration-policy.test.js";
 import "./provider-extraction-artifact.test.js";
+import "./obsidian-projection.test.js";
