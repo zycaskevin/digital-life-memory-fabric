@@ -76,3 +76,4 @@ export * from "./source-adapters/historical-migration-runner.js";
 export * from "./source-adapters/hermes-historical-migration-policy.js";
 export * from "./obsidian/types.js";
 export * from "./obsidian/canonical-memory-projection.js";
+export * from "./obsidian/filesystem-projection-writer.js";
