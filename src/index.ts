@@ -74,3 +74,5 @@ export * from "./source-adapters/normalized-experience-distillation.js";
 export * from "./source-adapters/source-migration.js";
 export * from "./source-adapters/historical-migration-runner.js";
 export * from "./source-adapters/hermes-historical-migration-policy.js";
+export * from "./obsidian/types.js";
+export * from "./obsidian/canonical-memory-projection.js";
