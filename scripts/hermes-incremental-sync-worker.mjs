@@ -37,7 +37,7 @@ try {
  const result=baseline?await sync.baselineCurrent():await sync.runOnce();
  const failedReceipts=result.receipts.filter((receipt)=>receipt.status!=="complete"&&receipt.status!=="awaiting_review").length;
  const status=failedReceipts===0?"PASS":"FAIL";
- console.log(`DLMF_HERMES_INCREMENTAL=${status} mode=${baseline?"baseline":"incremental"} scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} unchanged=${result.unchanged} failedReceipts=${failedReceipts}`);
+ console.log(`DLMF_HERMES_INCREMENTAL=${status} mode=${baseline?"baseline":"incremental"} scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} skipped=${result.skipped} unchanged=${result.unchanged} failedReceipts=${failedReceipts}`);
  await runtime.close();
  if(failedReceipts>0) process.exitCode=1;
 } finally { await pool.end().catch(()=>{}); }
