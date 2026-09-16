@@ -37,7 +37,7 @@ function safePathSegment(value: string): string {
   const normalized = value
     .normalize("NFKC")
     .trim()
-    .replace(/[\\/:*?"<>|#^[\]]/g, "-")
+    .replace(/[\\/:*?"<>|#\[\]\^]/g, "-")
     .replace(/\s+/g, " ")
     .replace(/\.+$/g, "")
     .trim();
