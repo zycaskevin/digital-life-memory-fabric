@@ -75,6 +75,27 @@ export class HermesIncrementalSyncService {
     this.#clock = options.clock ?? (() => new Date());
   }
 
+  /** Establish a current-state watermark without distilling historical sessions. */
+  async baselineCurrent(): Promise<HermesIncrementalSyncResult> {
+    const prior = await this.#checkpointStore.load();
+    if (prior !== undefined) throw new Error("Hermes incremental baseline requires an empty checkpoint store");
+    const next: HermesIncrementalCheckpoint = { contract: "dlmf/hermes-incremental-checkpoint/v1", adapterVersion: this.#adapter.version, sessions: {}, updatedAt: this.#clock().toISOString() };
+    const result: HermesIncrementalSyncResult = { scanned: 0, changed: 0, ingested: 0, unchanged: 0, receipts: [] };
+    let cursor: string | undefined;
+    do {
+      const page = await this.#adapter.discover({ limit: this.#pageSize, ...(cursor === undefined ? {} : { cursor }) });
+      for (const unit of page.units) {
+        result.scanned += 1;
+        next.sessions[unit.source.sourceId] = (await this.#adapter.fingerprint(unit)).value;
+        result.unchanged += 1;
+      }
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    next.updatedAt = this.#clock().toISOString();
+    await this.#checkpointStore.save(next);
+    return result;
+  }
+
   async runOnce(): Promise<HermesIncrementalSyncResult> {
     const prior = await this.#checkpointStore.load();
     if (prior !== undefined && (prior.contract !== "dlmf/hermes-incremental-checkpoint/v1" || prior.adapterVersion !== this.#adapter.version)) {
