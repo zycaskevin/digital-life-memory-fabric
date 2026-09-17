@@ -18,7 +18,7 @@ const SCOPE = {
   memoryNamespace: "life.core",
 };
 
-function fixture(options: { ready?: boolean; schemaState?: string } = {}) {
+function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?: typeof SCOPE } = {}) {
   let distillationCalls = 0;
   let retrievalCalls = 0;
   let capturedInput: TranscriptDistillationInput | undefined;
@@ -26,6 +26,7 @@ function fixture(options: { ready?: boolean; schemaState?: string } = {}) {
     bearerToken: TOKEN,
     agentId: "dlstack-integration",
     runtimeId: "digital-life-stack",
+    ...(options.allowedScope === undefined ? {} : { allowedScope: options.allowedScope }),
     readiness: {
       async ready() {
         return {
@@ -68,6 +69,31 @@ test("Digital-Life-Stack health advertises DLMF authority and exact contract", a
   const body = await response.json() as Record<string, unknown>;
   assert.equal(body.contract, DIGITAL_LIFE_STACK_DLMF_CONTRACT);
   assert.equal(body.canonicalAuthority, DIGITAL_LIFE_STACK_DLMF_AUTHORITY);
+  assert.equal(body.scopeBound, false);
+  assert.equal("scope" in body, false);
+});
+
+test("life-bound ingress advertises and enforces its exact Memory scope", async () => {
+  const { ingress, calls } = fixture({ allowedScope: SCOPE });
+  const healthResponse = await ingress.handle(new Request("http://dlmf.local/health"));
+  const health = await healthResponse.json() as { scopeBound: boolean; scope: typeof SCOPE };
+  assert.equal(health.scopeBound, true);
+  assert.deepEqual(health.scope, SCOPE);
+
+  const wrong = { ...SCOPE, lifeDid: "did:life:other" };
+  const experience = await ingress.handle(jsonRequest(
+    "/v1/digital-life-stack/experiences",
+    { ...experienceBody(), scope: wrong },
+  ));
+  const retrievalResponse = await ingress.handle(jsonRequest(
+    "/v1/digital-life-stack/retrievals",
+    { scope: wrong, query: "canonical", topK: 3 },
+  ));
+  assert.equal(experience.status, 400);
+  assert.equal(retrievalResponse.status, 400);
+  assert.deepEqual(calls(), { distillationCalls: 0, retrievalCalls: 0 });
+  const error = await experience.json() as { error: string };
+  assert.equal(error.error, "digital_life_stack_scope_not_allowed");
 });
 
 test("readiness fails closed on stale schema", async () => {

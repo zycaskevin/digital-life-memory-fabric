@@ -31,6 +31,7 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   bearerToken: string;
   agentId: string;
   runtimeId?: string;
+  allowedScope?: MemoryScope;
   policies: DigitalLifeStackDlmfPolicies;
   distillationProvider: MemoryDistillationProvider;
   providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
@@ -104,6 +105,7 @@ export function createDigitalLifeStackDlmfRuntime(
     bearerToken: options.bearerToken,
     agentId: options.agentId,
     runtimeId: trustedRuntimeId,
+    ...(options.allowedScope === undefined ? {} : { allowedScope: options.allowedScope }),
     policies: options.policies,
     distillation: projectingDistillation,
     retrieval,

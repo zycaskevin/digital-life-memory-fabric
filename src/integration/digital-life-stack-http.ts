@@ -28,6 +28,7 @@ export interface DigitalLifeStackDlmfIngressOptions {
   bearerToken: string;
   agentId: string;
   runtimeId: string;
+  allowedScope?: MemoryScope;
   distillation: Pick<TranscriptDistillationService, "run">;
   retrieval: Pick<VerifiedRetrievalService, "retrieve">;
   readiness: DigitalLifeStackDlmfReadiness;
@@ -45,6 +46,7 @@ export class DigitalLifeStackDlmfIngress {
   readonly #token: string;
   readonly #agentId: string;
   readonly #runtimeId: string;
+  readonly #allowedScope: MemoryScope | undefined;
   readonly #distillation: Pick<TranscriptDistillationService, "run">;
   readonly #retrieval: Pick<VerifiedRetrievalService, "retrieve">;
   readonly #readiness: DigitalLifeStackDlmfReadiness;
@@ -54,6 +56,7 @@ export class DigitalLifeStackDlmfIngress {
     this.#token = requiredSecret(options.bearerToken);
     this.#agentId = requiredIdentifier(options.agentId, "agentId");
     this.#runtimeId = requiredIdentifier(options.runtimeId, "runtimeId");
+    this.#allowedScope = options.allowedScope === undefined ? undefined : validateScope(options.allowedScope);
     this.#distillation = options.distillation;
     this.#retrieval = options.retrieval;
     this.#readiness = options.readiness;
@@ -68,6 +71,9 @@ export class DigitalLifeStackDlmfIngress {
         service: "dlmf-digital-life-stack-ingress",
         contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
         canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+        observedAt: new Date().toISOString(),
+        scopeBound: this.#allowedScope !== undefined,
+        ...(this.#allowedScope === undefined ? {} : { scope: this.#allowedScope }),
       });
     }
     if (request.method === "GET" && url.pathname === "/ready") {
@@ -78,7 +84,10 @@ export class DigitalLifeStackDlmfIngress {
           service: "dlmf-digital-life-stack-ingress",
           contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
           canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+          observedAt: new Date().toISOString(),
           schemaState: readiness.schemaState,
+          scopeBound: this.#allowedScope !== undefined,
+          ...(this.#allowedScope === undefined ? {} : { scope: this.#allowedScope }),
         }, readiness.ready ? 200 : 503);
       } catch {
         return json({
@@ -86,6 +95,7 @@ export class DigitalLifeStackDlmfIngress {
           service: "dlmf-digital-life-stack-ingress",
           contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
           canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+          observedAt: new Date().toISOString(),
           schemaState: "unavailable",
         }, 503);
       }
@@ -118,6 +128,7 @@ export class DigitalLifeStackDlmfIngress {
           "createdAt", "observedAt", "metadata",
         ]);
         const scope = validateScope(body.scope);
+        this.#assertAllowedScope(scope);
         const input: TranscriptDistillationInput = {
           scope,
           origin: { lifeDid: scope.lifeDid, agentId: this.#agentId, runtimeId: this.#runtimeId },
@@ -149,8 +160,10 @@ export class DigitalLifeStackDlmfIngress {
         "digital_life_stack_retrieval_invalid",
       );
       requireOnlyKeys(body, ["scope", "query", "topK"]);
+      const scope = validateScope(body.scope);
+      this.#assertAllowedScope(scope);
       const result = await this.#retrieval.retrieve({
-        scope: validateScope(body.scope),
+        scope,
         query: requiredString(body.query, 4_096, "query"),
         ...(body.topK === undefined ? {} : { topK: boundedInteger(body.topK, 1, 100, "topK") }),
         timeoutMs: 10_000,
@@ -159,6 +172,12 @@ export class DigitalLifeStackDlmfIngress {
     } catch (error) {
       const code = publicError(error);
       return json({ error: code }, code === "request_body_too_large" ? 413 : 400);
+    }
+  }
+
+  #assertAllowedScope(scope: MemoryScope): void {
+    if (this.#allowedScope !== undefined && !sameScope(scope, this.#allowedScope)) {
+      throw new ValidationError("digital_life_stack_scope_not_allowed");
     }
   }
 
@@ -279,6 +298,12 @@ function validateScope(value: unknown): MemoryScope {
     lifeDid: requiredString(object.lifeDid, 256, "scope.lifeDid"),
     memoryNamespace: requiredString(object.memoryNamespace, 512, "scope.memoryNamespace"),
   };
+}
+
+function sameScope(left: MemoryScope, right: MemoryScope): boolean {
+  return left.tenantId === right.tenantId
+    && left.lifeDid === right.lifeDid
+    && left.memoryNamespace === right.memoryNamespace;
 }
 
 function validatePolicies(input: DigitalLifeStackDlmfPolicies): DigitalLifeStackDlmfPolicies {
