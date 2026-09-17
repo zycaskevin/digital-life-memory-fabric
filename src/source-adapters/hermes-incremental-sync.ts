@@ -64,6 +64,17 @@ export interface HermesIncrementalSyncResult {
 
 const EPHEMERAL_USER_INTERACTION_PATTERN = /^(?:你好|您好|嗨|哈囉|哈啰|早安|午安|晚安|謝謝|谢谢|感謝|感谢|多謝|多谢|好|好的|好啊|可以|可以啊|嗯|嗯嗯|收到|知道了|了解|明白|\/start|hi|hello|hey|thanks|thank\s+you|ok|okay|got\s+it|understood)\s*[。.!！?？~～]*$/iu;
 
+function isFirstContactGreeting(text: string): boolean {
+  // A bounded social opening is interaction evidence, not durable memory content.
+  // Keep this semantic and identity-agnostic: no Digital Life name or owner name
+  // participates in the rule. The full string must match the opening shape so a
+  // durable fact appended before/after the greeting still enters normal DLMF.
+  if (text.length > 160) return false;
+  const chinese = /^(?:你好|您好|嗨|哈囉|哈啰)[，,\s]*(?:(?:我是|我叫)[^。.!！?？]{1,32}[。.!！?？]\s*)?(?:(?:今天是)?(?:我們|我们)?(?:的)?第一次(?:聊天|對話|对话)|初次(?:見面|见面))[，,。.!！?？\s]*(?:很高興|很高兴|很開心|很开心)(?:認識|认识|見到|见到)你[。.!！?？~～]*$/iu;
+  const english = /^(?:hi|hello|hey)[,!\.\s]*(?:(?:i\s+am|i'm|my\s+name\s+is)\s+[^.!?]{1,32}[.!?]\s*)?(?:(?:this\s+is\s+)?(?:our\s+)?first\s+(?:chat|conversation|time\s+(?:chatting|talking)))[,!\.\s]*nice\s+to\s+meet\s+you[.!?~]*$/iu;
+  return chinese.test(text) || english.test(text);
+}
+
 /**
  * Fast fail-safe for live Hermes sync only. A session is source-level transient
  * when every user-authored textual contribution is an exact greeting,
@@ -91,7 +102,9 @@ export function isTransientUserOnlyHermesExperience(experience: NormalizedExperi
     userTexts.push(event.content.normalize("NFKC").trim());
   }
   return userTexts.length > 0 && userTexts.every((text) =>
-    isOneShotOperationalDirective(text) || EPHEMERAL_USER_INTERACTION_PATTERN.test(text)
+    isOneShotOperationalDirective(text)
+      || EPHEMERAL_USER_INTERACTION_PATTERN.test(text)
+      || isFirstContactGreeting(text)
   );
 }
 
