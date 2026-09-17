@@ -170,8 +170,18 @@ export class PostgresMemoryCurationRecordStore implements MemoryCurationRecordSt
            THEN memory_curation_records.reason_codes
            ELSE EXCLUDED.reason_codes
          END,
-         target_memory_id=COALESCE(EXCLUDED.target_memory_id, memory_curation_records.target_memory_id),
-         candidate_id=COALESCE(EXCLUDED.candidate_id, memory_curation_records.candidate_id),
+         target_memory_id=CASE
+           WHEN memory_curation_records.canonical_memory_id IS NOT NULL
+             AND EXCLUDED.canonical_memory_id IS NULL
+           THEN memory_curation_records.target_memory_id
+           ELSE COALESCE(EXCLUDED.target_memory_id, memory_curation_records.target_memory_id)
+         END,
+         candidate_id=CASE
+           WHEN memory_curation_records.canonical_memory_id IS NOT NULL
+             AND EXCLUDED.canonical_memory_id IS NULL
+           THEN memory_curation_records.candidate_id
+           ELSE COALESCE(EXCLUDED.candidate_id, memory_curation_records.candidate_id)
+         END,
          canonical_memory_id=COALESCE(EXCLUDED.canonical_memory_id, memory_curation_records.canonical_memory_id),
          created_at=CASE
            WHEN memory_curation_records.canonical_memory_id IS NOT NULL

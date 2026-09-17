@@ -5,7 +5,7 @@
   "description": "Provider-neutral canonical memory and synchronization layer for one Digital Life.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -30,7 +30,11 @@
     "digital-life-stack:health": "node scripts/digital-life-stack-health.mjs",
     "relationship-os:bootstrap": "node scripts/relationship-os-ingress-bootstrap.mjs",
     "relationship-os:serve": "npm run build && node scripts/relationship-os-ingress-server.mjs",
-    "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs"
+    "development-reference:serve": "npm run build && node scripts/development-reference-gateway-server.mjs",
+    "uat:hermes-source-adapter": "npm run build && node scripts/hermes-source-adapter-live-uat.mjs",
+    "pilot:hermes-migration:preflight": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --preflight",
+    "pilot:hermes-migration:run": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --apply",
+    "pilot:hermes-migration:inspect": "npm run build && node scripts/historical-migration/inspect-hermes-migration-failure.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
