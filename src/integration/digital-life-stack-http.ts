@@ -1,10 +1,12 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { ValidationError } from "../domain/errors.js";
 import type { MemoryScope } from "../domain/types.js";
 import type { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
 import type { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import type { VerifiedRetrievalResult } from "../retrieval/types.js";
+import { projectDevelopmentExperienceReference } from "../source-adapters/development-experience-reference.js";
+import type { NormalizedExperience } from "../source-adapters/contracts.js";
 
 export const DIGITAL_LIFE_STACK_DLMF_CONTRACT = "dlmf/digital-life-stack/v1";
 export const DIGITAL_LIFE_STACK_DLMF_AUTHORITY = "digital-life-memory-fabric";
@@ -129,7 +131,17 @@ export class DigitalLifeStackDlmfIngress {
           ...this.#policies,
         };
         const receipt = await this.#distillation.run(input);
-        return json({ ok: true, receipt: publicReceipt(receipt) });
+        const developmentExperienceRef = developmentReferenceForInput(
+          input,
+          receipt,
+          this.#agentId,
+          this.#runtimeId,
+        );
+        return json({
+          ok: true,
+          receipt: publicReceipt(receipt),
+          developmentExperienceRef,
+        });
       }
 
       const body = plainObject(
@@ -157,6 +169,73 @@ export class DigitalLifeStackDlmfIngress {
       return { ready: false, schemaState: "unavailable" };
     }
   }
+}
+
+function developmentReferenceForInput(
+  input: TranscriptDistillationInput,
+  receipt: DistillationReceipt,
+  agentId: string,
+  runtimeId: string,
+) {
+  const source = {
+    sourceSystem: "digital-life-stack-http",
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+  };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      scope: input.scope,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      content: input.content,
+      contentType: input.contentType,
+      createdAt: input.createdAt ?? null,
+      observedAt: input.observedAt ?? null,
+      metadata: input.metadata ?? null,
+    }))
+    .digest("hex");
+  const stableIdentity = createHash("sha256")
+    .update(`${input.scope.tenantId}\u0000${input.scope.lifeDid}\u0000${input.scope.memoryNamespace}\u0000${input.sourceType}\u0000${input.sourceId}`)
+    .digest("hex");
+  const normalizedAt = receipt.ingestedAt ?? receipt.createdAt;
+  const startedAt = input.createdAt ?? input.observedAt ?? normalizedAt;
+  const endedAt = input.observedAt ?? input.createdAt ?? normalizedAt;
+  const experience: NormalizedExperience = {
+    sourceSystem: source.sourceSystem,
+    sourceType: source.sourceType,
+    sourceId: source.sourceId,
+    sourceVersion: { value: fingerprint, scheme: "synthetic" },
+    experienceId: `exp_${stableIdentity}`,
+    startedAt: { value: startedAt, certainty: "exact" },
+    endedAt: { value: endedAt, certainty: "exact" },
+    actors: [{ actorId: agentId, kind: "agent" }],
+    events: [{
+      eventId: `event_${stableIdentity}`,
+      eventType: "digital-life-stack.experience",
+      actorId: agentId,
+      occurredAt: { value: startedAt, certainty: "exact" },
+      content: input.content,
+      metadata: { runtimeId },
+    }],
+    content: [{ mediaType: input.contentType, text: input.content }],
+    metadata: { ...(input.metadata ?? {}), runtimeId },
+    provenance: {
+      source,
+      sourceVersion: { value: fingerprint, scheme: "synthetic" },
+      sourceFingerprint: { algorithm: "sha256", value: fingerprint },
+      adapterName: "digital-life-stack-http",
+      adapterVersion: "0.1",
+      discoveredAt: normalizedAt,
+      readAt: normalizedAt,
+      normalizedAt,
+    },
+  };
+  return projectDevelopmentExperienceReference(
+    experience,
+    input.scope,
+    "DISTILLATION_SUBMITTED",
+    receipt,
+  );
 }
 
 function publicReceipt(receipt: DistillationReceipt) {

@@ -32,6 +32,7 @@ export * from "./distillation/provider-extraction-artifact-store.js";
 export * from "./distillation/in-memory-provider-extraction-artifact-store.js";
 export * from "./distillation/filesystem-provider-extraction-artifact-store.js";
 export * from "./distillation/hindsight-memory-adapter.js";
+export * from "./distillation/synthetic-exploration-evidence-adapter.js";
 export * from "./distillation/distillation-receipt-store.js";
 export * from "./distillation/in-memory-distillation-receipt-store.js";
 export * from "./distillation/postgres-distillation-receipt-store.js";

@@ -121,7 +121,7 @@ test("no direct canonical commit or promotion endpoint exists", async () => {
   assert.deepEqual(calls(), { distillationCalls: 0, retrievalCalls: 0 });
 });
 
-test("experience ingress injects DLMF policy and server origin", async () => {
+test("experience ingress injects DLMF policy and returns content-free Development reference", async () => {
   const { ingress, input } = fixture();
   const response = await ingress.handle(jsonRequest(
     "/v1/digital-life-stack/experiences",
@@ -135,6 +135,18 @@ test("experience ingress injects DLMF policy and server origin", async () => {
   });
   assert.equal(input()?.canonicalizationPolicyVersion, "dls-canonical-v1");
   assert.equal(input()?.admissionPolicyVersion, "dls-admission-v1");
+  const body = await response.json() as {
+    developmentExperienceRef: Record<string, unknown>;
+    receipt: Record<string, unknown>;
+  };
+  assert.equal(body.developmentExperienceRef.schema, "dlmf.normalized-experience.reference.v1");
+  assert.equal(body.developmentExperienceRef.authority, "digital-life-memory-fabric");
+  assert.deepEqual(body.developmentExperienceRef.scope, SCOPE);
+  assert.equal(body.developmentExperienceRef.disposition, "DISTILLATION_SUBMITTED");
+  assert.equal((body.developmentExperienceRef.distillation as Record<string, unknown>).receiptId, "dist_test");
+  assert.equal("content" in body.developmentExperienceRef, false);
+  assert.equal("events" in body.developmentExperienceRef, false);
+  assert.equal(body.receipt.canonicalizationOutcome, "committed");
 });
 
 test("retrieval returns only DLMF-verified canonical hydration", async () => {

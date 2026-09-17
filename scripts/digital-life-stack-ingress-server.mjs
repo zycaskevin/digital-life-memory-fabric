@@ -33,16 +33,46 @@ const version = await hindsightClient.getVersion();
 const banks = new dlfm.DeterministicHindsightPlaneResolver(
   process.env.DLMF_DLS_HINDSIGHT_BANK_PREFIX || "dlmf-dls",
 );
-const distillationProvider = new dlfm.HindsightMemoryAdapter({
-  client: hindsightClient,
-  banks,
-  adapterVersion: process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION || "dls-hindsight-v1",
-  providerVersion: String(version.api_version || version.version || "unknown"),
-  recallBudget: "mid",
-  reflectBudget: "mid",
-});
+// Hindsight retain can return an async operation handle. The live ingress must
+// therefore expose the same operation-status capability as the incremental
+// worker; otherwise provider-stage distillation fails after a valid retain.
+const hindsightPort = {
+  retain: hindsightClient.retain.bind(hindsightClient),
+  listMemories: hindsightClient.listMemories.bind(hindsightClient),
+  recall: hindsightClient.recall.bind(hindsightClient),
+  reflect: hindsightClient.reflect.bind(hindsightClient),
+  async getOperationStatus(bankId, operationId) {
+    const response = await fetch(
+      `${hindsightBaseUrl}/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}`,
+      {
+        headers: hindsightApiKey ? { Authorization: `Bearer ${hindsightApiKey}` } : {},
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Hindsight operation status HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+};
+const distillationProviderName = process.env.DLMF_DLS_DISTILLATION_PROVIDER?.trim() || "hindsight";
+const distillationProvider = distillationProviderName === "synthetic-exploration-evidence"
+  ? new dlfm.SyntheticExplorationEvidenceAdapter({
+      adapterVersion: "dls-synthetic-exploration-v1",
+      providerVersion: "1",
+    })
+  : distillationProviderName === "hindsight"
+    ? new dlfm.HindsightMemoryAdapter({
+        client: hindsightPort,
+        banks,
+        adapterVersion: process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION || "dls-hindsight-v1",
+        providerVersion: String(version.api_version || version.version || "unknown"),
+        recallBudget: "mid",
+        reflectBudget: "mid",
+      })
+    : (() => { throw new Error(`Unsupported DLMF_DLS_DISTILLATION_PROVIDER: ${distillationProviderName}`); })();
 const retrievalPort = new dlfm.HindsightCanonicalProjectionPort({
-  client: hindsightClient,
+  client: hindsightPort,
   banks,
   providerId: "hindsight",
   recallBudget: "mid",
