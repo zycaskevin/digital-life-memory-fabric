@@ -8,6 +8,10 @@ import type { NormalizedExperienceIngestor } from "./source-migration.js";
 import type { HermesStateReader } from "./hermes-source-adapter.js";
 import { HermesSourceAdapter } from "./hermes-source-adapter.js";
 import { isOneShotOperationalDirective } from "../semantic/memory-language-signals.js";
+import {
+  projectDevelopmentExperienceReference,
+  type DlmfDevelopmentExperienceReference,
+} from "./development-experience-reference.js";
 
 export interface HermesIncrementalCheckpoint {
   contract: "dlmf/hermes-incremental-checkpoint/v1";
@@ -54,6 +58,8 @@ export interface HermesIncrementalSyncResult {
   skipped: number;
   unchanged: number;
   receipts: Array<Pick<DistillationReceipt, "receiptId" | "status">>;
+  /** Content-free observed experience versions available to Development. */
+  experiences: DlmfDevelopmentExperienceReference[];
 }
 
 const EPHEMERAL_USER_INTERACTION_PATTERN = /^(?:你好|您好|嗨|哈囉|哈啰|早安|午安|晚安|謝謝|谢谢|感謝|感谢|多謝|多谢|好|好的|好啊|可以|可以啊|嗯|嗯嗯|收到|知道了|了解|明白|\/start|hi|hello|hey|thanks|thank\s+you|ok|okay|got\s+it|understood)\s*[。.!！?？~～]*$/iu;
@@ -96,12 +102,14 @@ export class HermesIncrementalSyncService {
   readonly #adapter: HermesSourceAdapter;
   readonly #checkpointStore: HermesIncrementalCheckpointStore;
   readonly #ingestor: NormalizedExperienceIngestor;
+  readonly #scope: MemoryScope;
   readonly #pageSize: number;
   readonly #clock: () => Date;
 
   constructor(options: HermesIncrementalSyncOptions) {
     this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.2.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
     this.#checkpointStore = options.checkpointStore;
+    this.#scope = { ...options.scope };
     if (options.ingestor !== undefined) this.#ingestor = options.ingestor;
     else {
       if (options.distillation === undefined) throw new Error("Hermes incremental sync requires ingestor or distillation");
@@ -116,7 +124,7 @@ export class HermesIncrementalSyncService {
     const prior = await this.#checkpointStore.load();
     if (prior !== undefined) throw new Error("Hermes incremental baseline requires an empty checkpoint store");
     const next: HermesIncrementalCheckpoint = { contract: "dlmf/hermes-incremental-checkpoint/v1", adapterVersion: this.#adapter.version, sessions: {}, updatedAt: this.#clock().toISOString() };
-    const result: HermesIncrementalSyncResult = { scanned: 0, changed: 0, ingested: 0, skipped: 0, unchanged: 0, receipts: [] };
+    const result: HermesIncrementalSyncResult = { scanned: 0, changed: 0, ingested: 0, skipped: 0, unchanged: 0, receipts: [], experiences: [] };
     let cursor: string | undefined;
     do {
       const page = await this.#adapter.discover({ limit: this.#pageSize, ...(cursor === undefined ? {} : { cursor }) });
@@ -138,7 +146,7 @@ export class HermesIncrementalSyncService {
       throw new Error("Hermes incremental checkpoint is incompatible with adapter version");
     }
     const next: HermesIncrementalCheckpoint = { contract: "dlmf/hermes-incremental-checkpoint/v1", adapterVersion: this.#adapter.version, sessions: { ...(prior?.sessions ?? {}) }, updatedAt: this.#clock().toISOString() };
-    const result: HermesIncrementalSyncResult = { scanned: 0, changed: 0, ingested: 0, skipped: 0, unchanged: 0, receipts: [] };
+    const result: HermesIncrementalSyncResult = { scanned: 0, changed: 0, ingested: 0, skipped: 0, unchanged: 0, receipts: [], experiences: [] };
     let cursor: string | undefined;
     do {
       const page = await this.#adapter.discover({ limit: this.#pageSize, ...(cursor === undefined ? {} : { cursor }) });
@@ -151,6 +159,13 @@ export class HermesIncrementalSyncService {
         const normalized = await this.#adapter.normalize(read);
         if (isTransientUserOnlyHermesExperience(normalized)) {
           result.skipped += 1;
+          result.experiences.push(
+            projectDevelopmentExperienceReference(
+              normalized,
+              this.#scope,
+              "TRANSIENT_SOURCE_ONLY",
+            ),
+          );
           next.sessions[unit.source.sourceId] = normalized.provenance.sourceFingerprint.value;
           next.updatedAt = this.#clock().toISOString();
           await this.#checkpointStore.save(next);
@@ -161,8 +176,24 @@ export class HermesIncrementalSyncService {
         if (hasTextualEvidence) {
           const receipt = await this.#ingestor.ingest(normalized);
           result.receipts.push(receipt);
+          result.experiences.push(
+            projectDevelopmentExperienceReference(
+              normalized,
+              this.#scope,
+              "DISTILLATION_SUBMITTED",
+              receipt,
+            ),
+          );
           if (receipt.status !== "complete" && receipt.status !== "awaiting_review") continue;
           result.ingested += 1;
+        } else {
+          result.experiences.push(
+            projectDevelopmentExperienceReference(
+              normalized,
+              this.#scope,
+              "NO_TEXTUAL_EVIDENCE",
+            ),
+          );
         }
         next.sessions[unit.source.sourceId] = normalized.provenance.sourceFingerprint.value;
         next.updatedAt = this.#clock().toISOString();

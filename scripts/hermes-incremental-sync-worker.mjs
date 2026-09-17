@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,7 +10,13 @@ import { inspectDigitalLifeStackSchema, validatedDlmfSchema } from "./digital-li
 const dlfm = await import(new URL("../dist/index.js", import.meta.url));
 const dbPath = resolve(required("DLMF_HERMES_STATE_DB"));
 const checkpointPath = resolve(required("DLMF_HERMES_INCREMENTAL_CHECKPOINT"));
-await mkdir(dirname(checkpointPath), { recursive: true });
+const developmentExperienceJournal = process.env.DLMF_HERMES_DEVELOPMENT_EXPERIENCE_JOURNAL?.trim()
+  ? resolve(process.env.DLMF_HERMES_DEVELOPMENT_EXPERIENCE_JOURNAL.trim())
+  : undefined;
+await mkdir(dirname(checkpointPath), { recursive: true, mode: 0o700 });
+if (developmentExperienceJournal !== undefined) {
+  await mkdir(dirname(developmentExperienceJournal), { recursive: true, mode: 0o700 });
+}
 const databaseUrl = required("DLMF_DLS_DATABASE_URL");
 const schema = validatedDlmfSchema(process.env.DLMF_DLS_SCHEMA || "dlmf_digital_life_stack");
 const archiveRoot = resolve(required("DLMF_DLS_ARCHIVE_ROOT"));
@@ -35,9 +41,13 @@ try {
  const sync=new dlfm.HermesIncrementalSyncService({reader:new dlfm.HermesSqliteReader(dbPath),checkpointStore:new dlfm.FileHermesIncrementalCheckpointStore(checkpointPath),ingestor:runtime.createNormalizedExperienceIngestor(incrementalScope),scope:{tenantId:required("DLMF_HERMES_TENANT_ID"),lifeDid:required("DLMF_HERMES_LIFE_DID"),memoryNamespace:required("DLMF_HERMES_MEMORY_NAMESPACE")},origin:{lifeDid:required("DLMF_HERMES_LIFE_DID"),agentId:process.env.DLMF_DLS_AGENT_ID||"digital-life-stack",runtimeId:"hermes-incremental"},policies:{distillationPolicyVersion:process.env.DLMF_DLS_DISTILLATION_POLICY||"dls-distill-v1",canonicalizationPolicyVersion:process.env.DLMF_DLS_CANONICALIZATION_POLICY||"dls-canonical-v1",admissionPolicyVersion:process.env.DLMF_DLS_ADMISSION_POLICY||"dls-admission-v1",retentionPolicyVersion:process.env.DLMF_DLS_RETENTION_POLICY||"dls-retention-v1"},pageSize:Number(process.env.DLMF_HERMES_INCREMENTAL_PAGE_SIZE||250)});
  const baseline=process.argv.includes("--baseline-current");
  const result=baseline?await sync.baselineCurrent():await sync.runOnce();
+ if (developmentExperienceJournal !== undefined && result.experiences.length > 0) {
+  const lines=result.experiences.map((reference)=>JSON.stringify(reference)).join("\n")+"\n";
+  await appendFile(developmentExperienceJournal,lines,{encoding:"utf8",mode:0o600});
+ }
  const failedReceipts=result.receipts.filter((receipt)=>receipt.status!=="complete"&&receipt.status!=="awaiting_review").length;
  const status=failedReceipts===0?"PASS":"FAIL";
- console.log(`DLMF_HERMES_INCREMENTAL=${status} mode=${baseline?"baseline":"incremental"} scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} skipped=${result.skipped} unchanged=${result.unchanged} failedReceipts=${failedReceipts}`);
+ console.log(`DLMF_HERMES_INCREMENTAL=${status} mode=${baseline?"baseline":"incremental"} scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} skipped=${result.skipped} unchanged=${result.unchanged} developmentRefs=${result.experiences.length} failedReceipts=${failedReceipts}`);
  await runtime.close();
  if(failedReceipts>0) process.exitCode=1;
 } finally { await pool.end().catch(()=>{}); }
