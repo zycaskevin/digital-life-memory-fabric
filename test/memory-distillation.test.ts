@@ -62,6 +62,7 @@ class FakeHindsightClient implements HindsightClientPort {
     options: Parameters<HindsightClientPort["reflect"]>[2];
   }> = [];
   readonly operationStatusCalls: Array<{ bankId: string; operationId: string }> = [];
+  readonly knownOperationIds = new Set<string>();
 
   recallResponse: HindsightRecallResponse = { results: [] };
   listMemoriesResponse: HindsightListMemoriesResponse = { items: [], total: 0, limit: 1000, offset: 0 };
@@ -76,6 +77,7 @@ class FakeHindsightClient implements HindsightClientPort {
     options?: Parameters<HindsightClientPort["retain"]>[2],
   ): Promise<HindsightRetainResponse> {
     this.retainCalls.push({ bankId, content, options });
+    if (options?.operationId !== undefined) this.knownOperationIds.add(options.operationId);
     if (this.retainFailure !== undefined) throw this.retainFailure;
     if (this.retainResponse !== undefined) return this.retainResponse;
     return options?.async === true
@@ -91,6 +93,9 @@ class FakeHindsightClient implements HindsightClientPort {
 
   async getOperationStatus(bankId: string, operationId: string) {
     this.operationStatusCalls.push({ bankId, operationId });
+    if (!this.knownOperationIds.has(operationId)) {
+      return { operation_id: operationId, status: "not_found" as const };
+    }
     const status = this.operationStatuses.shift() ?? "completed";
     return {
       operation_id: operationId,
@@ -403,9 +408,10 @@ test("MD-010 remediation: role-aware user projection preserves direct assertions
     assert.equal(client.retainCalls[1]?.options?.async, true);
     assert.match(client.retainCalls[1]?.options?.operationId ?? "", /^[0-9a-f-]{36}$/);
     assert.notEqual(client.retainCalls[0]?.options?.operationId, client.retainCalls[1]?.options?.operationId);
-    assert.equal(client.operationStatusCalls.length, 2);
+    assert.equal(client.operationStatusCalls.length, 3);
     assert.equal(client.operationStatusCalls[0]?.operationId, client.retainCalls[0]?.options?.operationId);
     assert.equal(client.operationStatusCalls[1]?.operationId, client.retainCalls[1]?.options?.operationId);
+    assert.equal(client.operationStatusCalls[2]?.operationId, client.retainCalls[1]?.options?.operationId);
     assert.equal(client.listMemoriesCalls.length, 2);
     assert.equal(client.recallCalls.length, 0);
 
@@ -557,7 +563,7 @@ test("SG-003: user projection separates source actor from epistemic status and r
     assert.equal(receipt.curationOutcomes.canonical_merge, 1);
     assert.equal(receipt.curationOutcomes.supporting_evidence_only, 8);
     assert.equal(receipt.canonicalMemoryIds.length, 2);
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
 
     const records = await curationStore.listByReceipt(receipt.receiptId);
     const record = (providerUnitRef: string) =>
@@ -632,9 +638,9 @@ test("MD-010 retry identity: deterministic user projection operation IDs are sta
   const operationIdsA = clientA.retainCalls
     .filter((call) => call.options?.documentId?.endsWith(":source-actor:user") === true)
     .map((call) => call.options?.operationId);
-  assert.equal(operationIdsA.length, 2);
+  assert.equal(operationIdsA.length, 1);
   assert.ok(operationIdsA[0]);
-  assert.equal(operationIdsA[0], operationIdsA[1]);
+  assert.ok(clientA.operationStatusCalls.length >= 3);
 
   const clientB = new FakeHindsightClient();
   const adapterB = new HindsightMemoryAdapter({
@@ -962,7 +968,7 @@ test("MD-010 remediation: role projection async retain fails closed until provid
     assert.equal(receipt.status, "failed");
     assert.equal(receipt.errors.at(-1)?.stage, "provider");
     assert.match(receipt.errors.at(-1)?.message ?? "", /user-source-projection async retain failed/);
-    assert.equal(client.operationStatusCalls.length, 3);
+    assert.equal(client.operationStatusCalls.length, 4);
     assert.equal(receipt.providerUnitCount, 0);
     assert.deepEqual(receipt.candidateIds, []);
     assert.deepEqual(receipt.canonicalMemoryIds, []);
@@ -1136,7 +1142,7 @@ test("MD-005 legacy receipt identity is unchanged when semantic review remediati
       curationProvider: "dlmf-conservative-curation",
       curationProviderVersion: "test-curation-v1",
       admissionPolicyVersion: "admission-v1",
-      semanticPolicyVersion: "dlmf-semantic-v6",
+      semanticPolicyVersion: "dlmf-semantic-v7",
       sourceSegmentFingerprint: null,
     });
     assert.equal(

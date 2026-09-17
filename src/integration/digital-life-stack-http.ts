@@ -1,10 +1,12 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { ValidationError } from "../domain/errors.js";
 import type { MemoryScope } from "../domain/types.js";
 import type { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
 import type { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import type { VerifiedRetrievalResult } from "../retrieval/types.js";
+import { projectDevelopmentExperienceReference } from "../source-adapters/development-experience-reference.js";
+import type { NormalizedExperience } from "../source-adapters/contracts.js";
 
 export const DIGITAL_LIFE_STACK_DLMF_CONTRACT = "dlmf/digital-life-stack/v1";
 export const DIGITAL_LIFE_STACK_DLMF_AUTHORITY = "digital-life-memory-fabric";
@@ -26,6 +28,7 @@ export interface DigitalLifeStackDlmfIngressOptions {
   bearerToken: string;
   agentId: string;
   runtimeId: string;
+  allowedScope?: MemoryScope;
   distillation: Pick<TranscriptDistillationService, "run">;
   retrieval: Pick<VerifiedRetrievalService, "retrieve">;
   readiness: DigitalLifeStackDlmfReadiness;
@@ -43,6 +46,7 @@ export class DigitalLifeStackDlmfIngress {
   readonly #token: string;
   readonly #agentId: string;
   readonly #runtimeId: string;
+  readonly #allowedScope: MemoryScope | undefined;
   readonly #distillation: Pick<TranscriptDistillationService, "run">;
   readonly #retrieval: Pick<VerifiedRetrievalService, "retrieve">;
   readonly #readiness: DigitalLifeStackDlmfReadiness;
@@ -52,6 +56,7 @@ export class DigitalLifeStackDlmfIngress {
     this.#token = requiredSecret(options.bearerToken);
     this.#agentId = requiredIdentifier(options.agentId, "agentId");
     this.#runtimeId = requiredIdentifier(options.runtimeId, "runtimeId");
+    this.#allowedScope = options.allowedScope === undefined ? undefined : validateScope(options.allowedScope);
     this.#distillation = options.distillation;
     this.#retrieval = options.retrieval;
     this.#readiness = options.readiness;
@@ -66,6 +71,9 @@ export class DigitalLifeStackDlmfIngress {
         service: "dlmf-digital-life-stack-ingress",
         contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
         canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+        observedAt: new Date().toISOString(),
+        scopeBound: this.#allowedScope !== undefined,
+        ...(this.#allowedScope === undefined ? {} : { scope: this.#allowedScope }),
       });
     }
     if (request.method === "GET" && url.pathname === "/ready") {
@@ -76,7 +84,10 @@ export class DigitalLifeStackDlmfIngress {
           service: "dlmf-digital-life-stack-ingress",
           contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
           canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+          observedAt: new Date().toISOString(),
           schemaState: readiness.schemaState,
+          scopeBound: this.#allowedScope !== undefined,
+          ...(this.#allowedScope === undefined ? {} : { scope: this.#allowedScope }),
         }, readiness.ready ? 200 : 503);
       } catch {
         return json({
@@ -84,6 +95,7 @@ export class DigitalLifeStackDlmfIngress {
           service: "dlmf-digital-life-stack-ingress",
           contract: DIGITAL_LIFE_STACK_DLMF_CONTRACT,
           canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+          observedAt: new Date().toISOString(),
           schemaState: "unavailable",
         }, 503);
       }
@@ -116,6 +128,7 @@ export class DigitalLifeStackDlmfIngress {
           "createdAt", "observedAt", "metadata",
         ]);
         const scope = validateScope(body.scope);
+        this.#assertAllowedScope(scope);
         const input: TranscriptDistillationInput = {
           scope,
           origin: { lifeDid: scope.lifeDid, agentId: this.#agentId, runtimeId: this.#runtimeId },
@@ -129,7 +142,17 @@ export class DigitalLifeStackDlmfIngress {
           ...this.#policies,
         };
         const receipt = await this.#distillation.run(input);
-        return json({ ok: true, receipt: publicReceipt(receipt) });
+        const developmentExperienceRef = developmentReferenceForInput(
+          input,
+          receipt,
+          this.#agentId,
+          this.#runtimeId,
+        );
+        return json({
+          ok: true,
+          receipt: publicReceipt(receipt),
+          developmentExperienceRef,
+        });
       }
 
       const body = plainObject(
@@ -137,8 +160,10 @@ export class DigitalLifeStackDlmfIngress {
         "digital_life_stack_retrieval_invalid",
       );
       requireOnlyKeys(body, ["scope", "query", "topK"]);
+      const scope = validateScope(body.scope);
+      this.#assertAllowedScope(scope);
       const result = await this.#retrieval.retrieve({
-        scope: validateScope(body.scope),
+        scope,
         query: requiredString(body.query, 4_096, "query"),
         ...(body.topK === undefined ? {} : { topK: boundedInteger(body.topK, 1, 100, "topK") }),
         timeoutMs: 10_000,
@@ -150,6 +175,12 @@ export class DigitalLifeStackDlmfIngress {
     }
   }
 
+  #assertAllowedScope(scope: MemoryScope): void {
+    if (this.#allowedScope !== undefined && !sameScope(scope, this.#allowedScope)) {
+      throw new ValidationError("digital_life_stack_scope_not_allowed");
+    }
+  }
+
   async #safeReadiness(): Promise<{ ready: boolean; schemaState: string }> {
     try {
       return await this.#readiness.ready();
@@ -157,6 +188,73 @@ export class DigitalLifeStackDlmfIngress {
       return { ready: false, schemaState: "unavailable" };
     }
   }
+}
+
+function developmentReferenceForInput(
+  input: TranscriptDistillationInput,
+  receipt: DistillationReceipt,
+  agentId: string,
+  runtimeId: string,
+) {
+  const source = {
+    sourceSystem: "digital-life-stack-http",
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+  };
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify({
+      scope: input.scope,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      content: input.content,
+      contentType: input.contentType,
+      createdAt: input.createdAt ?? null,
+      observedAt: input.observedAt ?? null,
+      metadata: input.metadata ?? null,
+    }))
+    .digest("hex");
+  const stableIdentity = createHash("sha256")
+    .update(`${input.scope.tenantId}\u0000${input.scope.lifeDid}\u0000${input.scope.memoryNamespace}\u0000${input.sourceType}\u0000${input.sourceId}`)
+    .digest("hex");
+  const normalizedAt = receipt.ingestedAt ?? receipt.createdAt;
+  const startedAt = input.createdAt ?? input.observedAt ?? normalizedAt;
+  const endedAt = input.observedAt ?? input.createdAt ?? normalizedAt;
+  const experience: NormalizedExperience = {
+    sourceSystem: source.sourceSystem,
+    sourceType: source.sourceType,
+    sourceId: source.sourceId,
+    sourceVersion: { value: fingerprint, scheme: "synthetic" },
+    experienceId: `exp_${stableIdentity}`,
+    startedAt: { value: startedAt, certainty: "exact" },
+    endedAt: { value: endedAt, certainty: "exact" },
+    actors: [{ actorId: agentId, kind: "agent" }],
+    events: [{
+      eventId: `event_${stableIdentity}`,
+      eventType: "digital-life-stack.experience",
+      actorId: agentId,
+      occurredAt: { value: startedAt, certainty: "exact" },
+      content: input.content,
+      metadata: { runtimeId },
+    }],
+    content: [{ mediaType: input.contentType, text: input.content }],
+    metadata: { ...(input.metadata ?? {}), runtimeId },
+    provenance: {
+      source,
+      sourceVersion: { value: fingerprint, scheme: "synthetic" },
+      sourceFingerprint: { algorithm: "sha256", value: fingerprint },
+      adapterName: "digital-life-stack-http",
+      adapterVersion: "0.1",
+      discoveredAt: normalizedAt,
+      readAt: normalizedAt,
+      normalizedAt,
+    },
+  };
+  return projectDevelopmentExperienceReference(
+    experience,
+    input.scope,
+    "DISTILLATION_SUBMITTED",
+    receipt,
+  );
 }
 
 function publicReceipt(receipt: DistillationReceipt) {
@@ -200,6 +298,12 @@ function validateScope(value: unknown): MemoryScope {
     lifeDid: requiredString(object.lifeDid, 256, "scope.lifeDid"),
     memoryNamespace: requiredString(object.memoryNamespace, 512, "scope.memoryNamespace"),
   };
+}
+
+function sameScope(left: MemoryScope, right: MemoryScope): boolean {
+  return left.tenantId === right.tenantId
+    && left.lifeDid === right.lifeDid
+    && left.memoryNamespace === right.memoryNamespace;
 }
 
 function validatePolicies(input: DigitalLifeStackDlmfPolicies): DigitalLifeStackDlmfPolicies {

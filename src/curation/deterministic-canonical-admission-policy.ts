@@ -1,6 +1,7 @@
 import { ValidationError } from "../domain/errors.js";
 import type { EpistemicStatus } from "../domain/types.js";
 import { stableStringify } from "../domain/utils.js";
+import { isOneShotOperationalDirective } from "../semantic/memory-language-signals.js";
 import type {
   CanonicalAdmissionDecision,
   CanonicalAdmissionInput,
@@ -85,6 +86,19 @@ export class DeterministicCanonicalAdmissionPolicy implements CanonicalAdmission
 
     const reasons = [...proposal.reasonCodes];
     const attributed = proposal.epistemicAttribution.status;
+    const operationalDirective =
+      isOneShotOperationalDirective(unit.proposedContent.text) ||
+      unit.semanticReasonCodes?.includes("semantic:lifetime:operational_directive_ephemeral") === true;
+    if (operationalDirective) {
+      return {
+        outcome: "supporting_evidence_only",
+        epistemicStatus: attributed,
+        durability: "transient",
+        memoryWorthy: false,
+        semanticDisposition: proposal.semanticDisposition,
+        reasonCodes: [...reasons, "admission:operational_directive_not_canonical"],
+      };
+    }
     if (!attributionValid(unit.epistemicStatus, proposal.epistemicAttribution, input.rawContent)) {
       return {
         outcome: "pending_review",

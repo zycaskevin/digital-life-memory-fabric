@@ -13,6 +13,7 @@ if (!new Set(["127.0.0.1", "::1", "localhost"]).has(host)) {
 const port = boundedPort(process.env.DLMF_DLS_PORT || "8794");
 const databaseUrl = requiredEnv("DLMF_DLS_DATABASE_URL");
 const schema = validatedDlmfSchema(process.env.DLMF_DLS_SCHEMA || "dlmf_digital_life_stack");
+const allowedScope = optionalBoundScope();
 const archiveRoot = resolve(requiredEnv("DLMF_DLS_ARCHIVE_ROOT"));
 const hindsightBaseUrl = serviceUrl(requiredEnv("DLMF_DLS_HINDSIGHT_URL"));
 const hindsightApiKey = process.env.DLMF_DLS_HINDSIGHT_API_KEY?.trim() || undefined;
@@ -33,16 +34,46 @@ const version = await hindsightClient.getVersion();
 const banks = new dlfm.DeterministicHindsightPlaneResolver(
   process.env.DLMF_DLS_HINDSIGHT_BANK_PREFIX || "dlmf-dls",
 );
-const distillationProvider = new dlfm.HindsightMemoryAdapter({
-  client: hindsightClient,
-  banks,
-  adapterVersion: process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION || "dls-hindsight-v1",
-  providerVersion: String(version.api_version || version.version || "unknown"),
-  recallBudget: "mid",
-  reflectBudget: "mid",
-});
+// Hindsight retain can return an async operation handle. The live ingress must
+// therefore expose the same operation-status capability as the incremental
+// worker; otherwise provider-stage distillation fails after a valid retain.
+const hindsightPort = {
+  retain: hindsightClient.retain.bind(hindsightClient),
+  listMemories: hindsightClient.listMemories.bind(hindsightClient),
+  recall: hindsightClient.recall.bind(hindsightClient),
+  reflect: hindsightClient.reflect.bind(hindsightClient),
+  async getOperationStatus(bankId, operationId) {
+    const response = await fetch(
+      `${hindsightBaseUrl}/v1/default/banks/${encodeURIComponent(bankId)}/operations/${encodeURIComponent(operationId)}`,
+      {
+        headers: hindsightApiKey ? { Authorization: `Bearer ${hindsightApiKey}` } : {},
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Hindsight operation status HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+};
+const distillationProviderName = process.env.DLMF_DLS_DISTILLATION_PROVIDER?.trim() || "hindsight";
+const distillationProvider = distillationProviderName === "synthetic-exploration-evidence"
+  ? new dlfm.SyntheticExplorationEvidenceAdapter({
+      adapterVersion: "dls-synthetic-exploration-v1",
+      providerVersion: "1",
+    })
+  : distillationProviderName === "hindsight"
+    ? new dlfm.HindsightMemoryAdapter({
+        client: hindsightPort,
+        banks,
+        adapterVersion: process.env.DLMF_DLS_HINDSIGHT_ADAPTER_VERSION || "dls-hindsight-v1",
+        providerVersion: String(version.api_version || version.version || "unknown"),
+        recallBudget: "mid",
+        reflectBudget: "mid",
+      })
+    : (() => { throw new Error(`Unsupported DLMF_DLS_DISTILLATION_PROVIDER: ${distillationProviderName}`); })();
 const retrievalPort = new dlfm.HindsightCanonicalProjectionPort({
-  client: hindsightClient,
+  client: hindsightPort,
   banks,
   providerId: "hindsight",
   recallBudget: "mid",
@@ -66,6 +97,7 @@ const runtime = dlfm.createDigitalLifeStackDlmfRuntime({
   bearerToken: requiredEnv("DLMF_DLS_BEARER_TOKEN"),
   agentId: process.env.DLMF_DLS_AGENT_ID || "digital-life-stack",
   runtimeId: "digital-life-stack",
+  ...(allowedScope === undefined ? {} : { allowedScope }),
   policies: {
     distillationPolicyVersion: process.env.DLMF_DLS_DISTILLATION_POLICY || "dls-distill-v1",
     canonicalizationPolicyVersion: process.env.DLMF_DLS_CANONICALIZATION_POLICY || "dls-canonical-v1",
@@ -102,7 +134,7 @@ await new Promise((resolvePromise, reject) => {
   server.once("error", reject);
   server.listen(port, host, resolvePromise);
 });
-console.log(`DLMF_DLS_INGRESS=READY host=${host} port=${port} schema=${schema} canonical_authority=digital-life-memory-fabric`);
+console.log(`DLMF_DLS_INGRESS=READY host=${host} port=${port} schema=${schema} canonical_authority=digital-life-memory-fabric scope_bound=${allowedScope !== undefined}`);
 
 let closing = false;
 async function close() {
@@ -123,6 +155,25 @@ async function loadHindsightClient() {
   const module = await import(pathToFileURL(candidate).href);
   if (typeof module.HindsightClient !== "function") throw new Error("HindsightClient export not found");
   return module.HindsightClient;
+}
+
+function optionalBoundScope() {
+  const names = [
+    "DLMF_DLS_SCOPE_TENANT_ID",
+    "DLMF_DLS_SCOPE_LIFE_DID",
+    "DLMF_DLS_SCOPE_MEMORY_NAMESPACE",
+  ];
+  const values = names.map((name) => process.env[name]?.trim() || "");
+  const present = values.map(Boolean);
+  if (present.every((value) => value === false)) return undefined;
+  if (!present.every((value) => value === true)) {
+    throw new Error("DLMF Digital-Life-Stack bound scope requires all three DLMF_DLS_SCOPE_* values");
+  }
+  return {
+    tenantId: values[0],
+    lifeDid: values[1],
+    memoryNamespace: values[2],
+  };
 }
 
 function requiredEnv(name) {

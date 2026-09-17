@@ -124,8 +124,8 @@ export class HistoricalExperienceMigrationRunner<TSourcePayload> {
       throw new Error("maxUnits must be an integer between 1 and 1000");
     }
     const concurrency = request.concurrency ?? 1;
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
-      throw new Error("concurrency must be an integer between 1 and 32");
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 128) {
+      throw new Error("concurrency must be an integer between 1 and 128");
     }
 
     const inspection = await this.#adapter.inspect();

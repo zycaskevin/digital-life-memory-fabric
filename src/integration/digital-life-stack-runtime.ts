@@ -31,6 +31,7 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   bearerToken: string;
   agentId: string;
   runtimeId?: string;
+  allowedScope?: MemoryScope;
   policies: DigitalLifeStackDlmfPolicies;
   distillationProvider: MemoryDistillationProvider;
   providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
@@ -75,7 +76,7 @@ export function createDigitalLifeStackDlmfRuntime(
       ? {}
       : { providerExtractionArtifactStore: options.providerExtractionArtifactStore }),
     curationProvider: new ConservativeMemoryCurationProvider(
-      options.curationProviderVersion ?? "dls-conservative-v1",
+      options.curationProviderVersion ?? "dls-conservative-v2-lifetime-governance",
     ),
     curationStore,
     admissionPolicy: new DeterministicCanonicalAdmissionPolicy(
@@ -104,6 +105,7 @@ export function createDigitalLifeStackDlmfRuntime(
     bearerToken: options.bearerToken,
     agentId: options.agentId,
     runtimeId: trustedRuntimeId,
+    ...(options.allowedScope === undefined ? {} : { allowedScope: options.allowedScope }),
     policies: options.policies,
     distillation: projectingDistillation,
     retrieval,

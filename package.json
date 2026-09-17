@@ -34,7 +34,9 @@
     "uat:hermes-source-adapter": "npm run build && node scripts/hermes-source-adapter-live-uat.mjs",
     "pilot:hermes-migration:preflight": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --preflight",
     "pilot:hermes-migration:run": "npm run build && node scripts/historical-migration/hermes-bounded-pilot.mjs --apply",
-    "pilot:hermes-migration:inspect": "npm run build && node scripts/historical-migration/inspect-hermes-migration-failure.mjs"
+    "pilot:hermes-migration:inspect": "npm run build && node scripts/historical-migration/inspect-hermes-migration-failure.mjs",
+    "projection:obsidian:export": "npm run build && node scripts/obsidian/export-canonical-memory-vault.mjs",
+    "projection:obsidian:verify": "npm run build && node scripts/obsidian/verify-canonical-memory-vault.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

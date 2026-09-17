@@ -160,7 +160,7 @@ export class HermesSourceAdapter implements MemorySourceAdapter<HermesSessionPay
       sourceType: "conversation_session",
       capabilities: {
         historicalImport: "full",
-        incrementalSync: "partial",
+        incrementalSync: "full",
         stableSourceId: "full",
         timestamps: "full",
         toolEvents: "full",

@@ -177,7 +177,7 @@ test("DLMF-SG-006 merges reviewed English and Traditional Chinese preference fam
     ]).run(input("multilingual-reviewed-families"));
 
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 3);
     assert.equal(receipt.curationOutcomes.canonical_merge, 3);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
@@ -209,7 +209,7 @@ test("DLMF-SG-008 merges the production English and Traditional Chinese 8B prefe
     ]).run(input("production-8b-equivalence"));
 
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v6");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
     assert.equal(receipt.curationOutcomes.canonical_merge, 1);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
@@ -431,14 +431,14 @@ test("DLMF-SG-007 applies an exact invalid-candidate decision only to a new reme
         providerUnitRef: invalidUnit.providerUnitRef,
         providerUnitText: invalidUnit.proposedContent.text,
         semanticKey: classified.semanticKey,
-        semanticPolicyVersion: "dlmf-semantic-v6",
+        semanticPolicyVersion: "dlmf-semantic-v7",
         memoryType: classified.memoryType,
         speakerProvenance: classified.speakerProvenance,
         semanticRelation: "contradicts",
         targetMemoryId: existingMemoryId,
       }),
       semanticKey: classified.semanticKey,
-      semanticPolicyVersion: "dlmf-semantic-v6",
+      semanticPolicyVersion: "dlmf-semantic-v7",
       memoryType: classified.memoryType,
       speakerProvenance: classified.speakerProvenance,
       semanticRelation: "contradicts" as const,

@@ -668,33 +668,62 @@ export class HindsightMemoryAdapter implements MemoryDistillationProvider {
       const userProjectionOperationId = deterministicOperationId(
         `${distillation}|${request.experience.checksum}|${request.distillationPolicyVersion}|${userDocumentId}|${userContent}`,
       );
-      const userRetained = await this.options.client.retain(distillation, userContent, {
-        ...(timestamp === undefined ? {} : { timestamp }),
-        context: `${request.experience.contentType}; source-actor=user`,
-        documentId: userDocumentId,
-        async: true,
-        operationId: userProjectionOperationId,
-        tags: ["dlmf", "distillation", "source_actor:user"],
-        metadata: {
-          ...commonMetadata,
-          dlmf_projection_kind: "source_actor",
-          dlmf_source_actor: "user",
-          dlmf_projection_segment_count: String(userSegments.length),
-        },
-      });
-      const acceptedOperationId = assertAsyncRetainAccepted(
-        userRetained,
-        distillation,
-        "user-source-projection",
-      );
-      if (acceptedOperationId !== userProjectionOperationId) {
-        throw new Error("Hindsight user-source-projection returned an unexpected operation_id");
+      const getOperationStatus = this.options.client.getOperationStatus;
+      const existingOperation = getOperationStatus === undefined
+        ? undefined
+        : await getOperationStatus.call(
+            this.options.client,
+            distillation,
+            userProjectionOperationId,
+          );
+      if (
+        existingOperation !== undefined &&
+        existingOperation.operation_id !== userProjectionOperationId
+      ) {
+        throw new Error("Hindsight user-source-projection preflight returned a mismatched operation_id");
       }
-      await this.waitForAsyncRetain(
-        distillation,
-        acceptedOperationId,
-        "user-source-projection",
-      );
+      if (existingOperation?.status === "completed") {
+        // The deterministic operation ID binds bank, checksum, policy, document ID,
+        // and complete projected user content. A terminal match is therefore the
+        // exact extraction requested by this replay; do not enqueue it again.
+      } else if (
+        existingOperation?.status === "pending" ||
+        existingOperation?.status === "processing"
+      ) {
+        await this.waitForAsyncRetain(
+          distillation,
+          userProjectionOperationId,
+          "user-source-projection",
+        );
+      } else {
+        const userRetained = await this.options.client.retain(distillation, userContent, {
+          ...(timestamp === undefined ? {} : { timestamp }),
+          context: `${request.experience.contentType}; source-actor=user`,
+          documentId: userDocumentId,
+          async: true,
+          operationId: userProjectionOperationId,
+          tags: ["dlmf", "distillation", "source_actor:user"],
+          metadata: {
+            ...commonMetadata,
+            dlmf_projection_kind: "source_actor",
+            dlmf_source_actor: "user",
+            dlmf_projection_segment_count: String(userSegments.length),
+          },
+        });
+        const acceptedOperationId = assertAsyncRetainAccepted(
+          userRetained,
+          distillation,
+          "user-source-projection",
+        );
+        if (acceptedOperationId !== userProjectionOperationId) {
+          throw new Error("Hindsight user-source-projection returned an unexpected operation_id");
+        }
+        await this.waitForAsyncRetain(
+          distillation,
+          acceptedOperationId,
+          "user-source-projection",
+        );
+      }
       documentMemories.push(
         ...(await this.listDocumentMemories(distillation, userDocumentId)),
       );
