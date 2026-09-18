@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
+import { withCanonicalProjectionRetry } from "./canonical-projection-retry.mjs";
 import {
   DeterministicHindsightPlaneResolver,
   HermesHistoricalMigrationEligibilityPolicy,
@@ -76,6 +77,7 @@ const maxUnits = boundedInt(process.env.DLMF_MIGRATION_MAX_UNITS, 1, 1, 1000);
 const maxEvents = boundedInt(process.env.DLMF_MIGRATION_MAX_EVENTS, 80, 1, 500);
 const maxChars = boundedInt(process.env.DLMF_MIGRATION_MAX_CHARS, 60_000, 1_000, 500_000);
 const migrationConcurrency = boundedInt(process.env.DLMF_MIGRATION_CONCURRENCY, 1, 1, 128);
+const projectionMaxAttempts = boundedInt(process.env.DLMF_MIGRATION_PROJECTION_MAX_ATTEMPTS, 1, 1, 3);
 const hindsightAsyncTimeoutMs = boundedInt(
   process.env.DLMF_MIGRATION_HINDSIGHT_ASYNC_TIMEOUT_MS,
   7_200_000,
@@ -1085,12 +1087,18 @@ try {
     distillationProjectionMode,
     ...(fullSourceChunking === undefined ? {} : { fullSourceChunking }),
   });
-  const retrievalPort = new HindsightCanonicalProjectionPort({
+  const retrievalPort = withCanonicalProjectionRetry(new HindsightCanonicalProjectionPort({
     client: clientPort,
     banks,
     providerId: "hindsight",
     recallBudget: "mid",
+  }), {
+    maxAttempts: projectionMaxAttempts,
+    onRetry(event) {
+      console.log(`canonicalProjectionRetry=${JSON.stringify(event)}`);
+    },
   });
+  console.log(`projectionTransportMaxAttempts=${projectionMaxAttempts}`);
   runtime = createDigitalLifeStackDlmfRuntime({
     pool,
     archiveRoot,
