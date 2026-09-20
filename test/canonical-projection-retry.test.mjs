@@ -113,11 +113,11 @@ test("a retry never returns success while projection is still unresolved", async
   await entered; assert.equal(settled, false); release(); await result; assert.equal(settled, true);
 });
 
-test("operational profile defaults are bounded without overriding explicit limits", () => {
+test("operational profile keeps one bounded long lease without overriding explicit limits", () => {
   const profile = fileURLToPath(new URL("../scripts/historical-migration/direct-phase2-operational-profile.sh", import.meta.url));
   const command = 'source "$1"; printf "%s,%s,%s" "$DLMF_MIGRATION_MAX_UNITS" "$DLMF_MIGRATION_CONCURRENCY" "$DLMF_MIGRATION_PROJECTION_MAX_ATTEMPTS"';
   const read = env => execFileSync("/bin/bash", ["-c", command, "profile-test", profile], { env, encoding: "utf8" });
-  assert.equal(read({ PATH: "/usr/bin:/bin" }), "32,4,3");
+  assert.equal(read({ PATH: "/usr/bin:/bin" }), "1000,4,3");
   assert.equal(read({ PATH: "/usr/bin:/bin", DLMF_MIGRATION_MAX_UNITS: "16", DLMF_MIGRATION_CONCURRENCY: "2", DLMF_MIGRATION_PROJECTION_MAX_ATTEMPTS: "1" }), "16,2,1");
 });
 
