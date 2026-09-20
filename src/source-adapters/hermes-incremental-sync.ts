@@ -43,6 +43,11 @@ export interface HermesIncrementalSyncOptions {
   checkpointStore: HermesIncrementalCheckpointStore;
   distillation?: { run(input: any): Promise<DistillationReceipt> };
   ingestor?: NormalizedExperienceIngestor;
+  /**
+   * Development-observation mode. Changed session versions emit only
+   * content-free DLMF references and never invoke distillation/ingestion.
+   */
+  referenceOnly?: boolean;
   scope: MemoryScope;
   origin: MemoryAuthor;
   policies: NormalizedExperienceDistillationPolicies;
@@ -114,7 +119,8 @@ export function isTransientUserOnlyHermesExperience(experience: NormalizedExperi
 export class HermesIncrementalSyncService {
   readonly #adapter: HermesSourceAdapter;
   readonly #checkpointStore: HermesIncrementalCheckpointStore;
-  readonly #ingestor: NormalizedExperienceIngestor;
+  readonly #ingestor: NormalizedExperienceIngestor | undefined;
+  readonly #referenceOnly: boolean;
   readonly #scope: MemoryScope;
   readonly #pageSize: number;
   readonly #clock: () => Date;
@@ -123,7 +129,13 @@ export class HermesIncrementalSyncService {
     this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.2.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
     this.#checkpointStore = options.checkpointStore;
     this.#scope = { ...options.scope };
-    if (options.ingestor !== undefined) this.#ingestor = options.ingestor;
+    this.#referenceOnly = options.referenceOnly === true;
+    if (this.#referenceOnly) {
+      if (options.ingestor !== undefined || options.distillation !== undefined) {
+        throw new Error("reference-only Hermes sync must not receive an ingestor or distillation provider");
+      }
+      this.#ingestor = undefined;
+    } else if (options.ingestor !== undefined) this.#ingestor = options.ingestor;
     else {
       if (options.distillation === undefined) throw new Error("Hermes incremental sync requires ingestor or distillation");
       this.#ingestor = new NormalizedExperienceDistillationBridge({ distillation: options.distillation, scope: options.scope, origin: options.origin, policies: options.policies });
@@ -170,6 +182,19 @@ export class HermesIncrementalSyncService {
         result.changed += 1;
         const read = await this.#adapter.read(unit);
         const normalized = await this.#adapter.normalize(read);
+        if (this.#referenceOnly) {
+          result.experiences.push(
+            projectDevelopmentExperienceReference(
+              normalized,
+              this.#scope,
+              "REFERENCE_ONLY",
+            ),
+          );
+          next.sessions[unit.source.sourceId] = normalized.provenance.sourceFingerprint.value;
+          next.updatedAt = this.#clock().toISOString();
+          await this.#checkpointStore.save(next);
+          continue;
+        }
         if (isTransientUserOnlyHermesExperience(normalized)) {
           result.skipped += 1;
           result.experiences.push(
@@ -187,6 +212,9 @@ export class HermesIncrementalSyncService {
         const hasTextualEvidence = normalized.events.some((event) => typeof event.content === "string" && event.content.trim().length > 0)
           || normalized.content.some((content) => typeof content.text === "string" && content.text.trim().length > 0);
         if (hasTextualEvidence) {
+          if (this.#ingestor === undefined) {
+            throw new Error("Hermes incremental ingestor is unavailable outside reference-only mode");
+          }
           const receipt = await this.#ingestor.ingest(normalized);
           result.receipts.push(receipt);
           result.experiences.push(
