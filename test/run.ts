@@ -4,6 +4,7 @@ import "./central-operations.test.js";
 import "./provider-materialization.test.js";
 import "./http-delivery-port.test.js";
 import "./verified-retrieval.test.js";
+import "./verified-retrieval-view.test.js";
 import "./memory-distillation.test.js";
 import "./memory-lifetime-governance.test.js";
 import "./obsidian-memory-projection.test.js";

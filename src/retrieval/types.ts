@@ -70,9 +70,32 @@ export interface VerifiedRetrievalItem {
   readonly retrievalEvidence: ProviderRetrievalEvidence;
 }
 
+export type RetrievalViewSuppressionReason =
+  | "VIEW_PRIMARY_SUPPRESSION"
+  | "VIEW_PRIMARY_OVERRIDE"
+  | "VIEW_DUPLICATE"
+  | "VIEW_TOP_K";
+
 export type RetrievalSuppressionCounts = Partial<
-  Readonly<Record<VerificationSuppressionReason | "DUPLICATE", number>>
+  Readonly<
+    Record<
+      VerificationSuppressionReason | "DUPLICATE" | RetrievalViewSuppressionReason,
+      number
+    >
+  >
 >;
+
+export interface VerifiedRetrievalReader {
+  retrieve(input: VerifiedRetrievalInput): Promise<VerifiedRetrievalResult>;
+}
+
+export interface VerifiedRetrievalViewObservation {
+  readonly viewId: string;
+  readonly mountCount: number;
+  readonly primaryOverrides: number;
+  readonly primarySuppressions: number;
+  readonly mountedAllowed: number;
+}
 
 export interface VerifiedRetrievalResult {
   readonly query: string;
@@ -81,6 +104,7 @@ export interface VerifiedRetrievalResult {
   readonly effectiveAt: string;
   readonly items: readonly VerifiedRetrievalItem[];
   readonly latestMaterializedCommitSeq?: number;
+  readonly view?: VerifiedRetrievalViewObservation;
   readonly verification: {
     readonly receivedCandidates: number;
     readonly uniqueCandidates: number;
