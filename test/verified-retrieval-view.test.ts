@@ -389,3 +389,52 @@ test("memory view config accepts only same-life read-only mounts bound to the pu
   );
 });
 
+
+test("memory view starts primary and historical retrieval concurrently", async () => {
+  const store = new InMemoryCanonicalMemoryStore();
+  let primaryEntered!: () => void;
+  let mountEntered!: () => void;
+  const primaryStarted = new Promise<void>((resolve) => { primaryEntered = resolve; });
+  const mountStarted = new Promise<void>((resolve) => { mountEntered = resolve; });
+
+  const emptyResult = (scope: MemoryScope): VerifiedRetrievalResult => ({
+    query: "memory",
+    scope,
+    providerId: "hindsight",
+    effectiveAt: NOW,
+    items: [],
+    verification: {
+      receivedCandidates: 0,
+      uniqueCandidates: 0,
+      allowed: 0,
+      suppressed: 0,
+      suppressionCounts: {},
+    },
+  });
+  const primary: VerifiedRetrievalReader = {
+    async retrieve() {
+      primaryEntered();
+      await mountStarted;
+      return emptyResult(PUBLIC);
+    },
+  };
+  const historical: VerifiedRetrievalReader = {
+    async retrieve() {
+      mountEntered();
+      await primaryStarted;
+      return emptyResult(HISTORY);
+    },
+  };
+
+  const retrieval = view(store, primary, historical).retrieve({
+    query: "memory",
+    scope: PUBLIC,
+    topK: 3,
+  });
+  const result = await Promise.race([
+    retrieval,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error("memory view retrieval was serialized")), 250)),
+  ]);
+  assert.equal(result.items.length, 0);
+});

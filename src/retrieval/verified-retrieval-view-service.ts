@@ -85,15 +85,13 @@ export class VerifiedRetrievalViewService implements VerifiedRetrievalReader {
     }
     const effectiveAt = input.effectiveAt ?? this.#clock.now();
     const topK = input.topK ?? DEFAULT_VERIFIED_RETRIEVAL_TOP_K;
-    const primary = await this.#primaryRetrieval.retrieve({
+    const { freshness: _primaryFreshness, ...mountInput } = input;
+    const primaryPromise = this.#primaryRetrieval.retrieve({
       ...input,
       scope: this.#publicScope,
       effectiveAt,
     });
-    assertResultScope(primary, this.#publicScope, "primary");
-
-    const { freshness: _primaryFreshness, ...mountInput } = input;
-    const mounted = await Promise.all(this.#mounts.map(async (mount) => {
+    const mountedPromise = Promise.all(this.#mounts.map(async (mount) => {
       const result = await mount.retrieval.retrieve({
         ...mountInput,
         scope: mount.scope,
@@ -104,6 +102,8 @@ export class VerifiedRetrievalViewService implements VerifiedRetrievalReader {
       assertResultScope(result, mount.scope, mount.mountId);
       return { mount, result };
     }));
+    const [primary, mounted] = await Promise.all([primaryPromise, mountedPromise]);
+    assertResultScope(primary, this.#publicScope, "primary");
 
     const output: VerifiedRetrievalItem[] = [];
     const seenMemoryIds = new Set<string>();
