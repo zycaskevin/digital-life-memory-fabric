@@ -135,7 +135,7 @@ export class HermesIncrementalSyncService {
   readonly #clock: () => Date;
 
   constructor(options: HermesIncrementalSyncOptions) {
-    this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.2.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
+    this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.3.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
     this.#checkpointStore = options.checkpointStore;
     this.#scope = { ...options.scope };
     this.#referenceOnly = options.referenceOnly === true;

@@ -110,7 +110,28 @@ function sourceVersion(payload: HermesSessionPayload): SourceVersion {
 }
 
 function fingerprintPayload(payload: HermesSessionPayload): SourceFingerprint {
-  const canonical = stableJson(payload);
+  // Incremental Memory change detection must follow evidence that can actually
+  // alter the distillation transcript, not mutable Hermes presentation/runtime
+  // metadata such as title, profile, archive state, end reason, or handoff data.
+  // Otherwise harmless metadata maintenance re-distills old conversations.
+  const evidence = {
+    session: {
+      id: payload.session.id,
+      source: payload.session.source,
+      startedAt: payload.session.startedAt,
+    },
+    messages: payload.messages.map((message) => ({
+      id: message.id,
+      sessionId: message.sessionId,
+      role: message.role,
+      content: message.content ?? null,
+      toolCallId: message.toolCallId ?? null,
+      toolCalls: message.toolCalls ?? null,
+      toolName: message.toolName ?? null,
+      timestamp: message.timestamp,
+    })),
+  };
+  const canonical = stableJson(evidence);
   return { algorithm: "sha256", value: createHash("sha256").update(canonical, "utf8").digest("hex") };
 }
 
