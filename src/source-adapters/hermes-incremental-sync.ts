@@ -91,6 +91,15 @@ function isFirstContactGreeting(text: string): boolean {
  * gains durable user content, its fingerprint changes and the complete DLMF
  * distillation/admission path runs normally.
  */
+export function isBackgroundOperationalHermesExperience(experience: NormalizedExperience): boolean {
+  // Hermes cron sessions are autonomous operational executions rather than
+  // human conversation. They may contain tool calls and durable-looking tool
+  // output, so the user-only transient heuristic below cannot safely classify
+  // them. Keep the source version checkpointed and visible to Development as
+  // content-free evidence, but never submit it directly for canonical memory.
+  return experience.metadata.source === "cron";
+}
+
 export function isTransientUserOnlyHermesExperience(experience: NormalizedExperience): boolean {
   const actorKinds = new Map(experience.actors.map((actor) => [actor.actorId, actor.kind]));
   const userTexts: string[] = [];
@@ -195,7 +204,10 @@ export class HermesIncrementalSyncService {
           await this.#checkpointStore.save(next);
           continue;
         }
-        if (isTransientUserOnlyHermesExperience(normalized)) {
+        if (
+          isBackgroundOperationalHermesExperience(normalized)
+          || isTransientUserOnlyHermesExperience(normalized)
+        ) {
           result.skipped += 1;
           result.experiences.push(
             projectDevelopmentExperienceReference(
