@@ -164,6 +164,35 @@ function view(
   });
 }
 
+test("memory view does not starve history when primary alone fills topK", async () => {
+  const store = new InMemoryCanonicalMemoryStore();
+  const primary = new StubReader([
+    item(revision(PUBLIC, "mem_p1", "preference:p1", "Primary one."), 1),
+    item(revision(PUBLIC, "mem_p2", "preference:p2", "Primary two."), 2),
+  ]);
+  const historical = new StubReader([
+    item(revision(HISTORY, "mem_h1", "preference:h1", "History one."), 1),
+    item(revision(HISTORY, "mem_h2", "preference:h2", "History two."), 2),
+  ]);
+  const result = await view(store, primary, historical).retrieve({ scope: PUBLIC, query: "history", topK: 2 });
+  assert.deepEqual(result.items.map(value => value.memoryId), ["mem_p1", "mem_h1"]);
+  assert.equal(result.verification.suppressionCounts.VIEW_TOP_K, 2);
+  assert.equal(result.verification.allowed + result.verification.suppressed, 4);
+  assert.deepEqual(result.items[1]?.revision.scope, HISTORY);
+});
+
+test("rank fusion preserves canonical primary shadowing of a strong historical hit", async () => {
+  const store = new InMemoryCanonicalMemoryStore();
+  const current = revision(PUBLIC, "mem_new", "preference:language", "Current choice.", "active", 2);
+  await seed(store, current);
+  const primary = new StubReader([item(revision(PUBLIC, "mem_other", "preference:other", "Other preference."), 2)]);
+  const historical = new StubReader([item(revision(HISTORY, "mem_old", current.semanticKey, "Old choice."), 1)]);
+  const result = await view(store, primary, historical).retrieve({ scope: PUBLIC, query: "language", topK: 1 });
+  assert.deepEqual(result.items.map(value => value.memoryId), ["mem_new"]);
+  assert.equal(result.items[0]?.canonicalRevision, 2);
+  assert.equal(result.view?.primaryOverrides, 1);
+});
+
 test("memory view exposes one public scope while preserving mounted canonical scope", async () => {
   const store = new InMemoryCanonicalMemoryStore();
   const primary = new StubReader([]);

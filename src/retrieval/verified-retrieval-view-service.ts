@@ -206,7 +206,14 @@ export class VerifiedRetrievalViewService implements VerifiedRetrievalReader {
       }
     }
 
-    const items = output.slice(0, topK);
+    // Rank-fuse the independently verified lists before truncation. Appending
+    // a full primary topK first would otherwise starve every historical hit.
+    // Stable rank ties retain primary/mount order; semantic overrides and
+    // tombstone suppression have already been resolved by DLMF above. Raw
+    // scores from separate banks are deliberately not treated as calibrated.
+    const items = output
+      .sort((left, right) => left.retrievalEvidence.providerRank - right.retrievalEvidence.providerRank)
+      .slice(0, topK);
     if (output.length > items.length) {
       const truncated = output.length - items.length;
       increment(suppressionCounts, "VIEW_TOP_K", truncated);

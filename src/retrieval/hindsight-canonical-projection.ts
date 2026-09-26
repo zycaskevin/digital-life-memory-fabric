@@ -103,11 +103,25 @@ export class HindsightCanonicalProjectionPort implements MemoryRetrievalPort {
         providerId: this.#providerId,
         providerObjectId: result.id,
       }];
-    }).slice(0, request.topK);
+    });
+
+    // Versioned projection documents may yield several hits for one memory.
+    // Normalize this provider-specific representation to one candidate before
+    // applying topK. This is only a claimed revision, never canonical truth:
+    // VerifiedRetrievalService must still check the exact DLMF head/revision.
+    // A forged higher claim therefore fails closed rather than falling back to
+    // an older provider hit. Map replacement retains first-hit identity order.
+    const byMemoryId = new Map<string, (typeof candidates)[number]>();
+    for (const candidate of candidates) {
+      const prior = byMemoryId.get(candidate.memoryId);
+      if (prior === undefined || candidate.canonicalRevision > prior.canonicalRevision) {
+        byMemoryId.set(candidate.memoryId, candidate);
+      }
+    }
 
     return {
       providerId: this.#providerId,
-      candidates,
+      candidates: [...byMemoryId.values()].slice(0, request.topK),
     };
   }
 }
