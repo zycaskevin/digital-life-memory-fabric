@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -38,12 +38,20 @@ const expected = [
     textSha256: "01ea544ab99ce252fdc856703c66e42c3b2c48f34f5b546bc37bee83befe6351",
     reason: "semantic-v8:mixed-language-preference-and-one-shot-review-task",
   },
+  {
+    memoryId: "mem_d670b24a0f0e4abeaeea879efac10f22",
+    revision: 1,
+    semanticKey: "semantic:6bf575aecfe87a6f539e86b4e8c9b2fea79c7cdc7cb7b6dcd737739fadeee687",
+    textSha256: "3cd87f9db60f3846cdf04329c2330c139390573755b324e0ee7549b719b2f11a",
+    reason: "semantic-v8:task-isolated-hlb-cognition-uat-not-owner-memory",
+  },
 ];
 const configPath = resolve(process.env.DLMF_GOVERNANCE_PILOT_CONFIG || join(home, ".config", "dlmf", "production-pilot.env"));
 const config = existsSync(configPath) ? await readSimpleEnvFile(configPath) : {};
 const databaseUrl = firstText(process.env.DLMF_GOVERNANCE_DATABASE_URL, process.env.DLMF_PILOT_DATABASE_URL, config.DLMF_PILOT_DATABASE_URL);
 if (!databaseUrl) throw new Error("DLMF governance PostgreSQL is not configured");
 const hindsightBaseUrl = process.env.DLMF_GOVERNANCE_HINDSIGHT_URL || "http://127.0.0.1:18888";
+const hindsightApiKey = resolveHindsightApiKey();
 const bankPrefix = process.env.DLMF_GOVERNANCE_HINDSIGHT_BANK_PREFIX || "dlmf-dl-nancy-life-v1";
 const reportPath = resolve(process.env.DLMF_GOVERNANCE_REMEDIATION_REPORT || join(
   home, ".local", "share", "digital-life", "nancy-resident", "memory-runtime",
@@ -152,7 +160,11 @@ try {
     }
 
     const HindsightClient = await loadHindsightClientConstructor();
-    const hindsight = new HindsightClient({ baseUrl: hindsightBaseUrl, userAgent: "dlmf-semantic-v8-governance/0.1.1" });
+    const hindsight = new HindsightClient({
+      baseUrl: hindsightBaseUrl,
+      ...(hindsightApiKey ? { apiKey: hindsightApiKey } : {}),
+      userAgent: "dlmf-semantic-v8-governance/0.1.1",
+    });
     const health = await fetch(`${hindsightBaseUrl}/health`, { signal: AbortSignal.timeout(5_000) });
     if (!health.ok) throw new Error(`Hindsight health HTTP ${health.status}`);
     const resolver = new DeterministicHindsightPlaneResolver(bankPrefix);
@@ -229,6 +241,24 @@ async function readSimpleEnvFile(target) {
     parsed[key] = value;
   }
   return parsed;
+}
+function resolveHindsightApiKey() {
+  const explicit = firstText(process.env.DLMF_GOVERNANCE_HINDSIGHT_API_KEY);
+  if (explicit !== undefined) return explicit;
+  const hermesHome = resolve(process.env.HERMES_HOME || join(home, ".hermes"));
+  const envPath = join(hermesHome, ".env");
+  if (!existsSync(envPath)) return undefined;
+  for (const raw of readFileSync(envPath, "utf8").split(/\r?\n/u)) {
+    let line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("export ")) line = line.slice(7);
+    const index = line.indexOf("=");
+    if (index < 1 || line.slice(0, index).trim() !== "HINDSIGHT_API_KEY") continue;
+    let value = line.slice(index + 1).trim();
+    if (value.length >= 2 && value[0] === value.at(-1) && ["'", '"'].includes(value[0])) value = value.slice(1, -1);
+    return value.trim() || undefined;
+  }
+  return undefined;
 }
 function firstText(...values) {
   return values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim();
