@@ -213,7 +213,7 @@ function isSubset(left: Set<string>, right: Set<string>): boolean {
 }
 
 export class DeterministicSemanticMemoryGovernance implements SemanticMemoryGovernance {
-  constructor(readonly policyVersion = "dlmf-semantic-v7") {}
+  constructor(readonly policyVersion = "dlmf-semantic-v8") {}
 
   classify(unit: ProviderMemoryUnit): SemanticClassification {
     const operationalDirective = isOneShotOperationalDirective(unit.proposedContent.text);

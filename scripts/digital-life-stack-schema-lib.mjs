@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 export const DLMF_CANONICAL_AUTHORITY = "digital-life-memory-fabric";
 export const DLMF_DLS_SCHEMA_CONTRACT = "dlmf/digital-life-stack-schema/v1";
-export const DLMF_DLS_EXPECTED_STATE = "current-0008";
+export const DLMF_DLS_EXPECTED_STATE = "current-0009";
 export const DLMF_DLS_MIGRATIONS = [
   "0001_canonical_core.sql",
   "0002_central_operations.sql",
@@ -13,12 +13,14 @@ export const DLMF_DLS_MIGRATIONS = [
   "0006_semantic_review_queue.sql",
   "0007_insight_promotion_governance.sql",
   "0008_provider_extraction_artifacts.sql",
+  "0009_semantic_review_policy_supersession.sql",
 ];
 
 const TRACKED_MIGRATIONS = new Set([
   "0006_semantic_review_queue.sql",
   "0007_insight_promotion_governance.sql",
   "0008_provider_extraction_artifacts.sql",
+  "0009_semantic_review_policy_supersession.sql",
 ]);
 
 export function validatedDlmfSchema(value) {
@@ -64,6 +66,7 @@ export async function inspectDigitalLifeStackSchema(queryable) {
   const has0006 = ledgerSet.has("0006_semantic_review_queue.sql");
   const has0007 = ledgerSet.has("0007_insight_promotion_governance.sql");
   const has0008 = ledgerSet.has("0008_provider_extraction_artifacts.sql");
+  const has0009 = ledgerSet.has("0009_semantic_review_policy_supersession.sql");
 
   let state = "partial-or-future";
   if (allAbsent) {
@@ -82,7 +85,12 @@ export async function inspectDigitalLifeStackSchema(queryable) {
     state = "stale-0007";
   } else if (
     through0005 && reviewComplete && present.promotion_events && present.ledger
-    && ledgerKnown && ledger.length === 3 && has0006 && has0007 && has0008
+    && ledgerKnown && ledger.length === 3 && has0006 && has0007 && has0008 && !has0009
+  ) {
+    state = "stale-0008";
+  } else if (
+    through0005 && reviewComplete && present.promotion_events && present.ledger
+    && ledgerKnown && ledger.length === 4 && has0006 && has0007 && has0008 && has0009
   ) {
     state = DLMF_DLS_EXPECTED_STATE;
   }
@@ -117,7 +125,7 @@ export async function bootstrapDigitalLifeStackSchema(
         "DLMF schema is partial, corrupted, or newer than this integration contract; refusing automatic repair",
       );
     }
-    if ((before.state === "stale-0005" || before.state === "stale-0006" || before.state === "stale-0007") && !allowUpgrade) {
+    if ((before.state === "stale-0005" || before.state === "stale-0006" || before.state === "stale-0007" || before.state === "stale-0008") && !allowUpgrade) {
       throw new Error(
         `DLMF schema ${before.state} is stale; explicit DLMF_DLS_ALLOW_UPGRADE=1 is required`,
       );
@@ -131,7 +139,9 @@ export async function bootstrapDigitalLifeStackSchema(
           ? DLMF_DLS_MIGRATIONS.slice(6)
           : before.state === "stale-0007"
             ? DLMF_DLS_MIGRATIONS.slice(7)
-            : [];
+            : before.state === "stale-0008"
+              ? DLMF_DLS_MIGRATIONS.slice(8)
+              : [];
     const applied = [];
     for (const migration of migrations) {
       await client.query(await readFile(resolve(rootDir, "migrations", migration), "utf8"));
@@ -173,6 +183,17 @@ async function verifyCurrentShape(queryable) {
     EXISTS(SELECT 1 FROM information_schema.columns
       WHERE table_schema=current_schema() AND table_name='memory_distillation_receipts' AND column_name='provider_extraction_checksum')
       AS provider_extraction_checksum`)).rows[0] ?? {};
+  const constraints = (await queryable.query(`SELECT
+    EXISTS(SELECT 1 FROM pg_constraint
+      WHERE conrelid='semantic_review_cases'::regclass
+        AND conname='semantic_review_cases_latest_disposition_check'
+        AND pg_get_constraintdef(oid) LIKE '%policy_superseded%')
+      AS semantic_review_case_policy_supersession,
+    EXISTS(SELECT 1 FROM pg_constraint
+      WHERE conrelid='semantic_review_events'::regclass
+        AND conname='semantic_review_events_disposition_check'
+        AND pg_get_constraintdef(oid) LIKE '%policy_superseded%')
+      AS semantic_review_event_policy_supersession`)).rows[0] ?? {};
   const triggers = (await queryable.query(`SELECT
     EXISTS(SELECT 1 FROM pg_trigger
       WHERE tgrelid='semantic_review_events'::regclass
@@ -192,6 +213,8 @@ async function verifyCurrentShape(queryable) {
     reflectiveInsightWriteGuard: columns.insight_write_guard === true,
     providerExtractionRef: columns.provider_extraction_ref === true,
     providerExtractionChecksum: columns.provider_extraction_checksum === true,
+    semanticReviewCasePolicySupersession: constraints.semantic_review_case_policy_supersession === true,
+    semanticReviewEventPolicySupersession: constraints.semantic_review_event_policy_supersession === true,
     semanticReviewEventsAppendOnly: triggers.semantic_review_append_only === true,
     promotionEventsAppendOnly: triggers.promotion_events_append_only === true,
     providerExtractionImmutable: triggers.provider_extraction_immutable === true,

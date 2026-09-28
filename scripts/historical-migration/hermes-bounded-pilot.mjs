@@ -178,7 +178,7 @@ const migrationContract = {
     admission: admissionPolicyIdentity,
     retention: retentionPolicyVersion,
     curation: curationProviderVersion,
-    semantic: "dlmf-semantic-v7",
+    semantic: "dlmf-semantic-v8",
   },
 };
 

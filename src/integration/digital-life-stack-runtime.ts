@@ -194,10 +194,11 @@ class PostgresDlmfReadiness implements DigitalLifeStackDlmfReadiness {
     const migrations = (await this.pool.query(
       "SELECT migration_name FROM dlfm_schema_migrations ORDER BY migration_name",
     )).rows.map((value) => String(value.migration_name));
-    const ready = migrations.length === 3
+    const ready = migrations.length === 4
       && migrations[0] === "0006_semantic_review_queue.sql"
       && migrations[1] === "0007_insight_promotion_governance.sql"
-      && migrations[2] === "0008_provider_extraction_artifacts.sql";
-    return { ready, schemaState: ready ? "current-0008" : "stale-or-future" };
+      && migrations[2] === "0008_provider_extraction_artifacts.sql"
+      && migrations[3] === "0009_semantic_review_policy_supersession.sql";
+    return { ready, schemaState: ready ? "current-0009" : "stale-or-future" };
   }
 }

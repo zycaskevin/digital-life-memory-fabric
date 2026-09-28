@@ -174,7 +174,7 @@ function service(
 
 test("DLMF-MEM-GOV-001 detects bounded one-shot operational directives", () => {
   const semantic = new DeterministicSemanticMemoryGovernance();
-  assert.equal(semantic.policyVersion, "dlmf-semantic-v7");
+  assert.equal(semantic.policyVersion, "dlmf-semantic-v8");
 
   for (const [index, text] of rejectedOperationalDirectives.entries()) {
     assert.equal(isOneShotOperationalDirective(text), true, text);
@@ -219,7 +219,7 @@ test("DLMF-MEM-GOV-001 end-to-end keeps one-shot controls as supporting evidence
 
     assert.equal(receipt.status, "complete");
     assert.equal(receipt.canonicalizationOutcome, "no_memory_worthy_content");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v8");
     assert.equal(receipt.curationOutcomes.supporting_evidence_only, units.length);
     assert.equal(receipt.curationOutcomes.canonical_candidate, 0);
     assert.equal(receipt.candidateIds.length, 0);

@@ -76,7 +76,7 @@ dlmf.verified-retrieval-view.v1
 
 The manifest is accepted only when it is an owner-private, non-symlink regular JSON file. It binds one public scope and 1..8 unique `read_only_historical` mounts with the same life DID.
 
-Every mounted PostgreSQL schema must independently satisfy `current-0008`. Any invalid/unready mount fails service composition closed.
+Every mounted PostgreSQL schema must independently satisfy `current-0009`. Any invalid/unready mount fails service composition closed.
 
 ## Public API
 
@@ -129,7 +129,7 @@ The real completed historical destination was mounted read-only with its real Hi
 
 Observed content-free evidence:
 
-- primary bootstrap: `current-0008`, 8 migrations applied;
+- primary bootstrap: `current-0009`, 9 migrations applied;
 - ingress: `scope_bound=true`, `retrieval_view=nancy-life-uat`;
 - retrieval provider: `dlmf-memory-view:nancy-life-uat`;
 - received candidates: 5;

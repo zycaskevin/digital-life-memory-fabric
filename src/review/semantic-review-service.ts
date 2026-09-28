@@ -20,6 +20,7 @@ const pendingDispositions = new Set<SemanticReviewDisposition>([
   "confirmed_unrelated",
   "invalid_candidate",
   "needs_more_evidence",
+  "policy_superseded",
 ]);
 const sampleDispositions = new Set<SemanticReviewDisposition>([
   "approved_as_classified",
@@ -177,6 +178,20 @@ export class SemanticReviewQueueService {
     }
     if (!evidenceIds.includes(`curation:${current.curationRecordId}`)) {
       throw new ValidationError("semantic review evidence must bind the governed curation record");
+    }
+    if (request.disposition === "policy_superseded") {
+      const successorPolicyPrefix = `policy:${current.semanticPolicyVersion}->`;
+      const successorPolicyEvidence = evidenceIds.find((value) =>
+        value.startsWith(successorPolicyPrefix) && value.length > successorPolicyPrefix.length
+      );
+      const successorReceiptEvidence = evidenceIds.find((value) =>
+        value.startsWith("receipt:") && value.length > "receipt:".length
+      );
+      if (successorPolicyEvidence === undefined || successorReceiptEvidence === undefined) {
+        throw new ValidationError(
+          "policy_superseded review requires successor policy and receipt evidence",
+        );
+      }
     }
     const prior = await this.reviewStore.getEventByIdempotencyKey(
       request.scope,

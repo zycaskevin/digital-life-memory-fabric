@@ -156,6 +156,7 @@ test("DLMF-SG-006 exposes only the reviewed DLMF-owned concept allow-list", () =
     "nancy_live_commentary_placement",
     "generation_routing_8b",
     "dark_mode",
+    "narrative_third_person_game_series",
     "notifications",
     "interaction_language_traditional_chinese",
     "narrative_third_person",
@@ -177,7 +178,7 @@ test("DLMF-SG-006 merges reviewed English and Traditional Chinese preference fam
     ]).run(input("multilingual-reviewed-families"));
 
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v8");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 3);
     assert.equal(receipt.curationOutcomes.canonical_merge, 3);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
@@ -209,7 +210,7 @@ test("DLMF-SG-008 merges the production English and Traditional Chinese 8B prefe
     ]).run(input("production-8b-equivalence"));
 
     assert.equal(receipt.status, "complete");
-    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v7");
+    assert.equal(receipt.semanticPolicyVersion, "dlmf-semantic-v8");
     assert.equal(receipt.curationOutcomes.canonical_candidate, 1);
     assert.equal(receipt.curationOutcomes.canonical_merge, 1);
     assert.equal(receipt.curationOutcomes.pending_review, 0);
@@ -383,6 +384,104 @@ test("DLMF-SG-006 routes a same-concept opposite preference to contradiction rev
   });
 });
 
+test("DLMF semantic v8 repairs reviewed language, narrative-context, and Nancy placement false collisions", async () => {
+  const policy = new DeterministicSemanticMemoryGovernance();
+  const languageA = policy.classify(
+    unit(
+      "language_a",
+      "使用者偏好使用繁體中文，且要求報告格式使用條列式而非表格。",
+    ),
+  );
+  const languageB = policy.classify(
+    unit(
+      "language_b",
+      "The user prefers responses in Traditional Chinese and requires read-only independent reviews.",
+    ),
+  );
+  assert.equal(
+    languageA.semanticKey,
+    "preference:user:interaction_language:traditional_chinese",
+  );
+  assert.equal(languageB.semanticKey, languageA.semanticKey);
+  assert.equal(languageA.semanticPolarity, "affirmative");
+  assert.equal(languageB.semanticPolarity, "affirmative");
+
+  const selfExpression = policy.classify(
+    unit(
+      "self_expression_first_person",
+      "User prefers writing in the first person and dislikes the assistant using the third person.",
+    ),
+  );
+  const gameSeries = policy.classify(
+    unit(
+      "game_series_third_person",
+      "User prefers third-person narrative for the game series.",
+    ),
+  );
+  assert.equal(
+    selfExpression.semanticKey,
+    "preference:user:narrative:third_person",
+  );
+  assert.equal(selfExpression.semanticPolarity, "negative");
+  assert.equal(
+    gameSeries.semanticKey,
+    "preference:user:narrative:third_person:game_series",
+  );
+  assert.equal(gameSeries.semanticPolarity, "affirmative");
+  assert.notEqual(gameSeries.semanticKey, selfExpression.semanticKey);
+
+  const placement = policy.classify(
+    unit(
+      "nancy_inline_episode_rejection",
+      "User dislikes the 'episode + end-of-episode stream layer' structure and requires inline interleaving of story and live operations.",
+    ),
+  );
+  assert.equal(
+    placement.semanticKey,
+    "preference:user:story_stream_structure:nancy_live_commentary_placement",
+  );
+  assert.equal(placement.semanticPolarity, "affirmative");
+
+  await withArchive(async (archive) => {
+    const store = new InMemoryCanonicalMemoryStore();
+    const curationStore = new InMemoryMemoryCurationRecordStore();
+    const receipt = await service(archive, store, curationStore, [
+      unit(
+        "language_seed",
+        "使用者偏好使用繁體中文，且要求報告格式使用條列式而非表格。",
+      ),
+      unit(
+        "language_variant",
+        "The user prefers responses in Traditional Chinese and requires read-only independent reviews.",
+      ),
+      unit(
+        "nancy_inline_seed_v8",
+        "User prefers Nancy's operations and commentary to be threaded inline through the story rather than separated.",
+      ),
+      unit(
+        "nancy_inline_variant_v8",
+        "User dislikes the 'episode + end-of-episode stream layer' structure and requires inline interleaving of story and live operations.",
+      ),
+    ]).run(input("semantic-v8-reviewed-false-collision-repair"));
+
+    assert.equal(receipt.status, "complete");
+    assert.equal(receipt.curationOutcomes.pending_review, 0);
+    assert.equal(receipt.curationOutcomes.canonical_candidate, 2);
+    assert.equal(receipt.curationOutcomes.canonical_merge, 2);
+    const records = await curationStore.listByReceipt(receipt.receiptId);
+    assert.equal(
+      records.find((record) => record.providerUnitRef === "language_variant")
+        ?.semanticRelation,
+      "equivalent",
+    );
+    assert.equal(
+      records.find((record) => record.providerUnitRef === "nancy_inline_variant_v8")
+        ?.semanticRelation,
+      "equivalent",
+    );
+  });
+});
+
 test("DLMF-SG-007 applies an exact invalid-candidate decision only to a new remediation receipt", async () => {
   await withArchive(async (archive) => {
     const store = new InMemoryCanonicalMemoryStore();
@@ -431,14 +530,14 @@ test("DLMF-SG-007 applies an exact invalid-candidate decision only to a new reme
         providerUnitRef: invalidUnit.providerUnitRef,
         providerUnitText: invalidUnit.proposedContent.text,
         semanticKey: classified.semanticKey,
-        semanticPolicyVersion: "dlmf-semantic-v7",
+        semanticPolicyVersion: "dlmf-semantic-v8",
         memoryType: classified.memoryType,
         speakerProvenance: classified.speakerProvenance,
         semanticRelation: "contradicts",
         targetMemoryId: existingMemoryId,
       }),
       semanticKey: classified.semanticKey,
-      semanticPolicyVersion: "dlmf-semantic-v7",
+      semanticPolicyVersion: "dlmf-semantic-v8",
       memoryType: classified.memoryType,
       speakerProvenance: classified.speakerProvenance,
       semanticRelation: "contradicts" as const,

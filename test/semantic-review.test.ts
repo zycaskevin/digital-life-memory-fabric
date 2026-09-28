@@ -216,6 +216,66 @@ test("DLMF-SG-007 enforces scoped decisions, replay safety, and optimistic versi
   );
 });
 
+test("DLMF semantic review closes a superseded policy case only with successor evidence", async () => {
+  const curationStore = new InMemoryMemoryCurationRecordStore();
+  const reviewStore = new InMemorySemanticReviewStore();
+  const queue = new SemanticReviewQueueService(curationStore, reviewStore, new AdvancingClock());
+  const pending = record("policy_superseded", "pending_review", {
+    semanticPolicyVersion: "dlmf-semantic-v5",
+  });
+  await curationStore.put(pending);
+  const [reviewCase] = await queue.enqueueReceipt({ receiptId: pending.receiptId });
+  assert.ok(reviewCase);
+
+  const base = {
+    caseId: reviewCase.caseId,
+    scope,
+    expectedVersion: 1,
+    disposition: "policy_superseded" as const,
+    reviewer: { lifeDid: scope.lifeDid, agentId: "owner-reviewer" },
+    evidenceIds: [
+      `curation:${pending.recordId}`,
+      "policy:dlmf-semantic-v5->dlmf-semantic-v8",
+      "receipt:dist_successor_policy_v8",
+    ],
+    reasonCodes: ["review:policy_superseded_by_verified_successor"],
+  };
+
+  await assert.rejects(
+    queue.resolve({
+      ...base,
+      idempotencyKey: "policy-superseded-missing-receipt",
+      evidenceIds: [
+        `curation:${pending.recordId}`,
+        "policy:dlmf-semantic-v5->dlmf-semantic-v8",
+      ],
+    }),
+    /requires successor policy and receipt evidence/,
+  );
+
+  await assert.rejects(
+    queue.resolve({
+      ...base,
+      idempotencyKey: "policy-superseded-wrong-source-policy",
+      evidenceIds: [
+        `curation:${pending.recordId}`,
+        "policy:dlmf-semantic-v6->dlmf-semantic-v8",
+        "receipt:dist_successor_policy_v8",
+      ],
+    }),
+    /requires successor policy and receipt evidence/,
+  );
+
+  const resolved = await queue.resolve({
+    ...base,
+    idempotencyKey: "policy-superseded-v1-to-v8",
+  });
+  assert.equal(resolved.status, "resolved");
+  assert.equal(resolved.version, 2);
+  assert.equal(resolved.latestDecision?.disposition, "policy_superseded");
+  assert.equal(resolved.canonicalWritePerformed, false);
+});
+
 test("DLMF-SG-007 canary gate is read-only, content-free, and manual-only", async () => {
   const curationStore = new InMemoryMemoryCurationRecordStore();
   const reviewStore = new InMemorySemanticReviewStore();

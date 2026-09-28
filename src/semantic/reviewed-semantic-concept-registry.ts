@@ -44,6 +44,16 @@ const normativeNegativeInlinePattern =
 const explicitSeparatePreferencePattern =
   /\b(?:prefers?|requires?|wants?)\b[^.!?]{0,100}(?:separate[ds]?|end[- ]of[- ](?:episode|section))|(?:偏好|要求|希望)[^。！？]{0,100}(?:分段|獨立實況|章末實況)/i;
 const placementContrastPattern = /\brather\s+than\b|\binstead\s+of\b|而非|而不是|而不|不是/i;
+const rejectSeparatePlacementPattern =
+  /\b(?:dislikes?|hates?|avoids?|rejects?)\b(?:(?!inline|interleav\w*|threaded|interspers\w*)[^.!?]){0,180}(?:separate[ds]?|end[- ]of[- ](?:episode|section)|episode[^.!?]{0,80}(?:stream|commentary))|(?:不喜歡|拒絕|不要)(?:(?!穿插|交錯|直接)[^。！？]){0,180}(?:分段|章末|結尾[^。！？]{0,80}(?:實況|直播|吐槽))/i;
+const thirdPersonNegativePattern =
+  /\b(?:dislikes?|hates?|avoids?|rejects?|does\s+not\s+prefer|doesn't\s+prefer)\b[^.!?]{0,100}third[- ]person|(?:不喜歡|不偏好|拒絕|不要)[^。！？]{0,100}第三人稱/i;
+const thirdPersonPositivePattern =
+  /\b(?:prefers?|likes?|requires?|wants?)\b(?:(?!first[- ]person)[^.!?]){0,100}third[- ]person|(?:偏好|喜歡|要求|希望)(?:(?!第一人稱)[^。！？]){0,100}第三人稱/i;
+const traditionalChineseNegativePattern =
+  /\b(?:does\s+not|doesn't|do\s+not|don't)\s+(?:prefer|like|want|require)\b[^.!?]{0,120}traditional\s+chinese|(?:不偏好|不喜歡|不要|拒絕)[^。！？]{0,120}(?:繁體中文|正體中文)/i;
+const traditionalChinesePositivePattern =
+  /\b(?:prefers?|likes?|requires?|wants?)\b[^.!?]{0,160}traditional\s+chinese|(?:偏好|喜歡|要求|希望)[^。！？]{0,160}(?:繁體中文|正體中文)/i;
 
 function genericPreferencePolarity(text: string): SemanticPolarity {
   if (qualifierExceptionPattern.test(text)) return "unknown";
@@ -59,6 +69,11 @@ function genericPreferencePolarity(text: string): SemanticPolarity {
 function nancyPlacementPolarity(text: string): SemanticPolarity {
   if (qualifierExceptionPattern.test(text)) return "unknown";
   const positive = positiveInlinePreferencePattern.test(text);
+  const rejectsSeparate = rejectSeparatePlacementPattern.test(text);
+  const containsInlinePlacement = /inline|interleav\w*|threaded|interspers\w*|穿插|交錯|直接/i.test(text);
+  const contrastsSeparatePlacement = placementContrastPattern.test(text) &&
+    /separate[ds]?|end[- ]of[- ](?:episode|section)|分段|章末|結尾/i.test(text);
+  if ((rejectsSeparate || contrastsSeparatePlacement) && containsInlinePlacement) return "affirmative";
   const negativeInline = negativeInlinePreferencePattern.test(text);
   if (normativeNegativeInlinePattern.test(text)) return "negative";
   if (negativeInline) return "negative";
@@ -66,6 +81,21 @@ function nancyPlacementPolarity(text: string): SemanticPolarity {
   if (positive && separate && !placementContrastPattern.test(text)) return "unknown";
   if (positive) return "affirmative";
   if (separate) return "negative";
+  return "unknown";
+}
+
+function traditionalChinesePolarity(text: string): SemanticPolarity {
+  if (traditionalChineseNegativePattern.test(text)) return "negative";
+  if (traditionalChinesePositivePattern.test(text)) return "affirmative";
+  return "unknown";
+}
+
+function thirdPersonPolarity(text: string): SemanticPolarity {
+  const negative = thirdPersonNegativePattern.test(text);
+  const positive = thirdPersonPositivePattern.test(text);
+  if (negative && positive) return "unknown";
+  if (negative) return "negative";
+  if (positive) return "affirmative";
   return "unknown";
 }
 
@@ -102,6 +132,16 @@ const definitions: readonly ConceptDefinition[] = [
     matches: (text) => explicitPreferenceWith(text, /dark\s+mode|深色模式|暗色模式/i),
   },
   {
+    id: "narrative_third_person_game_series",
+    key: "preference:user:narrative:third_person:game_series",
+    allowIncomparableEquivalent: true,
+    matches: (text) => explicitPreferenceWith(
+      text,
+      /third[- ]person|第三人稱/i,
+    ) && /game|games|series|遊戲|系列/i.test(text),
+    polarity: thirdPersonPolarity,
+  },
+  {
     id: "notifications",
     key: "preference:user:notifications",
     allowIncomparableEquivalent: false,
@@ -110,20 +150,23 @@ const definitions: readonly ConceptDefinition[] = [
   {
     id: "interaction_language_traditional_chinese",
     key: "preference:user:interaction_language:traditional_chinese",
-    allowIncomparableEquivalent: false,
+    allowIncomparableEquivalent: true,
     matches: (text) => explicitPreferenceWith(
       text,
       /traditional\s+chinese|繁體中文|正體中文/i,
     ) && /language|interact|communicat|response|reply|write|speak|語言|互動|溝通|回覆|回答|書寫|口語|使用/i.test(text),
+    polarity: traditionalChinesePolarity,
   },
   {
     id: "narrative_third_person",
     key: "preference:user:narrative:third_person",
-    allowIncomparableEquivalent: false,
+    allowIncomparableEquivalent: true,
     matches: (text) => explicitPreferenceWith(
       text,
       /third[- ]person|第三人稱/i,
-    ) && /story|stories|narrative|novel|writing|style|故事|小說|敘事|寫作|風格/i.test(text),
+    ) && /story|stories|narrative|novel|writing|style|故事|小說|敘事|寫作|風格/i.test(text)
+      && !/game|games|series|遊戲|系列/i.test(text),
+    polarity: thirdPersonPolarity,
   },
   {
     id: "short_games_first",

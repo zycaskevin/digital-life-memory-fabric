@@ -995,6 +995,7 @@ async function createPilotPostgres(databaseUrl) {
     "migrations/0006_semantic_review_queue.sql",
     "migrations/0007_insight_promotion_governance.sql",
     "migrations/0008_provider_extraction_artifacts.sql",
+      "migrations/0009_semantic_review_policy_supersession.sql",
   ]) {
     await pool.query(await readFile(resolve(migration), "utf8"));
   }
