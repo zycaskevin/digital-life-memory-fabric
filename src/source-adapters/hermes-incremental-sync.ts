@@ -97,7 +97,16 @@ export function isBackgroundOperationalHermesExperience(experience: NormalizedEx
   // output, so the user-only transient heuristic below cannot safely classify
   // them. Keep the source version checkpointed and visible to Development as
   // content-free evidence, but never submit it directly for canonical memory.
-  return experience.metadata.source === "cron";
+  if (experience.metadata.source === "cron") return true;
+
+  // HLB cognition sessions are task-isolated runtime/model executions created
+  // by the bridge itself. Their `user` message is an execution instruction,
+  // not a new owner-authored life experience. Treating those API sessions as
+  // canonical candidates lets UAT/research prompts masquerade as preferences.
+  // Keep them checkpointed for Development/audit, but never distill them into
+  // the Digital Life's canonical memory.
+  return experience.metadata.source === "api_server" &&
+    experience.sourceId.startsWith("hlb-cognition-");
 }
 
 export function isTransientUserOnlyHermesExperience(experience: NormalizedExperience): boolean {
