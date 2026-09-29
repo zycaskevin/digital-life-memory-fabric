@@ -14,6 +14,11 @@ import {
 } from "../domain/utils.js";
 import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 
+export type CanonicalVerificationStore = Pick<
+  CanonicalMemoryStore,
+  "getHeads" | "getRevisions"
+>;
+
 const validMemoryTypes = new Set([
   "preference",
   "technical_fact",
@@ -74,7 +79,7 @@ export interface VerificationOptions {
 
 export class CanonicalVerifier {
   constructor(
-    private readonly store: CanonicalMemoryStore,
+    private readonly store: CanonicalVerificationStore,
     private readonly clock: Clock = new SystemClock(),
   ) {}
 

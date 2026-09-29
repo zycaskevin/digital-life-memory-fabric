@@ -43,6 +43,11 @@ export interface HermesIncrementalSyncOptions {
   checkpointStore: HermesIncrementalCheckpointStore;
   distillation?: { run(input: any): Promise<DistillationReceipt> };
   ingestor?: NormalizedExperienceIngestor;
+  /**
+   * Development-observation mode. Changed session versions emit only
+   * content-free DLMF references and never invoke distillation/ingestion.
+   */
+  referenceOnly?: boolean;
   scope: MemoryScope;
   origin: MemoryAuthor;
   policies: NormalizedExperienceDistillationPolicies;
@@ -64,6 +69,17 @@ export interface HermesIncrementalSyncResult {
 
 const EPHEMERAL_USER_INTERACTION_PATTERN = /^(?:你好|您好|嗨|哈囉|哈啰|早安|午安|晚安|謝謝|谢谢|感謝|感谢|多謝|多谢|好|好的|好啊|可以|可以啊|嗯|嗯嗯|收到|知道了|了解|明白|\/start|hi|hello|hey|thanks|thank\s+you|ok|okay|got\s+it|understood)\s*[。.!！?？~～]*$/iu;
 
+function isFirstContactGreeting(text: string): boolean {
+  // A bounded social opening is interaction evidence, not durable memory content.
+  // Keep this semantic and identity-agnostic: no Digital Life name or owner name
+  // participates in the rule. The full string must match the opening shape so a
+  // durable fact appended before/after the greeting still enters normal DLMF.
+  if (text.length > 160) return false;
+  const chinese = /^(?:你好|您好|嗨|哈囉|哈啰)[，,\s]*(?:(?:我是|我叫)[^。.!！?？]{1,32}[。.!！?？]\s*)?(?:(?:今天是)?(?:我們|我们)?(?:的)?第一次(?:聊天|對話|对话)|初次(?:見面|见面))[，,。.!！?？\s]*(?:很高興|很高兴|很開心|很开心)(?:認識|认识|見到|见到)你[。.!！?？~～]*$/iu;
+  const english = /^(?:hi|hello|hey)[,!\.\s]*(?:(?:i\s+am|i'm|my\s+name\s+is)\s+[^.!?]{1,32}[.!?]\s*)?(?:(?:this\s+is\s+)?(?:our\s+)?first\s+(?:chat|conversation|time\s+(?:chatting|talking)))[,!\.\s]*nice\s+to\s+meet\s+you[.!?~]*$/iu;
+  return chinese.test(text) || english.test(text);
+}
+
 /**
  * Fast fail-safe for live Hermes sync only. A session is source-level transient
  * when every user-authored textual contribution is an exact greeting,
@@ -75,6 +91,24 @@ const EPHEMERAL_USER_INTERACTION_PATTERN = /^(?:你好|您好|嗨|哈囉|哈啰|
  * gains durable user content, its fingerprint changes and the complete DLMF
  * distillation/admission path runs normally.
  */
+export function isBackgroundOperationalHermesExperience(experience: NormalizedExperience): boolean {
+  // Hermes cron sessions are autonomous operational executions rather than
+  // human conversation. They may contain tool calls and durable-looking tool
+  // output, so the user-only transient heuristic below cannot safely classify
+  // them. Keep the source version checkpointed and visible to Development as
+  // content-free evidence, but never submit it directly for canonical memory.
+  if (experience.metadata.source === "cron") return true;
+
+  // HLB cognition sessions are task-isolated runtime/model executions created
+  // by the bridge itself. Their `user` message is an execution instruction,
+  // not a new owner-authored life experience. Treating those API sessions as
+  // canonical candidates lets UAT/research prompts masquerade as preferences.
+  // Keep them checkpointed for Development/audit, but never distill them into
+  // the Digital Life's canonical memory.
+  return experience.metadata.source === "api_server" &&
+    experience.sourceId.startsWith("hlb-cognition-");
+}
+
 export function isTransientUserOnlyHermesExperience(experience: NormalizedExperience): boolean {
   const actorKinds = new Map(experience.actors.map((actor) => [actor.actorId, actor.kind]));
   const userTexts: string[] = [];
@@ -91,7 +125,9 @@ export function isTransientUserOnlyHermesExperience(experience: NormalizedExperi
     userTexts.push(event.content.normalize("NFKC").trim());
   }
   return userTexts.length > 0 && userTexts.every((text) =>
-    isOneShotOperationalDirective(text) || EPHEMERAL_USER_INTERACTION_PATTERN.test(text)
+    isOneShotOperationalDirective(text)
+      || EPHEMERAL_USER_INTERACTION_PATTERN.test(text)
+      || isFirstContactGreeting(text)
   );
 }
 
@@ -101,16 +137,23 @@ export function isTransientUserOnlyHermesExperience(experience: NormalizedExperi
 export class HermesIncrementalSyncService {
   readonly #adapter: HermesSourceAdapter;
   readonly #checkpointStore: HermesIncrementalCheckpointStore;
-  readonly #ingestor: NormalizedExperienceIngestor;
+  readonly #ingestor: NormalizedExperienceIngestor | undefined;
+  readonly #referenceOnly: boolean;
   readonly #scope: MemoryScope;
   readonly #pageSize: number;
   readonly #clock: () => Date;
 
   constructor(options: HermesIncrementalSyncOptions) {
-    this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.2.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
+    this.#adapter = new HermesSourceAdapter({ reader: options.reader, version: options.adapterVersion ?? "0.3.0", ...(options.clock === undefined ? {} : { clock: options.clock }) });
     this.#checkpointStore = options.checkpointStore;
     this.#scope = { ...options.scope };
-    if (options.ingestor !== undefined) this.#ingestor = options.ingestor;
+    this.#referenceOnly = options.referenceOnly === true;
+    if (this.#referenceOnly) {
+      if (options.ingestor !== undefined || options.distillation !== undefined) {
+        throw new Error("reference-only Hermes sync must not receive an ingestor or distillation provider");
+      }
+      this.#ingestor = undefined;
+    } else if (options.ingestor !== undefined) this.#ingestor = options.ingestor;
     else {
       if (options.distillation === undefined) throw new Error("Hermes incremental sync requires ingestor or distillation");
       this.#ingestor = new NormalizedExperienceDistillationBridge({ distillation: options.distillation, scope: options.scope, origin: options.origin, policies: options.policies });
@@ -157,7 +200,23 @@ export class HermesIncrementalSyncService {
         result.changed += 1;
         const read = await this.#adapter.read(unit);
         const normalized = await this.#adapter.normalize(read);
-        if (isTransientUserOnlyHermesExperience(normalized)) {
+        if (this.#referenceOnly) {
+          result.experiences.push(
+            projectDevelopmentExperienceReference(
+              normalized,
+              this.#scope,
+              "REFERENCE_ONLY",
+            ),
+          );
+          next.sessions[unit.source.sourceId] = normalized.provenance.sourceFingerprint.value;
+          next.updatedAt = this.#clock().toISOString();
+          await this.#checkpointStore.save(next);
+          continue;
+        }
+        if (
+          isBackgroundOperationalHermesExperience(normalized)
+          || isTransientUserOnlyHermesExperience(normalized)
+        ) {
           result.skipped += 1;
           result.experiences.push(
             projectDevelopmentExperienceReference(
@@ -174,6 +233,9 @@ export class HermesIncrementalSyncService {
         const hasTextualEvidence = normalized.events.some((event) => typeof event.content === "string" && event.content.trim().length > 0)
           || normalized.content.some((content) => typeof content.text === "string" && content.text.trim().length > 0);
         if (hasTextualEvidence) {
+          if (this.#ingestor === undefined) {
+            throw new Error("Hermes incremental ingestor is unavailable outside reference-only mode");
+          }
           const receipt = await this.#ingestor.ingest(normalized);
           result.receipts.push(receipt);
           result.experiences.push(

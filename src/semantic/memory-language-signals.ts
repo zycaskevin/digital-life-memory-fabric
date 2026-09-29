@@ -8,7 +8,7 @@ const chineseActorPreferencePattern =
   /(?:用戶|使用者|我|我們|Nancy)\s*(?:的)?\s*(?:明確|清楚|最新|現在)?\s*(?:偏好|比較喜歡|更喜歡|不喜歡|喜歡|要求|希望)/i;
 
 const durableOperationalScopePattern =
-  /(?:以後|今後|往後|未來|每次|每一步|每一(?:次|步)|一律|總是|預設|默認|自動|除非|沒有[^。！？\n]{0,40}阻塞|無[^。！？\n]{0,40}阻塞|不用[^。！？\n]{0,40}(?:詢問|問我)|不需要[^。！？\n]{0,40}(?:詢問|問我))|\b(?:from\s+now\s+on|going\s+forward|in\s+the\s+future|always|every\s+(?:time|step)|by\s+default|automatically|autonomously|unless|whenever|without\s+asking|do\s+not\s+ask\s+me\s+every|don't\s+ask\s+me\s+every|if\s+(?:there\s+is\s+|there's\s+)?no\s+blocker|when\s+(?:there\s+is\s+|there's\s+)?no\s+blocker)\b/i;
+  /(?:以後|今後|往後|未來|每次|每一步|每一(?:次|步)|一律|總是|預設|默認|自動(?!化)|除非|沒有[^。！？\n]{0,40}阻塞|無[^。！？\n]{0,40}阻塞|不用[^。！？\n]{0,40}(?:詢問|問我)|不需要[^。！？\n]{0,40}(?:詢問|問我))|\b(?:from\s+now\s+on|going\s+forward|in\s+the\s+future|always|every\s+(?:time|step)|by\s+default|automatically|autonomously|unless|whenever|without\s+asking|do\s+not\s+ask\s+me\s+every|don't\s+ask\s+me\s+every|if\s+(?:there\s+is\s+|there's\s+)?no\s+blocker|when\s+(?:there\s+is\s+|there's\s+)?no\s+blocker)\b/i;
 const directChineseOperationalDirectivePattern =
   /^(?:請|麻煩)?\s*(?:直接)?\s*(?:開始(?:吧|執行(?:任務)?|任務)?|繼續(?:吧|執行|完成|進行|做|往下)?|下一步|往下|進行下一步|恢復(?:吧|執行)?|目前進度(?:如何|呢|怎樣|怎麼樣)?)\s*[吧嗎呢啊喔哦?？!！。]*$/i;
 const directEnglishOperationalDirectivePattern =
@@ -30,6 +30,12 @@ const chineseInlineNormativePattern =
 
 const operationalBehaviorPattern =
   /(?:繼續|開始|執行|往下|詢問|問我)|\b(?:continue|proceed|resume|execute|execution|ask|autonomous|autonomously)\b/i;
+const taskScopedRequestPattern =
+  /(?:用戶|使用者)\s*(?:要求|希望|指示|請求)\s*(?:審查|檢查|研究|分析|測試|執行|處理|建立|製作|撰寫|輸出|回報)|\b(?:the\s+)?user\s+(?:requires?|wants?|asks?|requests?)\b[^.!?]{0,60}\b(?:review|audit|analysis|research|test|execute|build|create|produce|output|report)\b/i;
+const explicitPreferenceVerbPattern =
+  /\b(?:prefers?|likes?|dislikes?|would\s+rather)\b|(?:偏好|喜歡|不喜歡|比較喜歡|更喜歡)/i;
+const preferenceExperimentPattern =
+  /\b(?:a\/?b\s+test(?:ing)?|test(?:ing)?|experiment(?:ing)?|compar(?:e|ing|ison))\b[^.!?]{0,160}\b(?:preference|style|narrative)\b|(?:測試|實驗|比較)[^。！？]{0,160}(?:偏好|風格|敘事)/i;
 
 /** A cross-session execution rule rather than a command for the current turn. */
 export function isDurableOperationalPreference(text: string): boolean {
@@ -66,6 +72,12 @@ export function isOneShotOperationalDirective(text: string): boolean {
 export function hasExplicitPreferenceAssertion(text: string): boolean {
   if (isOneShotOperationalDirective(text)) return false;
   if (isDurableOperationalPreference(text)) return true;
+  if (
+    (taskScopedRequestPattern.test(text) || preferenceExperimentPattern.test(text)) &&
+    !explicitPreferenceVerbPattern.test(text)
+  ) {
+    return false;
+  }
   return (
     englishActorPreferencePattern.test(text) ||
     englishActorNegativePreferencePattern.test(text) ||

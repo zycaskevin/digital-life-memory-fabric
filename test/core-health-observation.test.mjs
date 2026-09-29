@@ -49,7 +49,7 @@ function native(ready = true) {
     observedAt: AT,
     scopeBound: true,
     scope: structuredClone(SCOPE),
-    schemaState: ready ? "current-0008" : "stale-0007",
+    schemaState: ready ? "current-0009" : "stale-0007",
   };
 }
 function project(overrides = {}) {

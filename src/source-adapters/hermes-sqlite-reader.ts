@@ -5,9 +5,51 @@ type DatabaseSyncLike = {
   close(): void;
 };
 
+const utf8 = new TextDecoder("utf-8");
+const HERMES_STRUCTURED_CONTENT_PREFIX = "\u0000json:";
+
+function text(value: unknown): string {
+  if (value instanceof Uint8Array) return utf8.decode(value);
+  return String(value);
+}
 function bool(value: unknown): boolean { return Number(value ?? 0) === 1; }
-function opt(value: unknown): string | undefined { return value === null || value === undefined ? undefined : String(value); }
+function opt(value: unknown): string | undefined {
+  return value === null || value === undefined ? undefined : text(value);
+}
 function num(value: unknown): number { return Number(value ?? 0); }
+
+function flattenHermesStructuredContent(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map((part) => {
+      if (part !== null && typeof part === "object" && !Array.isArray(part)) {
+        const candidate = (part as Record<string, unknown>).text;
+        return typeof candidate === "string" ? candidate : "";
+      }
+      return String(part);
+    }).join("\n");
+  }
+  if (typeof value === "object") {
+    const candidate = (value as Record<string, unknown>).text;
+    return typeof candidate === "string" ? candidate : "";
+  }
+  return String(value);
+}
+
+function messageContent(value: unknown): string | undefined {
+  const raw = opt(value);
+  if (raw === undefined || !raw.startsWith(HERMES_STRUCTURED_CONTENT_PREFIX)) return raw;
+  try {
+    return flattenHermesStructuredContent(
+      JSON.parse(raw.slice(HERMES_STRUCTURED_CONTENT_PREFIX.length)) as unknown,
+    );
+  } catch {
+    // Fail closed on malformed source encoding: preserve the exact decoded
+    // scalar rather than silently inventing or dropping memory evidence.
+    return raw;
+  }
+}
 
 export class HermesSqliteReader implements HermesStateReader {
   readonly #databasePath: string;
@@ -41,11 +83,22 @@ export class HermesSqliteReader implements HermesStateReader {
 
   async listSessions(request: { afterSessionId?: string; limit: number }): Promise<HermesSessionRow[]> {
     return this.#withDb((db) => {
-      const rows = db.prepare(`SELECT id, source, profile_name, title, message_count, tool_call_count, started_at, ended_at,
-        last_activity_at, end_reason, archived, expiry_finalized, hidden, parent_session_id, chat_id, chat_type, thread_id, user_id
+      const rows = db.prepare(`SELECT
+        CAST(id AS BLOB) AS id,
+        CAST(source AS BLOB) AS source,
+        CAST(profile_name AS BLOB) AS profile_name,
+        CAST(title AS BLOB) AS title,
+        message_count, tool_call_count, started_at, ended_at, last_activity_at,
+        CAST(end_reason AS BLOB) AS end_reason,
+        archived, expiry_finalized, hidden,
+        CAST(parent_session_id AS BLOB) AS parent_session_id,
+        CAST(chat_id AS BLOB) AS chat_id,
+        CAST(chat_type AS BLOB) AS chat_type,
+        CAST(thread_id AS BLOB) AS thread_id,
+        CAST(user_id AS BLOB) AS user_id
         FROM sessions WHERE (? IS NULL OR id > ?) ORDER BY id ASC LIMIT ?`).all(request.afterSessionId ?? null, request.afterSessionId ?? null, request.limit) as Array<Record<string, unknown>>;
       return rows.map((r) => ({
-        id: String(r.id), source: String(r.source), profileName: opt(r.profile_name), title: opt(r.title), messageCount: num(r.message_count), toolCallCount: num(r.tool_call_count),
+        id: text(r.id), source: text(r.source), profileName: opt(r.profile_name), title: opt(r.title), messageCount: num(r.message_count), toolCallCount: num(r.tool_call_count),
         startedAt: r.started_at as number | string, ...(r.ended_at == null ? {} : { endedAt: r.ended_at as number | string }), ...(r.last_activity_at == null ? {} : { lastActivityAt: r.last_activity_at as number | string }),
         endReason: opt(r.end_reason), archived: bool(r.archived), expiryFinalized: bool(r.expiry_finalized), hidden: bool(r.hidden), parentSessionId: opt(r.parent_session_id), chatId: opt(r.chat_id), chatType: opt(r.chat_type), threadId: opt(r.thread_id), userId: opt(r.user_id),
       }));
@@ -54,17 +107,43 @@ export class HermesSqliteReader implements HermesStateReader {
 
   async readSession(sessionId: string): Promise<HermesSessionPayload> {
     return this.#withDb((db) => {
-      const r = db.prepare(`SELECT id, source, profile_name, title, message_count, tool_call_count, started_at, ended_at,
-        last_activity_at, end_reason, archived, expiry_finalized, hidden, parent_session_id, chat_id, chat_type, thread_id, user_id FROM sessions WHERE id=?`).get(sessionId) as Record<string, unknown> | undefined;
+      const r = db.prepare(`SELECT
+        CAST(id AS BLOB) AS id,
+        CAST(source AS BLOB) AS source,
+        CAST(profile_name AS BLOB) AS profile_name,
+        CAST(title AS BLOB) AS title,
+        message_count, tool_call_count, started_at, ended_at, last_activity_at,
+        CAST(end_reason AS BLOB) AS end_reason,
+        archived, expiry_finalized, hidden,
+        CAST(parent_session_id AS BLOB) AS parent_session_id,
+        CAST(chat_id AS BLOB) AS chat_id,
+        CAST(chat_type AS BLOB) AS chat_type,
+        CAST(thread_id AS BLOB) AS thread_id,
+        CAST(user_id AS BLOB) AS user_id
+        FROM sessions WHERE id=?`).get(sessionId) as Record<string, unknown> | undefined;
       if (!r) throw new Error(`Hermes session not found: ${sessionId}`);
       const session: HermesSessionRow = {
-        id: String(r.id), source: String(r.source), profileName: opt(r.profile_name), title: opt(r.title), messageCount: num(r.message_count), toolCallCount: num(r.tool_call_count), startedAt: r.started_at as number | string,
+        id: text(r.id), source: text(r.source), profileName: opt(r.profile_name), title: opt(r.title), messageCount: num(r.message_count), toolCallCount: num(r.tool_call_count), startedAt: r.started_at as number | string,
         ...(r.ended_at == null ? {} : { endedAt: r.ended_at as number | string }), ...(r.last_activity_at == null ? {} : { lastActivityAt: r.last_activity_at as number | string }), endReason: opt(r.end_reason), archived: bool(r.archived), expiryFinalized: bool(r.expiry_finalized), hidden: bool(r.hidden), parentSessionId: opt(r.parent_session_id), chatId: opt(r.chat_id), chatType: opt(r.chat_type), threadId: opt(r.thread_id), userId: opt(r.user_id),
       };
-      const rows = db.prepare(`SELECT id, session_id, role, content, tool_call_id, tool_calls, tool_name, timestamp, finish_reason,
-        reasoning, platform_message_id, _compressed_summary, active, compacted, display_kind, display_metadata FROM messages WHERE session_id=? ORDER BY id ASC`).all(sessionId) as Array<Record<string, unknown>>;
+      const rows = db.prepare(`SELECT
+        id,
+        CAST(session_id AS BLOB) AS session_id,
+        CAST(role AS BLOB) AS role,
+        CAST(content AS BLOB) AS content,
+        CAST(tool_call_id AS BLOB) AS tool_call_id,
+        CAST(tool_calls AS BLOB) AS tool_calls,
+        CAST(tool_name AS BLOB) AS tool_name,
+        timestamp,
+        CAST(finish_reason AS BLOB) AS finish_reason,
+        CAST(reasoning AS BLOB) AS reasoning,
+        CAST(platform_message_id AS BLOB) AS platform_message_id,
+        _compressed_summary, active, compacted,
+        CAST(display_kind AS BLOB) AS display_kind,
+        CAST(display_metadata AS BLOB) AS display_metadata
+        FROM messages WHERE session_id=? ORDER BY id ASC`).all(sessionId) as Array<Record<string, unknown>>;
       const messages: HermesMessageRow[] = rows.map((m) => ({
-        id: num(m.id), sessionId: String(m.session_id), role: String(m.role), content: opt(m.content), toolCallId: opt(m.tool_call_id), toolCalls: opt(m.tool_calls), toolName: opt(m.tool_name), timestamp: m.timestamp as number | string, finishReason: opt(m.finish_reason), reasoning: opt(m.reasoning), platformMessageId: opt(m.platform_message_id), compressedSummary: bool(m._compressed_summary), active: !Object.hasOwn(m,"active") || bool(m.active), compacted: bool(m.compacted), displayKind: opt(m.display_kind), displayMetadata: opt(m.display_metadata),
+        id: num(m.id), sessionId: text(m.session_id), role: text(m.role), content: messageContent(m.content), toolCallId: opt(m.tool_call_id), toolCalls: opt(m.tool_calls), toolName: opt(m.tool_name), timestamp: m.timestamp as number | string, finishReason: opt(m.finish_reason), reasoning: opt(m.reasoning), platformMessageId: opt(m.platform_message_id), compressedSummary: bool(m._compressed_summary), active: !Object.hasOwn(m,"active") || bool(m.active), compacted: bool(m.compacted), displayKind: opt(m.display_kind), displayMetadata: opt(m.display_metadata),
       }));
       return { session, messages };
     });

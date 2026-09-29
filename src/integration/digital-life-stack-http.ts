@@ -3,8 +3,10 @@ import { ValidationError } from "../domain/errors.js";
 import type { MemoryScope } from "../domain/types.js";
 import type { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
-import type { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
-import type { VerifiedRetrievalResult } from "../retrieval/types.js";
+import type {
+  VerifiedRetrievalReader,
+  VerifiedRetrievalResult,
+} from "../retrieval/types.js";
 import { projectDevelopmentExperienceReference } from "../source-adapters/development-experience-reference.js";
 import type { NormalizedExperience } from "../source-adapters/contracts.js";
 
@@ -30,7 +32,7 @@ export interface DigitalLifeStackDlmfIngressOptions {
   runtimeId: string;
   allowedScope?: MemoryScope;
   distillation: Pick<TranscriptDistillationService, "run">;
-  retrieval: Pick<VerifiedRetrievalService, "retrieve">;
+  retrieval: VerifiedRetrievalReader;
   readiness: DigitalLifeStackDlmfReadiness;
   policies: DigitalLifeStackDlmfPolicies;
 }
@@ -48,7 +50,7 @@ export class DigitalLifeStackDlmfIngress {
   readonly #runtimeId: string;
   readonly #allowedScope: MemoryScope | undefined;
   readonly #distillation: Pick<TranscriptDistillationService, "run">;
-  readonly #retrieval: Pick<VerifiedRetrievalService, "retrieve">;
+  readonly #retrieval: VerifiedRetrievalReader;
   readonly #readiness: DigitalLifeStackDlmfReadiness;
   readonly #policies: DigitalLifeStackDlmfPolicies;
 
@@ -286,6 +288,7 @@ function publicRetrieval(result: VerifiedRetrievalResult) {
       epistemicStatus: item.revision.epistemicStatus,
       committedAt: item.revision.committedAt,
     })),
+    ...(result.view === undefined ? {} : { view: result.view }),
     verification: result.verification,
   };
 }

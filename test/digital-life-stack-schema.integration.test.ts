@@ -18,6 +18,7 @@ const MIGRATIONS = [
   "migrations/0006_semantic_review_queue.sql",
   "migrations/0007_insight_promotion_governance.sql",
   "migrations/0008_provider_extraction_artifacts.sql",
+  "migrations/0009_semantic_review_policy_supersession.sql",
 ];
 
 maybeTest("Digital-Life-Stack bootstrap is replay-safe and restart-ready on PostgreSQL", async () => {
@@ -30,8 +31,8 @@ maybeTest("Digital-Life-Stack bootstrap is replay-safe and restart-ready on Post
       DLMF_DLS_SCHEMA: schema,
     });
     assert.match(first.stdout, /DLMF_DLS_BOOTSTRAP=PASS/);
-    assert.match(first.stdout, /state=current-0008/);
-    assert.match(first.stdout, /applied=8/);
+    assert.match(first.stdout, /state=current-0009/);
+    assert.match(first.stdout, /applied=9/);
 
     const replay = await runScript("scripts/digital-life-stack-bootstrap.mjs", {
       DLMF_DLS_DATABASE_URL: databaseUrl,
@@ -59,6 +60,7 @@ maybeTest("Digital-Life-Stack bootstrap is replay-safe and restart-ready on Post
         { migration_name: "0006_semantic_review_queue.sql", count: 1 },
         { migration_name: "0007_insight_promotion_governance.sql", count: 1 },
         { migration_name: "0008_provider_extraction_artifacts.sql", count: 1 },
+        { migration_name: "0009_semantic_review_policy_supersession.sql", count: 1 },
       ]);
     } finally {
       await pool.end();
@@ -100,8 +102,8 @@ maybeTest("stale PostgreSQL schema fails closed until explicit upgrade", async (
       DLMF_DLS_SCHEMA: schema,
       DLMF_DLS_ALLOW_UPGRADE: "1",
     });
-    assert.match(upgraded.stdout, /state=current-0008/);
-    assert.match(upgraded.stdout, /applied=2/);
+    assert.match(upgraded.stdout, /state=current-0009/);
+    assert.match(upgraded.stdout, /applied=3/);
   } finally {
     await pool.end();
     await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);

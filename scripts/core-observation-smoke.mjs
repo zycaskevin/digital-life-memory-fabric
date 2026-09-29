@@ -54,7 +54,7 @@ with ContinuityStore(db) as store:
     agentId: "core-003b",
     runtimeId: "core-003b",
     allowedScope: scope,
-    readiness: { async ready() { return { ready: true, schemaState: "current-0008" }; } },
+    readiness: { async ready() { return { ready: true, schemaState: "current-0009" }; } },
     policies: { distillationPolicyVersion: "d", canonicalizationPolicyVersion: "c", admissionPolicyVersion: "a", retentionPolicyVersion: "r" },
     distillation: { async run() { throw new Error("observation must not distill"); } },
     retrieval: { async retrieve() { throw new Error("observation must not retrieve"); } },

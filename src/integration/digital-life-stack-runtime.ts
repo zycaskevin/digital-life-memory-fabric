@@ -10,13 +10,17 @@ import { PostgresDistillationReceiptStore } from "../distillation/postgres-disti
 import { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
 import type { MemoryRevision, MemoryScope } from "../domain/types.js";
-import type { MemoryRetrievalPort } from "../retrieval/types.js";
+import type {
+  MemoryRetrievalPort,
+  VerifiedRetrievalReader,
+} from "../retrieval/types.js";
 import { NormalizedExperienceDistillationBridge } from "../source-adapters/normalized-experience-distillation.js";
 import type { NormalizedExperienceIngestor } from "../source-adapters/source-migration.js";
 import { VerifiedRetrievalService } from "../retrieval/verified-retrieval-service.js";
 import { PostgresSemanticReviewStore } from "../review/postgres-semantic-review-store.js";
 import { SemanticReviewQueueService } from "../review/semantic-review-service.js";
 import type { SemanticReviewRemediationPolicy } from "../review/semantic-review-remediation.js";
+import type { CanonicalMemoryStore } from "../store/canonical-memory-store.js";
 import { PostgresCanonicalMemoryStore } from "../store/postgres-canonical-memory-store.js";
 import { CanonicalVerifier } from "../verification/canonical-verifier.js";
 import {
@@ -36,6 +40,7 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
   distillationProvider: MemoryDistillationProvider;
   providerExtractionArtifactStore?: ProviderExtractionArtifactStore;
   retrievalPort: CanonicalProjectionPort;
+  retrievalReaderFactory?: DigitalLifeStackDlmfRetrievalReaderFactory;
   curationProviderVersion?: string;
   semanticReviewRemediation?: SemanticReviewRemediationPolicy;
 }
@@ -43,6 +48,18 @@ export interface DigitalLifeStackDlmfRuntimeOptions {
 export interface CanonicalProjectionPort extends MemoryRetrievalPort {
   project(revision: Readonly<MemoryRevision>): Promise<void>;
 }
+
+export interface DigitalLifeStackDlmfRetrievalContext {
+  readonly primaryRetrieval: VerifiedRetrievalReader;
+  readonly primaryStore: Pick<
+    CanonicalMemoryStore,
+    "findCurrentRevisionBySemanticKey" | "getHeads" | "getRevisions"
+  >;
+}
+
+export type DigitalLifeStackDlmfRetrievalReaderFactory = (
+  context: DigitalLifeStackDlmfRetrievalContext,
+) => VerifiedRetrievalReader;
 
 export interface DigitalLifeStackDlmfRuntime {
   ingress: DigitalLifeStackDlmfIngress;
@@ -95,10 +112,14 @@ export function createDigitalLifeStackDlmfRuntime(
     canonicalStore,
     options.retrievalPort,
   );
-  const retrieval = new VerifiedRetrievalService(
+  const primaryRetrieval = new VerifiedRetrievalService(
     new CanonicalVerifier(canonicalStore),
     options.retrievalPort,
   );
+  const retrieval = options.retrievalReaderFactory?.({
+    primaryRetrieval,
+    primaryStore: canonicalStore,
+  }) ?? primaryRetrieval;
   const readiness = new PostgresDlmfReadiness(options.pool);
   const trustedRuntimeId = options.runtimeId ?? "digital-life-stack";
   const ingress = new DigitalLifeStackDlmfIngress({
@@ -173,10 +194,11 @@ class PostgresDlmfReadiness implements DigitalLifeStackDlmfReadiness {
     const migrations = (await this.pool.query(
       "SELECT migration_name FROM dlfm_schema_migrations ORDER BY migration_name",
     )).rows.map((value) => String(value.migration_name));
-    const ready = migrations.length === 3
+    const ready = migrations.length === 4
       && migrations[0] === "0006_semantic_review_queue.sql"
       && migrations[1] === "0007_insight_promotion_governance.sql"
-      && migrations[2] === "0008_provider_extraction_artifacts.sql";
-    return { ready, schemaState: ready ? "current-0008" : "stale-or-future" };
+      && migrations[2] === "0008_provider_extraction_artifacts.sql"
+      && migrations[3] === "0009_semantic_review_policy_supersession.sql";
+    return { ready, schemaState: ready ? "current-0009" : "stale-or-future" };
   }
 }

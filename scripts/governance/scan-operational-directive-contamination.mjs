@@ -66,7 +66,7 @@ try {
     mode: "dry_run",
     schema,
     rule: {
-      semanticPolicyVersion: "dlmf-semantic-v7",
+      semanticPolicyVersion: "dlmf-semantic-v8",
       ruleId: "operational_directive_ephemeral",
       proposedAction: "owner_review_then_governed_tombstone",
       hardDelete: false,

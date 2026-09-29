@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -24,6 +24,11 @@ if (!isLoopbackUrl(hindsightBaseUrl) && !hindsightApiKey) {
 }
 
 const dlfm = await import(new URL("../dist/index.js", import.meta.url));
+const retrievalViewConfig = loadOptionalRetrievalViewConfig(
+  process.env.DLMF_DLS_RETRIEVAL_VIEW_FILE,
+  allowedScope,
+  dlfm,
+);
 const HindsightClient = await loadHindsightClient();
 const hindsightClient = new HindsightClient({
   baseUrl: hindsightBaseUrl,
@@ -91,6 +96,21 @@ if (!state.ready) {
   throw new Error(`DLMF Digital-Life-Stack schema not ready: ${state.state}`);
 }
 
+let retrievalViewResources;
+try {
+  retrievalViewResources = retrievalViewConfig === undefined
+    ? undefined
+    : await createRetrievalViewResources({
+        config: retrievalViewConfig,
+        databaseUrl,
+        hindsightPort,
+        dlfm,
+      });
+} catch (error) {
+  await pool.end();
+  throw error;
+}
+
 const runtime = dlfm.createDigitalLifeStackDlmfRuntime({
   pool,
   archiveRoot,
@@ -106,6 +126,18 @@ const runtime = dlfm.createDigitalLifeStackDlmfRuntime({
   },
   distillationProvider,
   retrievalPort,
+  ...(retrievalViewResources === undefined
+    ? {}
+    : {
+        retrievalReaderFactory: ({ primaryRetrieval, primaryStore }) =>
+          new dlfm.VerifiedRetrievalViewService({
+            viewId: retrievalViewConfig.viewId,
+            publicScope: retrievalViewConfig.publicScope,
+            primaryRetrieval,
+            primaryStore,
+            historicalMounts: retrievalViewResources.mounts,
+          }),
+      }),
 });
 
 const server = createServer(async (incoming, outgoing) => {
@@ -134,17 +166,101 @@ await new Promise((resolvePromise, reject) => {
   server.once("error", reject);
   server.listen(port, host, resolvePromise);
 });
-console.log(`DLMF_DLS_INGRESS=READY host=${host} port=${port} schema=${schema} canonical_authority=digital-life-memory-fabric scope_bound=${allowedScope !== undefined}`);
+console.log(`DLMF_DLS_INGRESS=READY host=${host} port=${port} schema=${schema} canonical_authority=digital-life-memory-fabric scope_bound=${allowedScope !== undefined} retrieval_view=${retrievalViewConfig?.viewId ?? "none"}`);
 
 let closing = false;
 async function close() {
   if (closing) return;
   closing = true;
   await new Promise((resolvePromise) => server.close(resolvePromise));
-  await runtime.close();
+  try {
+    await runtime.close();
+  } finally {
+    if (retrievalViewResources !== undefined) {
+      await Promise.all(retrievalViewResources.pools.map((mountPool) => mountPool.end()));
+    }
+  }
 }
 process.on("SIGTERM", () => void close().finally(() => process.exit(0)));
 process.on("SIGINT", () => void close().finally(() => process.exit(0)));
+
+function loadOptionalRetrievalViewConfig(rawPath, boundScope, module) {
+  const supplied = rawPath?.trim();
+  if (!supplied) return undefined;
+  if (boundScope === undefined) {
+    throw new Error("DLMF retrieval view requires an exact DLMF_DLS_SCOPE_* binding");
+  }
+  const path = resolve(supplied);
+  const stat = lstatSync(path);
+  if (
+    !stat.isFile()
+    || stat.isSymbolicLink()
+    || (typeof process.getuid === "function" && stat.uid !== process.getuid())
+    || (stat.mode & 0o077) !== 0
+    || stat.size < 2
+    || stat.size > 65_536
+  ) {
+    throw new Error("DLMF retrieval view file must be an owner-private regular JSON file");
+  }
+  let value;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error("DLMF retrieval view file is not valid JSON");
+  }
+  return module.validateVerifiedRetrievalViewConfig(value, boundScope);
+}
+
+async function createRetrievalViewResources({
+  config,
+  databaseUrl: connectionString,
+  hindsightPort: providerPort,
+  dlfm: module,
+}) {
+  const pools = [];
+  const mounts = [];
+  try {
+    for (const mount of config.mounts) {
+      const mountSchema = validatedDlmfSchema(mount.schema);
+      const mountPool = new Pool({
+        connectionString,
+        options: `-c search_path=${mountSchema}`,
+        max: 2,
+        connectionTimeoutMillis: 5_000,
+      });
+      pools.push(mountPool);
+      const mountState = await inspectDigitalLifeStackSchema(mountPool);
+      if (!mountState.ready) {
+        throw new Error(
+          `DLMF retrieval view mount ${mount.mountId} not ready: ${mountState.state}`,
+        );
+      }
+      const mountStore = new module.PostgresCanonicalMemoryStore(mountPool);
+      const mountBanks = new module.DeterministicHindsightPlaneResolver(
+        mount.hindsightBankPrefix,
+      );
+      const mountPort = new module.HindsightCanonicalProjectionPort({
+        client: providerPort,
+        banks: mountBanks,
+        providerId: `hindsight:${mount.mountId}`,
+        recallBudget: "mid",
+      });
+      mounts.push({
+        mountId: mount.mountId,
+        scope: mount.scope,
+        mode: mount.mode,
+        retrieval: new module.VerifiedRetrievalService(
+          new module.CanonicalVerifier(mountStore),
+          mountPort,
+        ),
+      });
+    }
+    return { pools, mounts };
+  } catch (error) {
+    await Promise.all(pools.map((mountPool) => mountPool.end().catch(() => undefined)));
+    throw error;
+  }
+}
 
 async function loadHindsightClient() {
   const override = process.env.DLMF_DLS_HINDSIGHT_CLIENT_MODULE;

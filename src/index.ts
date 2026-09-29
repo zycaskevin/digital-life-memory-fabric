@@ -11,6 +11,8 @@ export * from "./operations/central-operations-store.js";
 export * from "./operations/types.js";
 export * from "./retrieval/types.js";
 export * from "./retrieval/verified-retrieval-service.js";
+export * from "./retrieval/verified-retrieval-view-service.js";
+export * from "./retrieval/verified-retrieval-view-config.js";
 export * from "./retrieval/hindsight-canonical-projection.js";
 export * from "./projection/obsidian-memory-projection.js";
 export * from "./ingress/relationship-os-http.js";

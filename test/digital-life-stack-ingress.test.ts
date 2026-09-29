@@ -31,7 +31,7 @@ function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?
       async ready() {
         return {
           ready: options.ready ?? true,
-          schemaState: options.schemaState ?? "current-0008",
+          schemaState: options.schemaState ?? "current-0009",
         };
       },
     },

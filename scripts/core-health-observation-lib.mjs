@@ -115,7 +115,7 @@ export function projectDlmfCoreObservations({
   verifyNative(readiness, expectedScope, "readiness", now);
 
   const observedAt = new Date(Math.min(parseTime(health.observedAt), parseTime(readiness.observedAt))).toISOString();
-  const ready = readiness.ok === true && readiness.schemaState === "current-0008";
+  const ready = readiness.ok === true && readiness.schemaState === "current-0009";
   const base = {
     schema: "digital-life.health.v1",
     componentId: componentManifest.componentId,

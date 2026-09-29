@@ -1,7 +1,7 @@
 # DLMF-MEM-GOV-001 — Operational Directive Lifetime Governance
 
 **Date:** 2026-09-15  
-**Status:** Implemented; existing-memory remediation review pending  
+**Status:** Implemented; existing-memory remediation closed
 **Applies to:** DLMF semantic governance, curation, canonical admission, Hermes historical migration
 
 ## Problem
@@ -119,7 +119,7 @@ This exactly matches the two known Operational Directive Leakage examples. No ad
 
 ## Remediation gate
 
-These two IDs are **candidates**, not automatically deleted data. The required remediation sequence remains:
+These two IDs were **candidates**, not automatically deleted data. The required remediation sequence was:
 
 1. owner review of the candidate set;
 2. governed invalidation/tombstone through DLMF authority;
@@ -128,3 +128,20 @@ These two IDs are **candidates**, not automatically deleted data. The required r
 5. replay/refresh verification proving the invalidated memories do not reappear.
 
 SQL hard deletion is prohibited.
+
+## Remediation closure — 2026-09-20
+
+After the full Hermes historical migration reached `11,269 / 11,269`, the lifetime rule was re-run read-only over the completed destination. It scanned `1,472` active Canonical heads and again matched **exactly the same two memory IDs**, with no third candidate.
+
+A guarded DLMF governance operator then applied the remediation through `MemoryCandidateService -> CanonicalMemoryAuthority`; it did not issue SQL deletion or rewrite history.
+
+- `mem_aa7dc7d58f4f4e05bed0821e4900b472`: revision `1 -> 2`, status `tombstoned`;
+- `mem_cb44e8fcedd8487493180eb3d5185e02`: revision `1 -> 2`, status `tombstoned`;
+- matching Hindsight canonical-projection units: `4 -> 0`;
+- post-remediation active-head scan: `1,470` active heads, `0` operational-directive leakage candidates;
+- Obsidian projection: `1,470` active notes, `2` excluded tombstoned memories, verification `PASS`;
+- inactive-memory leakage into the active graph: none.
+
+The operator is `scripts/governance/remediate-operational-directive-contamination.mjs`. It defaults to dry-run, binds the two reviewed target IDs, fails closed on any unexpected additional match or head/revision drift, and records a private audit report before/after provider projection cleanup.
+
+Canonical history and source evidence remain intact. The tombstones also activate the existing `suppressed_by_governed_forget` behavior: the same semantic memory cannot silently re-enter Canonical Memory merely because its old source experience is replayed.

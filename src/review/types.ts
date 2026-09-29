@@ -18,7 +18,8 @@ export type SemanticReviewDisposition =
   | "confirmed_unrelated"
   | "misclassified"
   | "invalid_candidate"
-  | "needs_more_evidence";
+  | "needs_more_evidence"
+  | "policy_superseded";
 
 export interface SemanticReviewDecision {
   decisionId: SemanticReviewDecisionId;

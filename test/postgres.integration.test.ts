@@ -78,6 +78,10 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
       "migrations/0008_provider_extraction_artifacts.sql",
       "utf8",
     );
+    const semanticReviewPolicySupersessionMigration = await readFile(
+      "migrations/0009_semantic_review_policy_supersession.sql",
+      "utf8",
+    );
     await pool.query(canonicalMigration);
     await pool.query(operationsMigration);
     await pool.query(distillationMigration);
@@ -86,6 +90,7 @@ maybeTest("PostgreSQL canonical core E2E preserves commit/revision/conflict/tomb
     await pool.query(semanticReviewMigration);
     await pool.query(promotionGovernanceMigration);
     await pool.query(providerExtractionArtifactMigration);
+    await pool.query(semanticReviewPolicySupersessionMigration);
 
     const candidates = new MemoryCandidateService(store);
     const authority = new CanonicalMemoryAuthority(store);
