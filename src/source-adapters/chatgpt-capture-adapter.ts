@@ -99,7 +99,7 @@ function requiredTimestamp(value: unknown, field: string): string {
   return new Date(millis).toISOString();
 }
 
-function validateSnapshot(value: unknown): ChatGptCapturedConversation {
+export function validateChatGptCapturedConversation(value: unknown): ChatGptCapturedConversation {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("ChatGPT capture snapshot must be an object");
   }
@@ -303,7 +303,7 @@ export class ChatGptCaptureDirectoryReader implements ChatGptCaptureReader {
     } catch {
       throw new Error("ChatGPT capture file contains invalid JSON");
     }
-    const snapshot = validateSnapshot(parsed);
+    const snapshot = validateChatGptCapturedConversation(parsed);
     if (snapshot.conversationId !== conversationId) {
       throw new Error("ChatGPT capture identity changed between discovery and read");
     }
@@ -346,7 +346,7 @@ export class ChatGptCaptureDirectoryReader implements ChatGptCaptureReader {
       } catch {
         throw new Error("ChatGPT capture file contains invalid JSON");
       }
-      const snapshot = validateSnapshot(parsed);
+      const snapshot = validateChatGptCapturedConversation(parsed);
       if (ids.has(snapshot.conversationId)) {
         throw new Error(`duplicate ChatGPT conversation identifier: ${snapshot.conversationId}`);
       }
@@ -569,6 +569,9 @@ export interface ChatGptCaptureIncrementalSyncOptions {
   ingestor?: NormalizedExperienceIngestor;
   referenceOnly?: boolean;
   adapterVersion?: string;
+  beforeCheckpointReference?: (
+    reference: import("./development-experience-reference.js").DlmfDevelopmentExperienceReference,
+  ) => Promise<void>;
   pageSize?: number;
   clock?: () => Date;
 }
@@ -589,6 +592,9 @@ export class ChatGptCaptureIncrementalSyncService {
       ...(options.ingestor === undefined ? {} : { ingestor: options.ingestor }),
       ...(options.referenceOnly === undefined ? {} : { referenceOnly: options.referenceOnly }),
       ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+      ...(options.beforeCheckpointReference === undefined
+        ? {}
+        : { beforeCheckpointReference: options.beforeCheckpointReference }),
       ...(options.clock === undefined ? {} : { clock: options.clock }),
       policyId: "chatgpt-capture-status-v2",
       eligibilityStateKey: (experience) => {

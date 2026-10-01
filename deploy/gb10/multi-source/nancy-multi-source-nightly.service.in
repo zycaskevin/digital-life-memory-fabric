@@ -1,0 +1,17 @@
+[Unit]
+Description=Digital Life DLMF multi-source nightly delta consolidation - Nancy
+After=digital-life-dl-nancy-memory-dlmf.service
+Wants=digital-life-dl-nancy-memory-dlmf.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=REPLACE_WITH_DLMF_REPO
+EnvironmentFile=REPLACE_WITH_MULTI_SOURCE_ENV
+ExecStart=REPLACE_WITH_NODE_BIN scripts/multi-source-nightly-consolidation.mjs
+SuccessExitStatus=75
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=REPLACE_WITH_MEMORY_RUNTIME
+UMask=0077

@@ -1,0 +1,24 @@
+[Unit]
+Description=Digital Life ChatGPT capture inbox - Nancy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=REPLACE_WITH_DLMF_REPO
+EnvironmentFile=REPLACE_WITH_CHATGPT_INBOX_ENV
+UnsetEnvironment=DLMF_DLS_DATABASE_URL DLMF_DLS_HINDSIGHT_API_KEY DLMF_DLS_BEARER_TOKEN DLMF_MULTI_SOURCE_WRITE_MODE
+ExecStart=REPLACE_WITH_NODE_BIN scripts/chatgpt-capture-inbox-server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=REPLACE_WITH_DLMF_REPO
+BindReadOnlyPaths=REPLACE_WITH_CHATGPT_INBOX_TOKEN_FILE
+BindPaths=REPLACE_WITH_CHATGPT_CAPTURE_ROOT
+ReadWritePaths=REPLACE_WITH_CHATGPT_CAPTURE_ROOT
+UMask=0077
+
+[Install]
+WantedBy=default.target

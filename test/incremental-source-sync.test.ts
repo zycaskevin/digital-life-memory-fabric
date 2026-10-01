@@ -354,6 +354,37 @@ test("reference-only sync emits content-free reference and never requires an ing
   assert.ok(checkpointStore.value?.fingerprints.a);
 });
 
+test("reference sink must persist before a reference-only checkpoint advances", async () => {
+  const adapter = new FakeAdapter();
+  adapter.values.set("a", "durable reference");
+  const checkpointStore = new MemoryCheckpointStore();
+  let failSink = true;
+  let sinkCalls = 0;
+  const make = () => new GenericIncrementalSourceSyncService({
+    adapter,
+    checkpointStore,
+    scope: scope(),
+    referenceOnly: true,
+    beforeCheckpointReference: async () => {
+      sinkCalls += 1;
+      if (failSink) throw new Error("reference journal unavailable");
+    },
+  });
+
+  await assert.rejects(
+    () => make().runOnce(),
+    /reference journal unavailable/,
+  );
+  assert.equal(checkpointStore.value, undefined);
+
+  failSink = false;
+  const result = await make().runOnce();
+  assert.equal(result.sourceOnly, 1);
+  const checkpoint = await checkpointStore.load();
+  assert.ok(checkpoint?.fingerprints.a);
+  assert.equal(sinkCalls, 2);
+});
+
 test("source-only and no-text paths checkpoint without distillation", async () => {
   const adapter = new FakeAdapter();
   adapter.values.set("source-only", "operational");
@@ -904,6 +935,62 @@ test("standalone checkpoint load cannot recover a journal while another writer o
     );
     release();
     await firstRun;
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("public checkpoint save and append cannot bypass another active writer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dlmf-incremental-public-mutation-lock-"));
+  try {
+    const path = join(root, "checkpoint.json");
+    const first = new FileIncrementalSourceCheckpointStore(path);
+    const second = new FileIncrementalSourceCheckpointStore(path);
+    const initial: IncrementalSourceCheckpoint = {
+      contract: INCREMENTAL_SOURCE_CHECKPOINT_CONTRACT,
+      adapterName: "FakeIncrementalSourceAdapter",
+      adapterVersion: "1.0.0",
+      sourceSystem: "fake",
+      sourceType: "conversation_session",
+      scope: scope(),
+      processingMode: "distillation",
+      policyId: "default",
+      fingerprints: {},
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+    await first.save(initial);
+
+    let release!: () => void;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const active = first.runExclusive!(async () => {
+      started();
+      await hold;
+    });
+    await startedPromise;
+
+    const replacement = structuredClone(initial);
+    replacement.updatedAt = "2026-10-01T00:00:01.000Z";
+    await assert.rejects(
+      () => second.save(replacement),
+      /already has an active writer/,
+    );
+
+    Object.defineProperty(replacement.fingerprints, "a", {
+      value: sha256SourceFingerprint("a").value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    await assert.rejects(
+      () => second.appendFingerprint!(replacement, "a"),
+      /already has an active writer/,
+    );
+
+    release();
+    await active;
   } finally {
     await rm(root, { recursive: true, force: true });
   }

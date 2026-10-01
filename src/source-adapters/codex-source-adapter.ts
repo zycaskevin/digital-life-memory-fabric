@@ -43,6 +43,7 @@ export interface CodexSessionSummary {
 export interface CodexSessionPayload {
   summary: CodexSessionSummary;
   records: unknown[];
+  incompleteTail: boolean;
 }
 
 export interface CodexSessionReader {
@@ -217,17 +218,25 @@ function safeLocator(relativePath: string): string {
   return relativePath.split(sep).join("/");
 }
 
-function parseJsonLinesText(text: string): unknown[] {
+function parseJsonLinesText(text: string): {
+  records: unknown[];
+  incompleteTail: boolean;
+} {
   const records: unknown[] = [];
-  for (const [index, rawLine] of text.split(/\r?\n/u).entries()) {
+  const lines = text.split(/\r?\n/u);
+  const hasTerminatedTail = text.endsWith("\n");
+  for (const [index, rawLine] of lines.entries()) {
     if (!rawLine.trim()) continue;
     try {
       records.push(JSON.parse(rawLine) as unknown);
     } catch {
+      if (!hasTerminatedTail && index === lines.length - 1) {
+        return { records, incompleteTail: true };
+      }
       throw new Error(`Codex session journal contains invalid JSON at line ${index + 1}`);
     }
   }
-  return records;
+  return { records, incompleteTail: false };
 }
 
 function summaryFromRecords(
@@ -334,9 +343,9 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
     if (entry === undefined) throw new Error("Codex session not found");
     const root = await this.#root();
     const file = await readContainedSourceFile(entry.path, root);
-    const records = parseJsonLinesText(file.text);
+    const parsed = parseJsonLinesText(file.text);
     const summary = summaryFromRecords(
-      records,
+      parsed.records,
       entry.summary.relativePath,
       file.modifiedAt,
       file.sizeBytes,
@@ -344,7 +353,11 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
     if (summary.sessionId !== sessionId) {
       throw new Error("Codex session identity changed between discovery and read");
     }
-    return { summary, records };
+    return {
+      summary,
+      records: parsed.records,
+      incompleteTail: parsed.incompleteTail,
+    };
   }
 
   async #root(): Promise<string> {
@@ -377,6 +390,13 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
       try {
         first = JSON.parse(file.text) as unknown;
       } catch {
+        const firstLineBytes = Buffer.byteLength(file.text, "utf8");
+        if (firstLineBytes >= file.sizeBytes) {
+          // A newly-created Codex journal can be observed before its first
+          // session_meta record is fully appended. Without a stable ID it is
+          // not yet an Experience Unit, so isolate it and retry on a later scan.
+          continue;
+        }
         throw new Error("Codex session journal contains invalid JSON at line 1");
       }
       const relativePath = relative(root, path);
@@ -533,6 +553,7 @@ export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPaylo
         userMessageCount,
         assistantMessageCount,
         excludedRecordCount: Math.max(0, payload.records.length - selected.length),
+        incompleteTail: payload.incompleteTail,
         source: payload.summary.source ?? null,
         originator: payload.summary.originator ?? null,
         evidencePolicy: "explicit_user_assistant_text_only",
@@ -596,6 +617,9 @@ export interface CodexIncrementalSyncOptions {
   referenceOnly?: boolean;
   adapterVersion?: string;
   minimumIdleMs?: number;
+  beforeCheckpointReference?: (
+    reference: import("./development-experience-reference.js").DlmfDevelopmentExperienceReference,
+  ) => Promise<void>;
   pageSize?: number;
   clock?: () => Date;
 }
@@ -625,6 +649,9 @@ export class CodexIncrementalSyncService {
       ...(options.ingestor === undefined ? {} : { ingestor: options.ingestor }),
       ...(options.referenceOnly === undefined ? {} : { referenceOnly: options.referenceOnly }),
       ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+      ...(options.beforeCheckpointReference === undefined
+        ? {}
+        : { beforeCheckpointReference: options.beforeCheckpointReference }),
       clock,
       policyId: "codex-idle-v2-owner-evidence",
       eligibilityStateKey: (experience) => {
@@ -635,6 +662,9 @@ export class CodexIncrementalSyncService {
         return `${version}|${modifiedAt}`;
       },
       decide: (experience) => {
+        if (experience.metadata.incompleteTail === true) {
+          return { action: "defer", reasonCode: "journal_tail_incomplete" };
+        }
         const userMessages = Number(experience.metadata.userMessageCount ?? 0);
         if (userMessages < 1) {
           return { action: "source_only", reasonCode: "no_user_authored_text" };

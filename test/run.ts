@@ -34,6 +34,7 @@ import "./incremental-source-sync.test.js";
 import "./contained-source-file.test.js";
 import "./codex-source-adapter.test.js";
 import "./chatgpt-capture-adapter.test.js";
+import "./chatgpt-capture-inbox.test.js";
 import "./normalized-experience-distillation.test.js";
 import "./source-migration.test.js";
 import "./historical-migration-runner.test.js";

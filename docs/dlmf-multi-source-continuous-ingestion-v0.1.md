@@ -263,3 +263,106 @@ Not activated by this amendment:
 - no production Codex/ChatGPT Canonical Memory writer;
 - no AKF mutation from DLMF;
 - no merge, push or production deployment.
+
+## 11. Activation Phase contract — 2026-10-01
+
+The repository now defines a deployment candidate for continuous multi-source operation without changing the authority model.
+
+### Default write mode
+
+Every Codex/ChatGPT scheduled worker defaults to:
+
+```text
+DLMF_MULTI_SOURCE_WRITE_MODE=reference_only
+```
+
+In this mode:
+
+- PostgreSQL/Hindsight writer composition is not instantiated;
+- no Canonical Memory receipt may be emitted;
+- changed source versions become content-free DLMF Development references only;
+- checkpoints may advance for observed/reference-only source versions.
+
+Canonical Memory distillation requires the explicit operator setting:
+
+```text
+DLMF_MULTI_SOURCE_WRITE_MODE=distill
+```
+
+The distill path then reuses the existing DLMF Digital-Life-Stack runtime composition and its target-owned admission/governance. The source worker itself gains no canonical authority.
+
+### Codex polling
+
+The Codex one-shot worker observes the configured local `.codex/sessions` root, keeps a separate private incremental checkpoint, applies the configured idle gate, and can run as a user-systemd timer.
+
+`--preflight` inspects the real source and, in distill mode, verifies DLMF/Hindsight/schema readiness without creating or advancing a source checkpoint.
+
+`--baseline-current` establishes the current source watermark. In reference-only deployment this is the required first activation step so old local history is not accidentally treated as newly-arrived work.
+
+### ChatGPT capture publisher receiving boundary
+
+The ChatGPT activation path is deliberately split:
+
+```text
+authorized publisher
+   -> loopback ChatGPT capture inbox
+   -> private v1 snapshots
+   -> ChatGptCaptureIncrementalSyncService
+   -> DLMF
+```
+
+The capture inbox:
+
+- binds loopback only;
+- authenticates a bearer token before parsing the private request body;
+- accepts only `application/json`;
+- enforces a bounded body size;
+- validates `dlmf/chatgpt-captured-conversation/v1`;
+- stores snapshots under a hash-derived filename, never a raw conversation ID;
+- uses owner-private atomic files;
+- rejects stale, conflicting, and lifecycle-regressing snapshot updates;
+- performs **zero Canonical Memory writes**.
+
+This inbox is a receiving/publisher boundary. It does **not** provide direct ChatGPT cloud-history access. A separately authorized ChatGPT-side publisher/connector is still needed to send real cloud conversations into this local boundary.
+
+### Scheduling
+
+The deployment candidate supplies user-systemd templates for:
+
+- Codex delta sync every five minutes;
+- ChatGPT capture inbox as an always-on local receiver;
+- ChatGPT capture delta sync every five minutes;
+- nightly multi-source delta consolidation.
+
+Nightly consolidation invokes the same checkpointed delta paths. It is a retry/health pass over new, mutated, or unresolved source versions; it is not a historical full re-import.
+
+### Canary-first activation
+
+Production-wide `distill` is not the first deployment step.
+
+Required activation order:
+
+1. deploy and verify `reference_only`;
+2. baseline existing source roots;
+3. prove real incremental deltas and content-free references;
+4. create a separately identified DLMF canary schema/bank/scope or equivalent approved isolation;
+5. enable `distill` only for the canary runner;
+6. verify exact DLMF receipts, canonical effects, replay idempotency, retrieval, and rollback evidence;
+7. broad production write activation remains a separate evidence gate.
+
+DLMF and AKF remain parallel authorities throughout this activation. None of these workers or timers may directly mutate AKF knowledge.
+
+## 12. Activation candidate verification — 2026-10-01
+
+The activation candidate was hardened through repeated independent review before any live canary:
+
+- repository main suite: **290 total / 282 passed / 8 intentionally skipped / 0 failed**;
+- canonical projection retry suite: **29 / 29 passed**;
+- activation-specific suite: **11 / 11 passed**;
+- TypeScript typecheck: **PASS**;
+- build: **PASS**;
+- final independent release-gate review: **No P0-P2 findings** after closing concurrency, stale-lock, journal durability, torn Codex tail, checkpoint mutation, credential isolation, canary-boundary, and filesystem durability findings.
+
+The independent Verifier/QA canary negative control also passed: attempts to target production memoryNamespace=life in distill mode were rejected unless an explicit isolated canary-* namespace is bound. Its sandbox could not complete the full suite because that sandbox denies local loopback-listen and mkfifo; the authoritative GB10/ForgeRelay Node 24 regression above exercised those host capabilities directly.
+
+Live reference-only and isolated distillation canary evidence are recorded separately from repository acceptance so deployment state is never inferred from tests alone.

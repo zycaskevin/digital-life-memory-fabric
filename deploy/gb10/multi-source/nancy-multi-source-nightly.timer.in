@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Nancy DLMF multi-source delta consolidation nightly
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=10min
+Unit=digital-life-dl-nancy-multi-source-nightly.service
+
+[Install]
+WantedBy=timers.target

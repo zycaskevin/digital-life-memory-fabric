@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Nancy Codex DLMF delta sync every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=20s
+Persistent=true
+Unit=digital-life-dl-nancy-codex-memory-sync.service
+
+[Install]
+WantedBy=timers.target

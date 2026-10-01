@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Nancy ChatGPT capture DLMF delta sync every 5 minutes
+
+[Timer]
+OnBootSec=4min
+OnUnitActiveSec=5min
+AccuracySec=20s
+Persistent=true
+Unit=digital-life-dl-nancy-chatgpt-memory-sync.service
+
+[Install]
+WantedBy=timers.target

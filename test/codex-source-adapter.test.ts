@@ -216,6 +216,83 @@ test("Codex idle gate defers active bytes without checkpoint then distills same 
   });
 });
 
+
+test("torn Codex tail defers only that journal and does not block later sessions", async () => {
+  await withRoot(async (root) => {
+    const tornFile = join(root, "a.jsonl");
+    const fullFile = join(root, "b.jsonl");
+    const tornRecords = sessionRecords(
+      "shared-session-a",
+      "Owner-authored torn-tail preference.",
+      "Acknowledged.",
+      "journal-a",
+    );
+    await writeFile(
+      tornFile,
+      tornRecords.map((record) => JSON.stringify(record)).join("\n")
+        + "\n{\"ordinal\":99,\"type\":",
+      "utf8",
+    );
+    await writeJsonl(
+      fullFile,
+      sessionRecords(
+        "shared-session-b",
+        "Owner-authored complete preference.",
+        "Acknowledged.",
+        "journal-b",
+      ),
+    );
+    const old = new Date("2026-09-30T23:00:00.000Z");
+    await utimes(tornFile, old, old);
+    await utimes(fullFile, old, old);
+
+    const checkpointStore = new MemoryCheckpointStore();
+    const ingested: string[] = [];
+    const sync = new CodexIncrementalSyncService({
+      reader: new CodexJsonlSessionReader(root),
+      checkpointStore,
+      scope: {
+        tenantId: "tenant-arthur",
+        lifeDid: "did:arthurverse:nancy",
+        memoryNamespace: "life",
+      },
+      ingestor: {
+        async ingest(experience) {
+          ingested.push(experience.sourceId);
+          return {
+            receiptId: `dist_torn_${ingested.length}`,
+            status: "complete" as const,
+          };
+        },
+      },
+      minimumIdleMs: 0,
+      clock: () => new Date("2026-10-01T01:00:00.000Z"),
+    });
+
+    const result = await sync.runOnce();
+    assert.equal(result.deferred, 1);
+    assert.equal(result.ingested, 1);
+    assert.deepEqual(ingested, ["journal-b"]);
+    assert.equal(checkpointStore.value?.fingerprints["journal-a"], undefined);
+    assert.ok(checkpointStore.value?.fingerprints["journal-b"]);
+  });
+});
+
+test("partially-created Codex journal without a complete session_meta is isolated until later", async () => {
+  await withRoot(async (root) => {
+    await writeFile(join(root, "a.jsonl"), "{\"type\":\"session_", "utf8");
+    await writeJsonl(
+      join(root, "b.jsonl"),
+      sessionRecords("session-b", "complete", "ack", "journal-b"),
+    );
+    const reader = new CodexJsonlSessionReader(root);
+    const inspection = await reader.inspect();
+    assert.equal(inspection.sessionCount, 1);
+    const listed = await reader.listSessions({ limit: 10 });
+    assert.deepEqual(listed.map((item) => item.sessionId), ["journal-b"]);
+  });
+});
+
 test("Codex session without user-authored text is source-only", async () => {
   await withRoot(async (root) => {
     const records = sessionRecords("session-no-user").filter((record) => {

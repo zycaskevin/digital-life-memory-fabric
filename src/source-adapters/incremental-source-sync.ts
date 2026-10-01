@@ -231,14 +231,16 @@ implements IncrementalSourceCheckpointStore {
   }
 
   async load(): Promise<IncrementalSourceCheckpoint | undefined> {
-    const contextToken = this.#lockContext.getStore();
-    if (
-      this.#activeLockToken !== undefined
-      && contextToken === this.#activeLockToken
-    ) {
+    if (this.#ownsCurrentLockContext()) {
       return this.#loadUnlocked();
     }
     return this.runExclusive(() => this.#loadUnlocked());
+  }
+
+  #ownsCurrentLockContext(): boolean {
+    const contextToken = this.#lockContext.getStore();
+    return this.#activeLockToken !== undefined
+      && contextToken === this.#activeLockToken;
   }
 
   async #loadUnlocked(): Promise<IncrementalSourceCheckpoint | undefined> {
@@ -291,7 +293,45 @@ implements IncrementalSourceCheckpointStore {
   }
 
   async save(checkpoint: IncrementalSourceCheckpoint): Promise<void> {
+    if (this.#ownsCurrentLockContext()) {
+      return this.#saveUnlocked(checkpoint, true);
+    }
+    return this.runExclusive(() => this.#saveUnlocked(checkpoint, false));
+  }
+
+  async #saveUnlocked(
+    checkpoint: IncrementalSourceCheckpoint,
+    allowReplaceCurrent: boolean,
+  ): Promise<void> {
     const validated = validateIncrementalSourceCheckpoint(checkpoint);
+    if (!allowReplaceCurrent) {
+      const current = await this.#loadUnlocked();
+      if (current !== undefined) {
+        if (!checkpointIdentityMatches(current, {
+          adapterName: validated.adapterName,
+          adapterVersion: validated.adapterVersion,
+          sourceSystem: validated.sourceSystem,
+          sourceType: validated.sourceType,
+          scope: validated.scope,
+          processingMode: validated.processingMode,
+          policyId: validated.policyId,
+        })) {
+          throw new Error(
+            "incremental source checkpoint save identity conflicts with durable state",
+          );
+        }
+        for (const [sourceId, fingerprint] of Object.entries(current.fingerprints)) {
+          if (
+            !Object.hasOwn(validated.fingerprints, sourceId)
+            || validated.fingerprints[sourceId] !== fingerprint
+          ) {
+            throw new Error(
+              "incremental source checkpoint save is stale and would overwrite durable progress",
+            );
+          }
+        }
+      }
+    }
     const paths = await this.#paths();
     await this.#writeSnapshot(validated, paths);
     await rm(paths.journalPath, { force: true });
@@ -301,6 +341,18 @@ implements IncrementalSourceCheckpointStore {
   }
 
   async appendFingerprint(
+    checkpoint: IncrementalSourceCheckpoint,
+    sourceId: string,
+  ): Promise<void> {
+    if (this.#ownsCurrentLockContext()) {
+      return this.#appendFingerprintUnlocked(checkpoint, sourceId);
+    }
+    return this.runExclusive(
+      () => this.#appendFingerprintUnlocked(checkpoint, sourceId),
+    );
+  }
+
+  async #appendFingerprintUnlocked(
     checkpoint: IncrementalSourceCheckpoint,
     sourceId: string,
   ): Promise<void> {
@@ -325,6 +377,9 @@ implements IncrementalSourceCheckpointStore {
     validateCheckpointDelta(delta);
 
     const paths = await this.#paths();
+    // Recover only an uncommitted final fragment while the same writer lock is
+    // held, so a public append cannot concatenate a new delta onto torn JSON.
+    await this.#readRecoverableJournal(paths);
 
     if (this.#identityCache === undefined) {
       const baseText = await this.#readOptionalPrivateText(paths.checkpointPath);
@@ -620,6 +675,15 @@ export interface GenericIncrementalSourceSyncOptions<TSourcePayload> {
   eligibilityStateKey?: (
     experience: NormalizedExperience,
   ) => string;
+  /**
+   * Optional durable sink for a content-free Development reference that must
+   * succeed before the corresponding source fingerprint is checkpointed.
+   * This allows sidecar workers to make reference journaling crash-safe without
+   * moving memory authority outside DLMF.
+   */
+  beforeCheckpointReference?: (
+    reference: DlmfDevelopmentExperienceReference,
+  ) => Promise<void>;
   pageSize?: number;
   clock?: () => Date;
 }
@@ -725,6 +789,9 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
   readonly #eligibilityStateKey:
     | GenericIncrementalSourceSyncOptions<TSourcePayload>["eligibilityStateKey"]
     | undefined;
+  readonly #beforeCheckpointReference:
+    | GenericIncrementalSourceSyncOptions<TSourcePayload>["beforeCheckpointReference"]
+    | undefined;
   readonly #pageSize: number;
   readonly #clock: () => Date;
 
@@ -740,6 +807,7 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
     }
     this.#decide = options.decide;
     this.#eligibilityStateKey = options.eligibilityStateKey;
+    this.#beforeCheckpointReference = options.beforeCheckpointReference;
     this.#pageSize = options.pageSize ?? 250;
     this.#clock = options.clock ?? (() => new Date());
     if (!Number.isInteger(this.#pageSize) || this.#pageSize < 1 || this.#pageSize > 1000) {
@@ -879,13 +947,13 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
 
       if (this.#referenceOnly) {
         result.sourceOnly += 1;
-        result.experiences.push(
-          projectDevelopmentExperienceReference(
-            normalized,
-            this.#scope,
-            "REFERENCE_ONLY",
-          ),
+        const reference = projectDevelopmentExperienceReference(
+          normalized,
+          this.#scope,
+          "REFERENCE_ONLY",
         );
+        await this.#persistBeforeCheckpoint(reference);
+        result.experiences.push(reference);
         await this.#advance(checkpoint, normalized, afterNormalize);
         return;
       }
@@ -925,26 +993,26 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
 
       if (decision.action === "source_only") {
         result.sourceOnly += 1;
-        result.experiences.push(
-          projectDevelopmentExperienceReference(
-            finalExperience,
-            this.#scope,
-            decision.disposition ?? "TRANSIENT_SOURCE_ONLY",
-          ),
+        const reference = projectDevelopmentExperienceReference(
+          finalExperience,
+          this.#scope,
+          decision.disposition ?? "TRANSIENT_SOURCE_ONLY",
         );
+        await this.#persistBeforeCheckpoint(reference);
+        result.experiences.push(reference);
         await this.#advance(checkpoint, finalExperience, afterNormalize);
         return;
       }
 
       if (!hasTextualEvidence(finalExperience)) {
         result.noTextualEvidence += 1;
-        result.experiences.push(
-          projectDevelopmentExperienceReference(
-            finalExperience,
-            this.#scope,
-            "NO_TEXTUAL_EVIDENCE",
-          ),
+        const reference = projectDevelopmentExperienceReference(
+          finalExperience,
+          this.#scope,
+          "NO_TEXTUAL_EVIDENCE",
         );
+        await this.#persistBeforeCheckpoint(reference);
+        result.experiences.push(reference);
         await this.#advance(checkpoint, finalExperience, afterNormalize);
         return;
       }
@@ -958,15 +1026,15 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
         status: rawReceipt.status,
       };
       result.receipts.push(receipt);
-      result.experiences.push(
-        projectDevelopmentExperienceReference(
-          finalExperience,
-          this.#scope,
-          "DISTILLATION_SUBMITTED",
-          receipt,
-        ),
+      const reference = projectDevelopmentExperienceReference(
+        finalExperience,
+        this.#scope,
+        "DISTILLATION_SUBMITTED",
+        receipt,
       );
+      result.experiences.push(reference);
       if (!terminalReceipt(receipt)) return;
+      await this.#persistBeforeCheckpoint(reference);
       result.ingested += 1;
       await this.#advance(checkpoint, finalExperience, afterNormalize);
     });
@@ -974,6 +1042,14 @@ export class GenericIncrementalSourceSyncService<TSourcePayload> {
     checkpoint.updatedAt = this.#clock().toISOString();
     await this.#checkpointStore.save(checkpoint);
     return result;
+  }
+
+  async #persistBeforeCheckpoint(
+    reference: DlmfDevelopmentExperienceReference,
+  ): Promise<void> {
+    if (this.#beforeCheckpointReference !== undefined) {
+      await this.#beforeCheckpointReference(reference);
+    }
   }
 
   async #revalidateEligibilityState(
