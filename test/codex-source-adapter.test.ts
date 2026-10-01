@@ -346,7 +346,56 @@ test("Codex reader distinguishes journal ids that share a higher-level session_i
   });
 });
 
-test("Codex reader fails closed on duplicate selected stable journal identifiers", async () => {
+test("Codex reader collapses same-id rollout continuations when evidence is a strict prefix chain", async () => {
+  await withRoot(async (root) => {
+    const base: unknown[] = sessionRecords(
+      "shared-session",
+      "first",
+      "ack",
+      "same-journal",
+    );
+    const extended: unknown[] = structuredClone(base);
+    extended.push(
+      {
+        ordinal: 6,
+        timestamp: "2026-10-01T00:00:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "second" }],
+        },
+      },
+      {
+        ordinal: 7,
+        timestamp: "2026-10-01T00:00:07.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ack-two" }],
+        },
+      },
+    );
+    await writeJsonl(join(root, "a.jsonl"), base);
+    await writeJsonl(join(root, "b.jsonl"), extended);
+
+    const reader = new CodexJsonlSessionReader(root);
+    assert.equal((await reader.inspect()).sessionCount, 1);
+    const listed = await reader.listSessions({ limit: 10 });
+    assert.deepEqual(listed.map((item) => item.sessionId), ["same-journal"]);
+
+    const adapter = new CodexSourceAdapter({ reader });
+    const page = await adapter.discover({ limit: 10 });
+    const normalized = await adapter.normalize(await adapter.read(page.units[0]!));
+    assert.deepEqual(
+      normalized.events.map((event) => event.content),
+      ["first", "ack", "second", "ack-two"],
+    );
+  });
+});
+
+test("Codex reader fails closed when same-id rollout evidence diverges", async () => {
   await withRoot(async (root) => {
     await writeJsonl(
       join(root, "a.jsonl"),
@@ -357,7 +406,10 @@ test("Codex reader fails closed on duplicate selected stable journal identifiers
       sessionRecords("session-b", "second", "ack", "same-journal"),
     );
     const reader = new CodexJsonlSessionReader(root);
-    await assert.rejects(() => reader.inspect(), /duplicate Codex session identifier/);
+    await assert.rejects(
+      () => reader.inspect(),
+      /duplicate Codex session identifier has divergent evidence/,
+    );
   });
 });
 

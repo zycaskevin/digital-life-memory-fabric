@@ -178,14 +178,31 @@ function selectedMessages(records: unknown[]): CodexSelectedMessage[] {
   return selected;
 }
 
+function selectedEvidenceProjection(records: unknown[]): Array<{
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string | null;
+}> {
+  return selectedMessages(records).map((message) => ({
+    role: message.role,
+    text: message.text,
+    timestamp: message.timestamp ?? null,
+  }));
+}
+
 function evidenceFingerprint(records: unknown[]): SourceFingerprint {
-  return sha256(
-    selectedMessages(records).map((message) => ({
-      role: message.role,
-      text: message.text,
-      timestamp: message.timestamp ?? null,
-    })),
-  );
+  return sha256(selectedEvidenceProjection(records));
+}
+
+function evidenceProjectionIsPrefix(
+  prefix: ReturnType<typeof selectedEvidenceProjection>,
+  full: ReturnType<typeof selectedEvidenceProjection>,
+): boolean {
+  if (prefix.length > full.length) return false;
+  for (let index = 0; index < prefix.length; index += 1) {
+    if (stableJson(prefix[index]) !== stableJson(full[index])) return false;
+  }
+  return true;
 }
 
 function sourceVersion(summary: CodexSessionSummary): SourceVersion {
@@ -250,10 +267,11 @@ function summaryFromRecords(
     throw new Error("Codex session journal must begin with session_meta");
   }
   const payload = object(first.payload);
-  // Modern Codex may emit multiple distinct journal/thread IDs under one
-  // higher-level session_id. The journal id is therefore the stable Experience
-  // unit identity; session_id is retained only as a compatibility fallback for
-  // older journals that do not expose id.
+  // Modern Codex uses payload.id as the logical journal/session identity.
+  // A resumed rollout may write a second physical file while retaining the same
+  // id; the reader therefore resolves same-id physical files as a monotonic
+  // evidence chain and fails closed if their user/assistant evidence diverges.
+  // session_id remains a compatibility fallback for older journals without id.
   const sessionId = string(payload?.id) ?? string(payload?.session_id);
   if (sessionId === undefined || sessionId.trim() !== sessionId) {
     throw new Error("Codex session_meta is missing a stable session identifier");
@@ -382,8 +400,10 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
     };
     await walk(root);
 
-    const found: Array<{ path: string; summary: CodexSessionSummary }> = [];
-    const ids = new Set<string>();
+    const grouped = new Map<
+      string,
+      Array<{ path: string; summary: CodexSessionSummary }>
+    >();
     for (const path of paths.sort()) {
       const file = await readContainedSourceFirstLine(path, root);
       let first: unknown;
@@ -406,11 +426,18 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
         file.modifiedAt,
         file.sizeBytes,
       );
-      if (ids.has(summary.sessionId)) {
-        throw new Error(`duplicate Codex session identifier: ${summary.sessionId}`);
-      }
-      ids.add(summary.sessionId);
-      found.push({ path, summary });
+      const group = grouped.get(summary.sessionId) ?? [];
+      group.push({ path, summary });
+      grouped.set(summary.sessionId, group);
+    }
+
+    const found: Array<{ path: string; summary: CodexSessionSummary }> = [];
+    for (const group of grouped.values()) {
+      found.push(
+        group.length === 1
+          ? group[0]!
+          : await this.#resolveMonotonicRolloutGroup(group, root),
+      );
     }
     this.#index = found.sort((left, right) =>
       compareStableIds(left.summary.sessionId, right.summary.sessionId)
@@ -419,6 +446,64 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
       this.#index.map((entry) => [entry.summary.sessionId, entry]),
     );
     return this.#index;
+  }
+
+  async #resolveMonotonicRolloutGroup(
+    group: Array<{ path: string; summary: CodexSessionSummary }>,
+    root: string,
+  ): Promise<{ path: string; summary: CodexSessionSummary }> {
+    const expanded: Array<{
+      entry: { path: string; summary: CodexSessionSummary };
+      projection: ReturnType<typeof selectedEvidenceProjection>;
+    }> = [];
+
+    for (const entry of group) {
+      const file = await readContainedSourceFile(entry.path, root);
+      const parsed = parseJsonLinesText(file.text);
+      const summary = summaryFromRecords(
+        parsed.records,
+        entry.summary.relativePath,
+        file.modifiedAt,
+        file.sizeBytes,
+      );
+      if (summary.sessionId !== entry.summary.sessionId) {
+        throw new Error(
+          "Codex session identity changed while resolving rollout continuation",
+        );
+      }
+      expanded.push({
+        entry: { path: entry.path, summary },
+        projection: selectedEvidenceProjection(parsed.records),
+      });
+    }
+
+    const maximal = expanded.filter((candidate) =>
+      expanded.every((other) =>
+        evidenceProjectionIsPrefix(other.projection, candidate.projection)
+      )
+    );
+    if (maximal.length === 0) {
+      throw new Error(
+        "duplicate Codex session identifier has divergent evidence",
+      );
+    }
+
+    maximal.sort((left, right) => {
+      if (left.projection.length !== right.projection.length) {
+        return right.projection.length - left.projection.length;
+      }
+      const modified =
+        Date.parse(right.entry.summary.lastModifiedAt)
+        - Date.parse(left.entry.summary.lastModifiedAt);
+      if (modified !== 0) return modified;
+      if (left.entry.summary.sizeBytes !== right.entry.summary.sizeBytes) {
+        return right.entry.summary.sizeBytes - left.entry.summary.sizeBytes;
+      }
+      return right.entry.summary.relativePath.localeCompare(
+        left.entry.summary.relativePath,
+      );
+    });
+    return maximal[0]!.entry;
   }
 }
 
