@@ -378,3 +378,36 @@ Live reference-only and isolated distillation canary evidence are recorded separ
 - isolated distillation canary scope `canary-multi-source-20261002` completed with **1 terminal receipt**, `admission_complete=true`, `canonicalization_outcome=no_memory_worthy_content`, **0 candidates**, and **0 canonical memories**;
 - the production `life` namespace had **0 receipt/candidate matches** for that synthetic canary source, proving the canary did not contaminate production life memory;
 - broad production `distill` remains disabled. Reference-only sidecar deployment is the next activation step.
+
+
+## 13. Reference-only sidecar activation — 2026-10-02
+
+The multi-source repository candidate was activated on Nancy as **reference-only sidecars** from the exact resident release:
+
+`613004e48114c23ea5bdb68df6420cc7c84c3bc5`
+
+This deployment does not replace or restart the existing Hermes living-memory path.
+
+Activated user-systemd units:
+
+- `digital-life-dl-nancy-chatgpt-capture-inbox.service`: enabled and active, loopback `127.0.0.1:19007`;
+- `digital-life-dl-nancy-codex-memory-sync.timer`: enabled and active, every five minutes;
+- `digital-life-dl-nancy-chatgpt-memory-sync.timer`: enabled and active, every five minutes;
+- `digital-life-dl-nancy-multi-source-nightly.timer`: enabled and active, 03:17 local with up to ten minutes randomized delay.
+
+Operational evidence:
+
+- rendered units passed `systemd-analyze --user verify`;
+- official Codex baseline: **1,187 physical journals / 0 ingestion / 0 failed receipts**;
+- first manual post-baseline Codex delta: **1,188 scanned / 4 changed / 4 reference-only / 0 ingestion**;
+- first automatic Codex timer run: **1,188 scanned / 1 changed / 1 reference-only / 0 ingestion**;
+- manual nightly consolidation: **PASS**, `historicalFullImport=0`, Codex **3 changed / 3 reference-only / 0 ingestion**, ChatGPT **0 ingestion**;
+- ChatGPT inbox `/health` and `/ready` both returned PASS with `canonicalMemoryWrites=0`;
+- the live inbox process contains capture-specific environment only and no `DLMF_DLS_*` writer variables or production distill write mode;
+- the production ChatGPT capture root was empty at activation because a ChatGPT cloud-side publisher is **not yet connected**;
+- production Codex Development references were verified as `REFERENCE_ONLY`, `authority=digital-life-memory-fabric`, and contain no `content`, `events`, or `transcript` surface;
+- private config, token, checkpoint, and reference journal files are owner-only `0600`.
+
+Production-wide `DLMF_MULTI_SOURCE_WRITE_MODE=distill` remains **disabled**. The only write-enabled validation was the separately scoped `canary-multi-source-20261002` run described above.
+
+Rollback is non-destructive: disable the three multi-source timers and the ChatGPT capture inbox. Existing Hermes/Nancy memory ingestion remains untouched. The pre-activation ForgeRelay checkpoint is `cp_dded69fad0`.
