@@ -8,6 +8,8 @@ import {
   CodexIncrementalSyncService,
   CodexJsonlSessionReader,
   CodexSourceAdapter,
+  INCREMENTAL_SOURCE_CHECKPOINT_CONTRACT,
+  codexJournalSourceId,
   type IncrementalSourceCheckpoint,
   type IncrementalSourceCheckpointStore,
 } from "../src/index.js";
@@ -122,6 +124,7 @@ test("Codex adapter normalizes only explicit user/assistant text and excludes co
     });
     const inspection = await adapter.inspect();
     assert.equal(inspection.sourceSystem, "codex");
+    assert.equal(inspection.adapterVersion, "0.2.0");
     assert.equal(inspection.capabilities.incrementalSync, "partial");
 
     const page = await adapter.discover({ limit: 10 });
@@ -130,7 +133,11 @@ test("Codex adapter normalizes only explicit user/assistant text and excludes co
     const normalized = await adapter.normalize(read);
     const serialized = JSON.stringify(normalized);
 
-    assert.equal(normalized.sourceId, "session-a");
+    assert.equal(
+      normalized.sourceId,
+      codexJournalSourceId("session-a", "2026/10/01/rollout.jsonl"),
+    );
+    assert.equal(normalized.metadata.logicalSessionId, "session-a");
     assert.deepEqual(
       normalized.events.map((event) => event.content),
       ["I prefer tea.", "Acknowledged."],
@@ -145,6 +152,50 @@ test("Codex adapter normalizes only explicit user/assistant text and excludes co
     ]) {
       assert.equal(serialized.includes(secret), false, secret);
     }
+  });
+});
+
+
+
+test("Codex physical-journal identity bump rejects legacy logical-session checkpoints", async () => {
+  await withRoot(async (root) => {
+    await writeJsonl(
+      join(root, "rollout.jsonl"),
+      sessionRecords("legacy-logical-session"),
+    );
+    const checkpointStore = new MemoryCheckpointStore();
+    checkpointStore.value = {
+      contract: INCREMENTAL_SOURCE_CHECKPOINT_CONTRACT,
+      adapterName: "CodexSourceAdapter",
+      adapterVersion: "0.1.0",
+      sourceSystem: "codex",
+      sourceType: "conversation_session",
+      scope: {
+        tenantId: "tenant-arthur",
+        lifeDid: "did:arthurverse:nancy",
+        memoryNamespace: "life",
+      },
+      processingMode: "reference_only",
+      policyId: "codex-idle-v2-owner-evidence",
+      fingerprints: {},
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+
+    const sync = new CodexIncrementalSyncService({
+      reader: new CodexJsonlSessionReader(root),
+      checkpointStore,
+      scope: {
+        tenantId: "tenant-arthur",
+        lifeDid: "did:arthurverse:nancy",
+        memoryNamespace: "life",
+      },
+      referenceOnly: true,
+    });
+
+    await assert.rejects(
+      () => sync.runOnce(),
+      /checkpoint does not belong to configured adapter\/source/,
+    );
   });
 });
 
@@ -198,16 +249,17 @@ test("Codex idle gate defers active bytes without checkpoint then distills same 
       clock: () => now,
     });
 
+    const sourceId = codexJournalSourceId("session-idle", "rollout.jsonl");
     let result = await make().runOnce();
     assert.equal(result.deferred, 1);
     assert.equal(result.ingested, 0);
-    assert.equal(checkpointStore.value?.fingerprints["session-idle"], undefined);
+    assert.equal(checkpointStore.value?.fingerprints[sourceId], undefined);
 
     now = new Date("2026-10-01T00:10:00.000Z");
     result = await make().runOnce();
     assert.equal(result.ingested, 1);
     assert.equal(ingests, 1);
-    assert.ok(checkpointStore.value?.fingerprints["session-idle"]);
+    assert.ok(checkpointStore.value?.fingerprints[sourceId]);
 
     result = await make().runOnce();
     assert.equal(result.changed, 0);
@@ -269,12 +321,14 @@ test("torn Codex tail defers only that journal and does not block later sessions
       clock: () => new Date("2026-10-01T01:00:00.000Z"),
     });
 
+    const sourceA = codexJournalSourceId("journal-a", "a.jsonl");
+    const sourceB = codexJournalSourceId("journal-b", "b.jsonl");
     const result = await sync.runOnce();
     assert.equal(result.deferred, 1);
     assert.equal(result.ingested, 1);
-    assert.deepEqual(ingested, ["journal-b"]);
-    assert.equal(checkpointStore.value?.fingerprints["journal-a"], undefined);
-    assert.ok(checkpointStore.value?.fingerprints["journal-b"]);
+    assert.deepEqual(ingested, [sourceB]);
+    assert.equal(checkpointStore.value?.fingerprints[sourceA], undefined);
+    assert.ok(checkpointStore.value?.fingerprints[sourceB]);
   });
 });
 
@@ -289,7 +343,11 @@ test("partially-created Codex journal without a complete session_meta is isolate
     const inspection = await reader.inspect();
     assert.equal(inspection.sessionCount, 1);
     const listed = await reader.listSessions({ limit: 10 });
-    assert.deepEqual(listed.map((item) => item.sessionId), ["journal-b"]);
+    assert.deepEqual(
+      listed.map((item) => item.sessionId),
+      [codexJournalSourceId("journal-b", "b.jsonl")],
+    );
+    assert.deepEqual(listed.map((item) => item.logicalSessionId), ["journal-b"]);
   });
 });
 
@@ -325,11 +383,15 @@ test("Codex session without user-authored text is source-only", async () => {
     assert.equal(result.sourceOnly, 1);
     assert.equal(result.ingested, 0);
     assert.equal(ingests, 0);
-    assert.ok(checkpointStore.value?.fingerprints["session-no-user"]);
+    assert.ok(
+      checkpointStore.value?.fingerprints[
+        codexJournalSourceId("session-no-user", "rollout.jsonl")
+      ],
+    );
   });
 });
 
-test("Codex reader distinguishes journal ids that share a higher-level session_id", async () => {
+test("Codex reader gives each physical journal a stable source id while retaining logical provenance", async () => {
   await withRoot(async (root) => {
     await writeJsonl(
       join(root, "a.jsonl"),
@@ -342,11 +404,21 @@ test("Codex reader distinguishes journal ids that share a higher-level session_i
     const reader = new CodexJsonlSessionReader(root);
     assert.equal((await reader.inspect()).sessionCount, 2);
     const listed = await reader.listSessions({ limit: 10 });
-    assert.deepEqual(listed.map((item) => item.sessionId), ["journal-a", "journal-b"]);
+    assert.deepEqual(
+      listed.map((item) => item.sessionId).sort(),
+      [
+        codexJournalSourceId("journal-a", "a.jsonl"),
+        codexJournalSourceId("journal-b", "b.jsonl"),
+      ].sort(),
+    );
+    assert.deepEqual(
+      listed.map((item) => item.logicalSessionId).sort(),
+      ["journal-a", "journal-b"],
+    );
   });
 });
 
-test("Codex reader collapses same-id rollout continuations when evidence is a strict prefix chain", async () => {
+test("Codex reader preserves same-logical-id rollout continuations as distinct physical source experiences", async () => {
   await withRoot(async (root) => {
     const base: unknown[] = sessionRecords(
       "shared-session",
@@ -381,21 +453,31 @@ test("Codex reader collapses same-id rollout continuations when evidence is a st
     await writeJsonl(join(root, "b.jsonl"), extended);
 
     const reader = new CodexJsonlSessionReader(root);
-    assert.equal((await reader.inspect()).sessionCount, 1);
+    assert.equal((await reader.inspect()).sessionCount, 2);
     const listed = await reader.listSessions({ limit: 10 });
-    assert.deepEqual(listed.map((item) => item.sessionId), ["same-journal"]);
+    assert.deepEqual(
+      listed.map((item) => item.logicalSessionId),
+      ["same-journal", "same-journal"],
+    );
+    assert.equal(new Set(listed.map((item) => item.sessionId)).size, 2);
 
     const adapter = new CodexSourceAdapter({ reader });
     const page = await adapter.discover({ limit: 10 });
-    const normalized = await adapter.normalize(await adapter.read(page.units[0]!));
-    assert.deepEqual(
-      normalized.events.map((event) => event.content),
-      ["first", "ack", "second", "ack-two"],
+    const normalized = await Promise.all(
+      page.units.map(async (unit) =>
+        adapter.normalize(await adapter.read(unit))
+      ),
     );
+    assert.ok(normalized.some((item) =>
+      item.events.map((event) => event.content).includes("second")
+    ));
+    assert.ok(normalized.every((item) =>
+      item.metadata.logicalSessionId === "same-journal"
+    ));
   });
 });
 
-test("Codex reader fails closed when same-id rollout evidence diverges", async () => {
+test("Codex reader preserves divergent same-logical-id rollouts instead of dropping a branch", async () => {
   await withRoot(async (root) => {
     await writeJsonl(
       join(root, "a.jsonl"),
@@ -406,9 +488,12 @@ test("Codex reader fails closed when same-id rollout evidence diverges", async (
       sessionRecords("session-b", "second", "ack", "same-journal"),
     );
     const reader = new CodexJsonlSessionReader(root);
-    await assert.rejects(
-      () => reader.inspect(),
-      /duplicate Codex session identifier has divergent evidence/,
+    assert.equal((await reader.inspect()).sessionCount, 2);
+    const listed = await reader.listSessions({ limit: 10 });
+    assert.equal(new Set(listed.map((item) => item.sessionId)).size, 2);
+    assert.deepEqual(
+      listed.map((item) => item.logicalSessionId),
+      ["same-journal", "same-journal"],
     );
   });
 });
@@ -596,10 +681,14 @@ test("Codex reader keeps its initially pinned root when the root pathname is rep
     const reader = new CodexJsonlSessionReader(root);
     assert.equal((await reader.inspect()).sessionCount, 1);
 
+    const sourceId = codexJournalSourceId(
+      "journal-root-pin",
+      "rollout.jsonl",
+    );
     await rename(root, moved);
     await symlink(outside, root);
     await assert.rejects(
-      () => reader.readSession("journal-root-pin"),
+      () => reader.readSession(sourceId),
       /source file escapes configured root/,
     );
   } finally {
@@ -623,10 +712,14 @@ test("Codex cached index still rejects a file replaced by an out-of-root symlink
       );
       const reader = new CodexJsonlSessionReader(root);
       assert.equal((await reader.inspect()).sessionCount, 1);
+      const sourceId = codexJournalSourceId(
+        "journal-race",
+        "valid.jsonl",
+      );
       await rm(valid);
       await symlink(outsideFile, valid);
       await assert.rejects(
-        () => reader.readSession("journal-race"),
+        () => reader.readSession(sourceId),
         /source file escapes configured root|became a symlink/,
       );
     } finally {

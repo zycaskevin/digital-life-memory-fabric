@@ -295,6 +295,8 @@ The distill path then reuses the existing DLMF Digital-Life-Stack runtime compos
 
 The Codex one-shot worker observes the configured local `.codex/sessions` root, keeps a separate private incremental checkpoint, applies the configured idle gate, and can run as a user-systemd timer.
 
+Codex source identity is **physical-journal based** as of `CodexSourceAdapter 0.2.0`. Modern Codex can reuse one logical `session_meta.id` across multiple physical rollout files, including divergent branches. DLMF therefore derives a stable source ID from the logical Codex ID plus the source-root-relative journal locator. The original logical ID remains provenance metadata only. This preserves every branch instead of forcing Source Adapter collision resolution to discard evidence; semantic duplication remains a downstream DLMF governance concern. Because this changes source identity semantics, 0.1.x Codex incremental checkpoints are intentionally incompatible and fail closed.
+
 `--preflight` inspects the real source and, in distill mode, verifies DLMF/Hindsight/schema readiness without creating or advancing a source checkpoint.
 
 `--baseline-current` establishes the current source watermark. In reference-only deployment this is the required first activation step so old local history is not accidentally treated as newly-arrived work.
@@ -356,7 +358,7 @@ DLMF and AKF remain parallel authorities throughout this activation. None of the
 
 The activation candidate was hardened through repeated independent review before any live canary:
 
-- repository main suite: **290 total / 282 passed / 8 intentionally skipped / 0 failed**;
+- repository main suite: **292 total / 284 passed / 8 intentionally skipped / 0 failed**;
 - canonical projection retry suite: **29 / 29 passed**;
 - activation-specific suite: **11 / 11 passed**;
 - TypeScript typecheck: **PASS**;
@@ -366,3 +368,13 @@ The activation candidate was hardened through repeated independent review before
 The independent Verifier/QA canary negative control also passed: attempts to target production memoryNamespace=life in distill mode were rejected unless an explicit isolated canary-* namespace is bound. Its sandbox could not complete the full suite because that sandbox denies local loopback-listen and mkfifo; the authoritative GB10/ForgeRelay Node 24 regression above exercised those host capabilities directly.
 
 Live reference-only and isolated distillation canary evidence are recorded separately from repository acceptance so deployment state is never inferred from tests alone.
+
+### 2026-10-02 live activation evidence
+
+- real Codex reference-only UAT against the complete local `~/.codex/sessions` tree exposed duplicate logical session IDs with divergent physical rollouts; the pre-0.2.0 adapter failed closed before activation;
+- after moving source identity to physical journals, the same full-root baseline passed with **1,185 journal source units**, **0 ingestion**, and **0 failed receipts**;
+- an immediate replay observed **1,183 unchanged** journals and **2 legitimately changed** live journals while Codex was still active, demonstrating delta capture rather than historical replay;
+- authenticated ChatGPT loopback inbox canary accepted one completed synthetic snapshot and explicitly reported `canonicalMemoryWrites=0`; reference-only sync then produced **1 Development reference / 0 ingestion**;
+- isolated distillation canary scope `canary-multi-source-20261002` completed with **1 terminal receipt**, `admission_complete=true`, `canonicalization_outcome=no_memory_worthy_content`, **0 candidates**, and **0 canonical memories**;
+- the production `life` namespace had **0 receipt/candidate matches** for that synthetic canary source, proving the canary did not contaminate production life memory;
+- broad production `distill` remains disabled. Reference-only sidecar deployment is the next activation step.

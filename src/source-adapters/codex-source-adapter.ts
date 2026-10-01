@@ -31,7 +31,10 @@ import {
 } from "./contained-source-file.js";
 
 export interface CodexSessionSummary {
+  /** Stable DLMF source-unit identity for one physical Codex journal. */
   sessionId: string;
+  /** Codex logical session/thread identity retained only as provenance metadata. */
+  logicalSessionId: string;
   relativePath: string;
   startedAt?: string;
   lastModifiedAt: string;
@@ -194,15 +197,18 @@ function evidenceFingerprint(records: unknown[]): SourceFingerprint {
   return sha256(selectedEvidenceProjection(records));
 }
 
-function evidenceProjectionIsPrefix(
-  prefix: ReturnType<typeof selectedEvidenceProjection>,
-  full: ReturnType<typeof selectedEvidenceProjection>,
-): boolean {
-  if (prefix.length > full.length) return false;
-  for (let index = 0; index < prefix.length; index += 1) {
-    if (stableJson(prefix[index]) !== stableJson(full[index])) return false;
-  }
-  return true;
+export function codexJournalSourceId(
+  logicalSessionId: string,
+  relativePath: string,
+): string {
+  const locator = safeLocator(relativePath);
+  const digest = createHash("sha256")
+    .update(
+      `dlmf/codex-journal-source/v1\0${logicalSessionId}\0${locator}`,
+      "utf8",
+    )
+    .digest("hex");
+  return `codex_journal_${digest}`;
 }
 
 function sourceVersion(summary: CodexSessionSummary): SourceVersion {
@@ -267,19 +273,24 @@ function summaryFromRecords(
     throw new Error("Codex session journal must begin with session_meta");
   }
   const payload = object(first.payload);
-  // Modern Codex uses payload.id as the logical journal/session identity.
-  // A resumed rollout may write a second physical file while retaining the same
-  // id; the reader therefore resolves same-id physical files as a monotonic
-  // evidence chain and fails closed if their user/assistant evidence diverges.
-  // session_id remains a compatibility fallback for older journals without id.
-  const sessionId = string(payload?.id) ?? string(payload?.session_id);
-  if (sessionId === undefined || sessionId.trim() !== sessionId) {
-    throw new Error("Codex session_meta is missing a stable session identifier");
+  // Modern Codex may reuse one logical id across multiple physical rollout
+  // journals (including divergent branches). DLMF therefore identifies the
+  // Source Experience by the physical journal locator, while retaining the
+  // logical Codex id only as provenance metadata. This preserves every branch
+  // without letting source-layer collision handling discard evidence.
+  const logicalSessionId = string(payload?.id) ?? string(payload?.session_id);
+  if (
+    logicalSessionId === undefined
+    || logicalSessionId.trim() !== logicalSessionId
+  ) {
+    throw new Error("Codex session_meta is missing a stable logical session identifier");
   }
+  const locator = safeLocator(relativePath);
   const startedAt = string(payload?.timestamp) ?? string(first.timestamp);
   return {
-    sessionId,
-    relativePath: safeLocator(relativePath),
+    sessionId: codexJournalSourceId(logicalSessionId, locator),
+    logicalSessionId,
+    relativePath: locator,
     ...(startedAt === undefined ? {} : { startedAt }),
     lastModifiedAt,
     sizeBytes,
@@ -400,10 +411,8 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
     };
     await walk(root);
 
-    const grouped = new Map<
-      string,
-      Array<{ path: string; summary: CodexSessionSummary }>
-    >();
+    const found: Array<{ path: string; summary: CodexSessionSummary }> = [];
+    const sourceIds = new Set<string>();
     for (const path of paths.sort()) {
       const file = await readContainedSourceFirstLine(path, root);
       let first: unknown;
@@ -413,8 +422,8 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
         const firstLineBytes = Buffer.byteLength(file.text, "utf8");
         if (firstLineBytes >= file.sizeBytes) {
           // A newly-created Codex journal can be observed before its first
-          // session_meta record is fully appended. Without a stable ID it is
-          // not yet an Experience Unit, so isolate it and retry on a later scan.
+          // session_meta record is fully appended. Without a stable logical id
+          // it is not yet an Experience Unit, so isolate it and retry later.
           continue;
         }
         throw new Error("Codex session journal contains invalid JSON at line 1");
@@ -426,19 +435,13 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
         file.modifiedAt,
         file.sizeBytes,
       );
-      const group = grouped.get(summary.sessionId) ?? [];
-      group.push({ path, summary });
-      grouped.set(summary.sessionId, group);
+      if (sourceIds.has(summary.sessionId)) {
+        throw new Error("duplicate Codex physical journal source identity");
+      }
+      sourceIds.add(summary.sessionId);
+      found.push({ path, summary });
     }
 
-    const found: Array<{ path: string; summary: CodexSessionSummary }> = [];
-    for (const group of grouped.values()) {
-      found.push(
-        group.length === 1
-          ? group[0]!
-          : await this.#resolveMonotonicRolloutGroup(group, root),
-      );
-    }
     this.#index = found.sort((left, right) =>
       compareStableIds(left.summary.sessionId, right.summary.sessionId)
     );
@@ -448,63 +451,6 @@ export class CodexJsonlSessionReader implements CodexSessionReader {
     return this.#index;
   }
 
-  async #resolveMonotonicRolloutGroup(
-    group: Array<{ path: string; summary: CodexSessionSummary }>,
-    root: string,
-  ): Promise<{ path: string; summary: CodexSessionSummary }> {
-    const expanded: Array<{
-      entry: { path: string; summary: CodexSessionSummary };
-      projection: ReturnType<typeof selectedEvidenceProjection>;
-    }> = [];
-
-    for (const entry of group) {
-      const file = await readContainedSourceFile(entry.path, root);
-      const parsed = parseJsonLinesText(file.text);
-      const summary = summaryFromRecords(
-        parsed.records,
-        entry.summary.relativePath,
-        file.modifiedAt,
-        file.sizeBytes,
-      );
-      if (summary.sessionId !== entry.summary.sessionId) {
-        throw new Error(
-          "Codex session identity changed while resolving rollout continuation",
-        );
-      }
-      expanded.push({
-        entry: { path: entry.path, summary },
-        projection: selectedEvidenceProjection(parsed.records),
-      });
-    }
-
-    const maximal = expanded.filter((candidate) =>
-      expanded.every((other) =>
-        evidenceProjectionIsPrefix(other.projection, candidate.projection)
-      )
-    );
-    if (maximal.length === 0) {
-      throw new Error(
-        "duplicate Codex session identifier has divergent evidence",
-      );
-    }
-
-    maximal.sort((left, right) => {
-      if (left.projection.length !== right.projection.length) {
-        return right.projection.length - left.projection.length;
-      }
-      const modified =
-        Date.parse(right.entry.summary.lastModifiedAt)
-        - Date.parse(left.entry.summary.lastModifiedAt);
-      if (modified !== 0) return modified;
-      if (left.entry.summary.sizeBytes !== right.entry.summary.sizeBytes) {
-        return right.entry.summary.sizeBytes - left.entry.summary.sizeBytes;
-      }
-      return right.entry.summary.relativePath.localeCompare(
-        left.entry.summary.relativePath,
-      );
-    });
-    return maximal[0]!.entry;
-  }
 }
 
 export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPayload> {
@@ -519,7 +465,7 @@ export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPaylo
     clock?: () => Date;
   }) {
     this.#reader = options.reader;
-    this.version = options.version ?? "0.1.0";
+    this.version = options.version ?? "0.2.0";
     this.#clock = options.clock ?? (() => new Date());
   }
 
@@ -639,6 +585,7 @@ export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPaylo
         assistantMessageCount,
         excludedRecordCount: Math.max(0, payload.records.length - selected.length),
         incompleteTail: payload.incompleteTail,
+        logicalSessionId: payload.summary.logicalSessionId,
         source: payload.summary.source ?? null,
         originator: payload.summary.originator ?? null,
         evidencePolicy: "explicit_user_assistant_text_only",
@@ -654,7 +601,7 @@ export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPaylo
           : result.readAt,
         readAt: result.readAt,
         normalizedAt: now,
-        sourceLocator: `codex-session:${payload.summary.relativePath}`,
+        sourceLocator: `codex-journal:${payload.summary.relativePath}`,
       },
     };
   }
@@ -677,6 +624,7 @@ export class CodexSourceAdapter implements MemorySourceAdapter<CodexSessionPaylo
       metadata: {
         discoveredAt: this.#clock().toISOString(),
         relativePath: summary.relativePath,
+        logicalSessionId: summary.logicalSessionId,
         lastModifiedAt: summary.lastModifiedAt,
         sizeBytes: summary.sizeBytes,
       },
@@ -724,7 +672,7 @@ export class CodexIncrementalSyncService {
     }
     const adapter = new CodexSourceAdapter({
       reader: options.reader,
-      version: options.adapterVersion ?? "0.1.0",
+      version: options.adapterVersion ?? "0.2.0",
       clock,
     });
     this.#service = new GenericIncrementalSourceSyncService({
