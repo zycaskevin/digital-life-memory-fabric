@@ -9,7 +9,9 @@ import {
   ChatGptCaptureDirectoryReader,
   ChatGptCaptureIncrementalSyncService,
   ChatGptCaptureSourceAdapter,
+  ChatGptSourceAdapter,
   type ChatGptCapturedConversation,
+  type ChatGptSourceTransport,
   type IncrementalSourceCheckpoint,
   type IncrementalSourceCheckpointStore,
 } from "../src/index.js";
@@ -123,6 +125,56 @@ test("ChatGPT capture normalizes only user/assistant text and labels cloud publi
     assert.equal(normalized.metadata.assistantMessageCount, 1);
     assert.equal(serialized.includes("SECRET_SYSTEM_CONTROL"), false);
     assert.equal(serialized.includes("SECRET_TOOL_BODY"), false);
+  });
+});
+
+test("ChatGPT transport is provenance only and keeps one logical source identity", async () => {
+  await withRoot(async (root) => {
+    await writeSnapshot(join(root, "conversation.json"), snapshot("completed"));
+    const transports: ChatGptSourceTransport[] = [
+      "context_publisher",
+      "export",
+      "compliance_api",
+    ];
+    const identities = new Set<string>();
+
+    for (const transport of transports) {
+      const adapter = new ChatGptSourceAdapter({
+        reader: new ChatGptCaptureDirectoryReader(root),
+        transport,
+      });
+      const inspection = await adapter.inspect();
+      assert.equal(inspection.metadata.transport, transport);
+      if (transport === "context_publisher") {
+        assert.equal(inspection.metadata.cloudPublisherConnected, false);
+      } else {
+        assert.equal(
+          Object.hasOwn(inspection.metadata, "cloudPublisherConnected"),
+          false,
+        );
+      }
+
+      const page = await adapter.discover({ limit: 10 });
+      const unit = page.units[0]!;
+      const normalized = await adapter.normalize(await adapter.read(unit));
+      identities.add(`${unit.source.sourceId}|${unit.experienceId}`);
+      assert.equal(normalized.metadata.transport, transport);
+      assert.equal(normalized.sourceId, "chatgpt-conversation-001");
+      assert.equal(
+        normalized.provenance.sourceLocator,
+        transport === "context_publisher"
+          ? "chatgpt-capture:conversation.json"
+          : `chatgpt-${transport}:conversation.json`,
+      );
+    }
+
+    assert.equal(identities.size, 1);
+    assert.equal(
+      new ChatGptCaptureSourceAdapter({
+        reader: new ChatGptCaptureDirectoryReader(root),
+      }).name,
+      "ChatGptCaptureSourceAdapter",
+    );
   });
 });
 

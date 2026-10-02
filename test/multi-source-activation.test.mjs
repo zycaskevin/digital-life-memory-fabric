@@ -14,6 +14,10 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  multiSourceCheckpointPath,
+  multiSourceExecutionScope,
+  multiSourceModeRunsDlmf,
+  multiSourceWriteMode,
   resolveHindsightApiKey,
   serviceUrl,
 } from "../scripts/multi-source-dlmf-runtime.mjs";
@@ -175,6 +179,63 @@ test("multi-source worker preflight is read-only and reference_only needs no DB/
 
     await assert.rejects(() => stat(env.DLMF_CODEX_INCREMENTAL_CHECKPOINT));
     await assert.rejects(() => stat(env.DLMF_CHATGPT_INCREMENTAL_CHECKPOINT));
+  } finally {
+    await rm(paths.root, { recursive: true, force: true });
+  }
+});
+
+test("shadow mode redirects execution scope and checkpoint away from production life", () => {
+  const prior = process.env.DLMF_MULTI_SOURCE_SHADOW_NAMESPACE;
+  try {
+    process.env.DLMF_MULTI_SOURCE_SHADOW_NAMESPACE = "shadow-multi-source-test";
+    const productionScope = {
+      tenantId: "tenant-arthur",
+      lifeDid: "did:arthurverse:nancy",
+      memoryNamespace: "life",
+    };
+    const shadowScope = multiSourceExecutionScope("shadow", productionScope);
+
+    assert.equal(multiSourceWriteMode(["--shadow"]), "shadow");
+    assert.equal(multiSourceModeRunsDlmf("shadow"), true);
+    assert.equal(productionScope.memoryNamespace, "life");
+    assert.deepEqual(shadowScope, {
+      ...productionScope,
+      memoryNamespace: "shadow-multi-source-test",
+    });
+    assert.equal(
+      multiSourceCheckpointPath("shadow", "/tmp/dlmf-source-checkpoint.json"),
+      "/tmp/dlmf-source-checkpoint.json.shadow",
+    );
+    assert.equal(
+      multiSourceCheckpointPath("reference_only", "/tmp/dlmf-source-checkpoint.json"),
+      "/tmp/dlmf-source-checkpoint.json",
+    );
+  } finally {
+    if (prior === undefined) delete process.env.DLMF_MULTI_SOURCE_SHADOW_NAMESPACE;
+    else process.env.DLMF_MULTI_SOURCE_SHADOW_NAMESPACE = prior;
+  }
+});
+
+test("shadow mode rejects production life as its execution namespace before runtime creation", async () => {
+  const paths = await fixture();
+  try {
+    const env = {
+      ...activationEnv(paths),
+      DLMF_MULTI_SOURCE_WRITE_MODE: "shadow",
+      DLMF_MULTI_SOURCE_SHADOW_NAMESPACE: "life",
+    };
+    const result = run(
+      "scripts/codex-incremental-sync-worker.mjs",
+      ["--preflight", "--shadow"],
+      env,
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /shadow namespace must start with shadow- and must not be life/,
+    );
+    await assert.rejects(() => stat(env.DLMF_CODEX_INCREMENTAL_CHECKPOINT));
+    await assert.rejects(() => stat(`${env.DLMF_CODEX_INCREMENTAL_CHECKPOINT}.shadow`));
   } finally {
     await rm(paths.root, { recursive: true, force: true });
   }

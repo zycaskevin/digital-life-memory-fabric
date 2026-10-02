@@ -30,6 +30,14 @@ import { readContainedSourceFile } from "./contained-source-file.js";
 export const CHATGPT_CAPTURE_CONTRACT =
   "dlmf/chatgpt-captured-conversation/v1" as const;
 
+export const CHATGPT_SOURCE_TRANSPORTS = [
+  "context_publisher",
+  "export",
+  "compliance_api",
+] as const;
+
+export type ChatGptSourceTransport = typeof CHATGPT_SOURCE_TRANSPORTS[number];
+
 export type ChatGptCapturedConversationStatus =
   | "active"
   | "completed"
@@ -390,14 +398,17 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
   readonly name = "ChatGptCaptureSourceAdapter";
   readonly version: string;
   readonly #reader: ChatGptCaptureReader;
+  readonly #transport: ChatGptSourceTransport;
   readonly #clock: () => Date;
 
   constructor(options: {
     reader: ChatGptCaptureReader;
+    transport?: ChatGptSourceTransport;
     version?: string;
     clock?: () => Date;
   }) {
     this.#reader = options.reader;
+    this.#transport = options.transport ?? "context_publisher";
     this.version = options.version ?? "0.1.0";
     this.#clock = options.clock ?? (() => new Date());
   }
@@ -421,7 +432,10 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
       metadata: {
         conversationCount: source.conversationCount,
         captureContract: CHATGPT_CAPTURE_CONTRACT,
-        cloudPublisherConnected: false,
+        transport: this.#transport,
+        ...(this.#transport === "context_publisher"
+          ? { cloudPublisherConnected: false }
+          : {}),
         evidencePolicy: "explicit_user_assistant_text_only",
       },
     };
@@ -509,7 +523,10 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
         excludedMessageCount:
           snapshot.messages.length - userMessageCount - assistantMessageCount,
         evidencePolicy: "explicit_user_assistant_text_only",
-        cloudPublisherConnected: false,
+        transport: this.#transport,
+        ...(this.#transport === "context_publisher"
+          ? { cloudPublisherConnected: false }
+          : {}),
       },
       provenance: {
         source,
@@ -522,7 +539,9 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
           : result.readAt,
         readAt: result.readAt,
         normalizedAt: this.#clock().toISOString(),
-        sourceLocator: `chatgpt-capture:${summary.relativePath}`,
+        sourceLocator: this.#transport === "context_publisher"
+          ? `chatgpt-capture:${summary.relativePath}`
+          : `chatgpt-${this.#transport}:${summary.relativePath}`,
       },
     };
   }
@@ -562,8 +581,15 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
   }
 }
 
+/**
+ * Canonical public name for the ChatGPT adapter. The capture-prefixed export is
+ * retained for checkpoint/deployment compatibility with the first transport.
+ */
+export { ChatGptCaptureSourceAdapter as ChatGptSourceAdapter };
+
 export interface ChatGptCaptureIncrementalSyncOptions {
   reader: ChatGptCaptureReader;
+  transport?: ChatGptSourceTransport;
   checkpointStore: IncrementalSourceCheckpointStore;
   scope: MemoryScope;
   ingestor?: NormalizedExperienceIngestor;
@@ -582,6 +608,7 @@ export class ChatGptCaptureIncrementalSyncService {
   constructor(options: ChatGptCaptureIncrementalSyncOptions) {
     const adapter = new ChatGptCaptureSourceAdapter({
       reader: options.reader,
+      transport: options.transport ?? "context_publisher",
       version: options.adapterVersion ?? "0.1.0",
       ...(options.clock === undefined ? {} : { clock: options.clock }),
     });

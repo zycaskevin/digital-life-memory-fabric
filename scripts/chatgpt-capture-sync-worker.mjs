@@ -5,6 +5,9 @@ import {
   assertMultiSourceDistillCanary,
   boundedInteger,
   createMultiSourceDlmfRuntime,
+  multiSourceCheckpointPath,
+  multiSourceExecutionScope,
+  multiSourceModeRunsDlmf,
   multiSourceWriteMode,
   requiredEnv,
 } from "./multi-source-dlmf-runtime.mjs";
@@ -24,15 +27,21 @@ const mode = multiSourceWriteMode(argv);
 const captureRoot = await assertSecureSourceDirectory(
   requiredEnv("DLMF_CHATGPT_CAPTURE_ROOT"),
 );
-const checkpointPath = resolve(
-  requiredEnv("DLMF_CHATGPT_INCREMENTAL_CHECKPOINT"),
+const checkpointPath = multiSourceCheckpointPath(
+  mode,
+  resolve(requiredEnv("DLMF_CHATGPT_INCREMENTAL_CHECKPOINT")),
 );
-const journalPath =
-  process.env.DLMF_CHATGPT_DEVELOPMENT_EXPERIENCE_JOURNAL?.trim()
-    ? resolve(process.env.DLMF_CHATGPT_DEVELOPMENT_EXPERIENCE_JOURNAL.trim())
-    : undefined;
-const scope = scopeFromEnv("DLMF_CHATGPT", requiredEnv);
-assertMultiSourceDistillCanary(mode, scope);
+const configuredJournalPath = process.env.DLMF_CHATGPT_DEVELOPMENT_EXPERIENCE_JOURNAL?.trim()
+  ? resolve(process.env.DLMF_CHATGPT_DEVELOPMENT_EXPERIENCE_JOURNAL.trim())
+  : undefined;
+const journalPath = configuredJournalPath === undefined
+  ? undefined
+  : mode === "shadow"
+    ? `${configuredJournalPath}.shadow`
+    : configuredJournalPath;
+const sourceScope = scopeFromEnv("DLMF_CHATGPT", requiredEnv);
+assertMultiSourceDistillCanary(mode, sourceScope);
+const scope = multiSourceExecutionScope(mode, sourceScope);
 if (mode === "reference_only" && journalPath === undefined) {
   throw new Error(
     "DLMF_CHATGPT_DEVELOPMENT_EXPERIENCE_JOURNAL is required in reference_only mode",
@@ -44,7 +53,7 @@ const inspection = await reader.inspect();
 if (isPreflight(argv)) {
   let runtimeResources;
   try {
-    if (mode === "distill") {
+    if (multiSourceModeRunsDlmf(mode)) {
       runtimeResources = await createMultiSourceDlmfRuntime({
         dlfm,
         runtimeId: "chatgpt-capture-preflight",
@@ -53,7 +62,10 @@ if (isPreflight(argv)) {
     }
     console.log(
       `DLMF_CHATGPT_PREFLIGHT=PASS mode=${mode} conversations=${inspection.conversationCount} `
-      + "checkpointWrites=0 canonicalMemoryWrites=0",
+      + "checkpointWrites=0 canonicalMemoryWrites=0"
+      + (mode === "shadow"
+        ? ` shadowNamespace=${scope.memoryNamespace} productionCanonicalMemoryWrites=0`
+        : ""),
     );
   } finally {
     await runtimeResources?.close().catch(() => undefined);
@@ -76,6 +88,7 @@ let runtimeResources;
 try {
   const syncOptions = {
     reader,
+    transport: "context_publisher",
     checkpointStore: new dlfm.FileIncrementalSourceCheckpointStore(checkpointPath),
     scope,
     pageSize: boundedInteger("DLMF_CHATGPT_PAGE_SIZE", 250, 1, 1000),
@@ -87,7 +100,7 @@ try {
         }),
   };
 
-  if (mode === "distill") {
+  if (multiSourceModeRunsDlmf(mode)) {
     runtimeResources = await createMultiSourceDlmfRuntime({
       dlfm,
       runtimeId: "chatgpt-capture",
@@ -122,7 +135,10 @@ try {
     + `scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} `
     + `sourceOnly=${result.sourceOnly} deferred=${result.deferred} `
     + `unchanged=${result.unchanged} developmentRefs=${result.experiences.length} `
-    + `failedReceipts=${failedReceipts}`,
+    + `failedReceipts=${failedReceipts}`
+    + (mode === "shadow"
+      ? ` shadowNamespace=${scope.memoryNamespace} shadowEvaluated=${result.ingested} productionCanonicalMemoryWrites=0`
+      : ""),
   );
   if (failedReceipts > 0) process.exitCode = 1;
 } finally {

@@ -5,6 +5,9 @@ import {
   assertMultiSourceDistillCanary,
   boundedInteger,
   createMultiSourceDlmfRuntime,
+  multiSourceCheckpointPath,
+  multiSourceExecutionScope,
+  multiSourceModeRunsDlmf,
   multiSourceWriteMode,
   requiredEnv,
 } from "./multi-source-dlmf-runtime.mjs";
@@ -24,12 +27,21 @@ const mode = multiSourceWriteMode(argv);
 const sourceRoot = await assertSecureSourceDirectory(
   requiredEnv("DLMF_CODEX_SESSIONS_ROOT"),
 );
-const checkpointPath = resolve(requiredEnv("DLMF_CODEX_INCREMENTAL_CHECKPOINT"));
-const journalPath = process.env.DLMF_CODEX_DEVELOPMENT_EXPERIENCE_JOURNAL?.trim()
+const checkpointPath = multiSourceCheckpointPath(
+  mode,
+  resolve(requiredEnv("DLMF_CODEX_INCREMENTAL_CHECKPOINT")),
+);
+const configuredJournalPath = process.env.DLMF_CODEX_DEVELOPMENT_EXPERIENCE_JOURNAL?.trim()
   ? resolve(process.env.DLMF_CODEX_DEVELOPMENT_EXPERIENCE_JOURNAL.trim())
   : undefined;
-const scope = scopeFromEnv("DLMF_CODEX", requiredEnv);
-assertMultiSourceDistillCanary(mode, scope);
+const journalPath = configuredJournalPath === undefined
+  ? undefined
+  : mode === "shadow"
+    ? `${configuredJournalPath}.shadow`
+    : configuredJournalPath;
+const sourceScope = scopeFromEnv("DLMF_CODEX", requiredEnv);
+assertMultiSourceDistillCanary(mode, sourceScope);
+const scope = multiSourceExecutionScope(mode, sourceScope);
 if (mode === "reference_only" && journalPath === undefined) {
   throw new Error(
     "DLMF_CODEX_DEVELOPMENT_EXPERIENCE_JOURNAL is required in reference_only mode",
@@ -41,7 +53,7 @@ const inspection = await reader.inspect();
 if (isPreflight(argv)) {
   let runtimeResources;
   try {
-    if (mode === "distill") {
+    if (multiSourceModeRunsDlmf(mode)) {
       runtimeResources = await createMultiSourceDlmfRuntime({
         dlfm,
         runtimeId: "codex-incremental-preflight",
@@ -50,7 +62,10 @@ if (isPreflight(argv)) {
     }
     console.log(
       `DLMF_CODEX_PREFLIGHT=PASS mode=${mode} sessions=${inspection.sessionCount} `
-      + "checkpointWrites=0 canonicalMemoryWrites=0",
+      + "checkpointWrites=0 canonicalMemoryWrites=0"
+      + (mode === "shadow"
+        ? ` shadowNamespace=${scope.memoryNamespace} productionCanonicalMemoryWrites=0`
+        : ""),
     );
   } finally {
     await runtimeResources?.close().catch(() => undefined);
@@ -90,7 +105,7 @@ try {
         }),
   };
 
-  if (mode === "distill") {
+  if (multiSourceModeRunsDlmf(mode)) {
     runtimeResources = await createMultiSourceDlmfRuntime({
       dlfm,
       runtimeId: "codex-incremental",
@@ -125,7 +140,10 @@ try {
     + `scanned=${result.scanned} changed=${result.changed} ingested=${result.ingested} `
     + `sourceOnly=${result.sourceOnly} deferred=${result.deferred} `
     + `unchanged=${result.unchanged} developmentRefs=${result.experiences.length} `
-    + `failedReceipts=${failedReceipts}`,
+    + `failedReceipts=${failedReceipts}`
+    + (mode === "shadow"
+      ? ` shadowNamespace=${scope.memoryNamespace} shadowEvaluated=${result.ingested} productionCanonicalMemoryWrites=0`
+      : ""),
   );
   if (failedReceipts > 0) process.exitCode = 1;
 } finally {

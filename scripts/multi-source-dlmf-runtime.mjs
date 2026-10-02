@@ -31,11 +31,37 @@ export function boundedInteger(name, fallback, minimum, maximum) {
 
 export function multiSourceWriteMode(argv = process.argv.slice(2)) {
   if (argv.includes("--reference-only")) return "reference_only";
+  if (argv.includes("--shadow")) return "shadow";
   const value = process.env.DLMF_MULTI_SOURCE_WRITE_MODE?.trim() || "reference_only";
-  if (value !== "reference_only" && value !== "distill") {
-    throw new Error("DLMF_MULTI_SOURCE_WRITE_MODE must be reference_only or distill");
+  if (value !== "reference_only" && value !== "shadow" && value !== "distill") {
+    throw new Error(
+      "DLMF_MULTI_SOURCE_WRITE_MODE must be reference_only, shadow, or distill",
+    );
   }
   return value;
+}
+
+export function multiSourceExecutionScope(mode, sourceScope) {
+  if (mode !== "shadow") return { ...sourceScope };
+  const namespace = requiredEnv("DLMF_MULTI_SOURCE_SHADOW_NAMESPACE");
+  if (namespace === "life" || !namespace.startsWith("shadow-")) {
+    throw new Error(
+      "multi-source shadow namespace must start with shadow- and must not be life",
+    );
+  }
+  return {
+    ...sourceScope,
+    memoryNamespace: namespace,
+  };
+}
+
+export function multiSourceCheckpointPath(mode, checkpointPath) {
+  const path = resolve(checkpointPath);
+  return mode === "shadow" ? `${path}.shadow` : path;
+}
+
+export function multiSourceModeRunsDlmf(mode) {
+  return mode === "shadow" || mode === "distill";
 }
 
 export function assertMultiSourceDistillCanary(mode, scope) {

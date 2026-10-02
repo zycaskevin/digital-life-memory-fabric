@@ -411,3 +411,77 @@ Operational evidence:
 Production-wide `DLMF_MULTI_SOURCE_WRITE_MODE=distill` remains **disabled**. The only write-enabled validation was the separately scoped `canary-multi-source-20261002` run described above.
 
 Rollback is non-destructive: disable the three multi-source timers and the ChatGPT capture inbox. Existing Hermes/Nancy memory ingestion remains untouched. The pre-activation ForgeRelay checkpoint is `cp_dded69fad0`.
+
+## 14. Architecture simplification — Source transport and shadow mode
+
+The long-lived mental model is intentionally small:
+
+```text
+Experience Source -> Source Adapter -> Normalized Experience -> DLMF
+```
+
+DLMF remains the Life Memory / Canonical Memory Authority. AKF remains the parallel Knowledge Authority. Lifetime Hub remains the Identity / Continuity Authority. A transport, scheduler, inbox, export reader, or evaluation mode does not become a new authority or a new architectural layer.
+
+### ChatGPT transport is an adapter detail
+
+`ChatGptSourceAdapter` is the canonical public adapter name while the existing `ChatGptCaptureSourceAdapter` export remains available for deployed compatibility. The adapter recognizes these transport identities:
+
+- `context_publisher` — the current local capture contract and loopback inbox path;
+- `export` — reserved for a future authorized ChatGPT export reader;
+- `compliance_api` — reserved for a future authorized Enterprise / Edu compliance connector.
+
+The same ChatGPT `conversationId` keeps the same DLMF source identity and `experienceId` across transports. Transport is provenance, not memory identity. This allows a later authoritative export or compliance source to reconcile the same logical conversation instead of creating a second memory identity.
+
+Only `context_publisher` is wired today. The presence of the `export` and `compliance_api` transport values does **not** mean those upstream integrations are connected.
+
+### Shadow is a DLMF execution mode, not a service
+
+Multi-source execution now has three operator modes:
+
+```text
+reference_only  -> observe / checkpoint / content-free Development reference
+shadow          -> run the real DLMF distillation + curation + admission pipeline in an isolated shadow-* memory namespace
+distill         -> existing canary-gated write path
+```
+
+`shadow` does not introduce a Shadow Engine or duplicate the admission pipeline. It reuses the same DLMF runtime and therefore evaluates the real provider, curation, semantic governance, admission, and canonicalization behavior.
+
+The isolation contract is fail-closed:
+
+- `DLMF_MULTI_SOURCE_SHADOW_NAMESPACE` is mandatory in shadow mode;
+- it must start with `shadow-` and must never be `life`;
+- the runtime allowed scope is rewritten to that isolated namespace while the configured production source scope remains unchanged;
+- shadow uses a separate `.shadow` source checkpoint;
+- shadow uses a separate `.shadow` Development reference journal;
+- archive identity already includes scope, and Hindsight bank resolution is scope-derived, so shadow evidence does not share the production-life archive identity or provider bank identity.
+
+Shadow can create disposable canonical records **inside its isolated shadow namespace** because that is how the real admission/canonicalization path is exercised. Those records are evaluation evidence, not production Life Memory. Production `life` Canonical Memory writes remain outside the shadow scope.
+
+The deployed default remains `reference_only`. Existing production timers and services are not changed merely by adding this mode, and broad production `distill` remains disabled.
+
+## 15. Adapter simplification acceptance evidence — 2026-10-02
+
+Repository verification for the Source Adapter transport + shadow-mode simplification:
+
+- focused ChatGPT adapter suite: **13 / 13 PASS**;
+- focused activation / shadow suite: **13 / 13 PASS**;
+- full repository main suite: **293 total / 285 pass / 8 intentionally skipped / 0 fail**;
+- canonical projection retry suite: **29 / 29 PASS**;
+- TypeScript typecheck: **PASS**;
+- build: **PASS**;
+- independent read-only defect-first reviewer: **No P0-P2 findings**.
+
+Real shadow UAT used the existing Nancy DLMF PostgreSQL/Hindsight writer runtime without changing any live service configuration. The synthetic ChatGPT conversation was forced through source scope `life` into execution namespace `shadow-adapter-simplification-20261002`.
+
+Observed evidence:
+
+- preflight: **PASS**, checkpoint writes 0, Canonical Memory writes 0;
+- first shadow run: **1 scanned / 1 changed / 1 ingested / 0 failed receipts**;
+- only `.shadow` checkpoint and `.shadow` Development journal were created; the base checkpoint and base journal were not created;
+- the shadow checkpoint binds `memoryNamespace=shadow-adapter-simplification-20261002` and `processingMode=distillation`;
+- the shadow Development journal remained content-free;
+- immediate replay: **1 scanned / 0 changed / 0 ingested / 1 unchanged**;
+- PostgreSQL receipt check for the exact synthetic source: production `life` receipt count **0**; shadow receipt count **1**;
+- shadow receipt: `status=complete`, `admissionComplete=true`, `providerUnitCount=1`, `curationDecisionCount=1`, `canonicalizationOutcome=no_memory_worthy_content`, candidate count 0, canonical count 0.
+
+This demonstrates that shadow mode executes the real DLMF intelligence/curation/admission path while preserving the production `life` namespace. It does not authorize production-wide distillation and it does not connect ChatGPT cloud history automatically.
