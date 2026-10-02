@@ -147,9 +147,32 @@ test("context publisher MCP writes through the live Capture Inbox contract and r
       const tool = tools.tools.find((item) => item.name === "publish_current_conversation");
       assert.ok(tool);
       assert.match(tool.description ?? "", /visible user\/assistant messages/u);
+      assert.equal(
+        Object.hasOwn(tool.inputSchema?.properties ?? {}, "conversationId"),
+        false,
+      );
 
+      const missingSession = await client.callTool({
+        name: "publish_current_conversation",
+        arguments: {
+          contextCompleteness: "unknown",
+          messages: [{ role: "user", text: "Must fail without session metadata." }],
+        },
+      });
+      assert.equal(missingSession.isError, true);
+      assert.match(
+        missingSession.content?.[0]?.text ?? "",
+        /openai\/session metadata/u,
+      );
+      assert.equal(
+        (await readdir(capture)).filter((name) => name.endsWith(".json")).length,
+        0,
+      );
+
+      const sessionMeta = { "openai/session": "chatgpt-test-session-001" };
       const first = await client.callTool({
         name: "publish_current_conversation",
+        _meta: sessionMeta,
         arguments: {
           contextCompleteness: "full_visible_context",
           messages: [
@@ -168,8 +191,8 @@ test("context publisher MCP writes through the live Capture Inbox contract and r
 
       const second = await client.callTool({
         name: "publish_current_conversation",
+        _meta: sessionMeta,
         arguments: {
-          conversationId: firstStructured.conversationId,
           contextCompleteness: "full_visible_context",
           messages: [
             { role: "user", text: "Synthetic context publisher UAT preference." },
@@ -184,6 +207,7 @@ test("context publisher MCP writes through the live Capture Inbox contract and r
 
       const invalid = await client.callTool({
         name: "publish_current_conversation",
+        _meta: sessionMeta,
         arguments: {
           contextCompleteness: "unknown",
           messages: [{ role: "system", text: "MUST_NOT_PUBLISH" }],

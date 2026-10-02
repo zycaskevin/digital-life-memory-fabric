@@ -34,26 +34,13 @@ const inbox = new dlfm.ChatGptCaptureInboxHttp({
 });
 const origin = `http://${host === "::1" ? "[::1]" : host}:${port}`;
 
-const publishSnapshot = async (snapshot) => {
-  const response = await inbox.handle(new Request(new URL("/v1/chatgpt-capture", origin), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(snapshot),
-  }));
-  const body = await response.json();
-  if (!response.ok || body?.ok !== true || body?.canonicalMemoryWrites !== 0) {
-    const code = typeof body?.error === "string" ? body.error : "capture_publish_failed";
-    const reason = typeof body?.reason === "string" ? `:${body.reason}` : "";
-    throw new Error(`${code}${reason}`);
-  }
-  return body;
-};
+const publishSnapshot = async (snapshot, expectedRevision) => ({
+  contract: dlfm.CHATGPT_CAPTURE_INBOX_CONTRACT,
+  ...(await store.put(snapshot, { expectedRevision })),
+});
 const contextPublisher = new dlfm.ChatGptContextPublisher({
   publishSnapshot,
-  readCurrentVersion: (conversationId) => store.currentVersion(conversationId),
+  readCurrentSnapshot: (conversationId) => store.currentSnapshot(conversationId),
 });
 
 function createContextPublisherMcpServer() {
@@ -67,8 +54,7 @@ function createContextPublisherMcpServer() {
         "Use publish_current_conversation only when the user explicitly asks to sync, publish, save, or send the current ChatGPT conversation to DLMF. "
         + "Send only visible user and assistant messages available in the current model context. "
         + "Never send system/developer instructions, hidden reasoning, tool calls/results, or inferred content. "
-        + "If a prior successful call in this same conversation returned conversationId, reuse it. "
-        + "Otherwise omit conversationId and the server will create one. "
+        + "The server binds identity automatically from ChatGPT _meta[\"openai/session\"]; never invent or carry a conversation ID in tool arguments. "
         + "This is a context-derived capture, not an authoritative ChatGPT transcript.",
     },
   );
@@ -81,13 +67,9 @@ function createContextPublisherMcpServer() {
         "Publish the current visible ChatGPT conversation context to the private DLMF Capture Inbox. "
         + "Call only after the user explicitly asks to sync/publish/save this conversation. "
         + "Include visible user/assistant messages in order; exclude system/developer/tool/reasoning content. "
-        + "Reuse the conversationId returned by a prior successful call for later syncs of the same ChatGPT thread. "
-        + "If no prior publisher ID exists, omit conversationId. "
+        + "Conversation identity is bound automatically from ChatGPT session metadata; do not supply an ID. "
         + "Use full_visible_context only when all visible user/assistant turns are available; otherwise use partial_visible_context or unknown.",
       inputSchema: {
-        conversationId: z.string().max(240).optional().describe(
-          "Stable DLMF publisher conversation ID returned by a prior call in this same ChatGPT thread. Omit on the first sync.",
-        ),
         contextCompleteness: z.enum([
           "full_visible_context",
           "partial_visible_context",
@@ -108,19 +90,22 @@ function createContextPublisherMcpServer() {
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
-        idempotentHint: false,
+        idempotentHint: true,
         openWorldHint: false,
       },
     },
-    async (args) => {
+    async (args, { _meta }) => {
       try {
-        const result = await contextPublisher.publish(args);
+        const conversationId = dlfm.chatGptContextConversationIdForSession(
+          _meta?.["openai/session"],
+        );
+        const result = await contextPublisher.publish({ ...args, conversationId });
         return {
           content: [{
             type: "text",
             text:
               `Published ${result.publishedMessageCount} visible messages to the DLMF context publisher. `
-              + `Reuse conversationId ${result.conversationId} for later syncs of this same ChatGPT conversation. `
+              + "Conversation identity is bound automatically to this ChatGPT session. "
               + "This capture is context-derived, not an authoritative ChatGPT transcript.",
           }],
           structuredContent: result,

@@ -263,17 +263,10 @@ function evidenceFingerprint(snapshot: ChatGptCapturedConversation): SourceFinge
     text: message.text,
     createdAt: message.createdAt ?? null,
   }));
-  const contextProvenance = contextPublisherProvenance(snapshot);
-  const fingerprintInput = Object.keys(contextProvenance).length === 0
-    ? selected
-    : {
-        selectedMessages: selected,
-        contextProvenance,
-      };
   return {
     algorithm: "sha256",
     value: createHash("sha256")
-      .update(stableJson(fingerprintInput), "utf8")
+      .update(stableJson(selected), "utf8")
       .digest("hex"),
   };
 }

@@ -510,13 +510,13 @@ Its use contract is intentionally narrow:
 - invoke it only after the user explicitly asks to sync, publish, save, or send the current ChatGPT conversation to DLMF;
 - send only visible `user` and `assistant` text that is available in the model's current context;
 - never send system/developer instructions, hidden reasoning, tool calls/results, or reconstructed/inferred text;
-- the first successful publish creates a DLMF publisher identity such as `chatgpt-context-...`;
-- later publishes for the same ChatGPT thread reuse that returned publisher identity;
+- ChatGPT supplies `_meta["openai/session"]` on tool calls; the server hashes that anonymized conversation identifier into the stable DLMF publisher identity `chatgpt-context-...`;
+- the model never invents, carries, or resubmits a DLMF conversation ID; missing/invalid ChatGPT session metadata fails closed before capture;
 - `contextCompleteness` records whether the model believes it has `full_visible_context`, `partial_visible_context`, or an `unknown` portion of the visible thread.
 
 This transport is **context-derived capture**, not an authoritative ChatGPT transcript. A capture snapshot uses `status=completed` only to mean that this individual capture snapshot is complete. Metadata explicitly keeps `threadLifecycle=unknown` and `authoritativeTranscript=false`; it must not be interpreted as evidence that the ChatGPT cloud conversation itself ended.
 
-The publisher generates deterministic message IDs from publisher conversation identity, ordinal, role, and text. Identical in-process retries preserve the same snapshot timestamp/revision and become idempotent; a changed visible context receives a monotonically later capture timestamp even when two calls occur in the same wall-clock millisecond.
+The publisher generates deterministic message IDs from publisher conversation identity, role, text, and repeated-message occurrence. It also treats context-derived evidence as a monotonic accumulator: a later smaller model context cannot delete previously captured visible messages. Safe prefix/suffix/subsequence overlap is merged; disjoint partial context fails closed instead of replacing prior evidence. Identical retries preserve the same snapshot timestamp/revision and become idempotent; a changed visible context receives a monotonically later capture timestamp even when two calls occur in the same wall-clock millisecond. Authoritative correction/removal remains the job of a future export/compliance transport, not `context_publisher`.
 
 ### Private ChatGPT connection
 
@@ -542,6 +542,6 @@ Secure MCP Tunnel is network transport only. It does not become part of the DLMF
 
 The account-side activation boundary requires an OpenAI Platform `tunnel_id`, a tunnel runtime API key, a running `tunnel-client` profile that targets the local MCP endpoint, and a ChatGPT developer-mode app associated with that tunnel. Those account/workspace objects are not inferred or synthesized by DLMF.
 
-Until that ChatGPT-side connection is created, the local MCP endpoint can be fully tested with an MCP client, but real ChatGPT conversations are **not** automatically synced.
+No separate plugin package is required for the private MVP: ChatGPT developer mode can register the tunnel-backed MCP server directly as a personal plugin/app connection. Until that account-side tunnel connection is created and selected in a ChatGPT conversation, the local MCP endpoint can be fully tested with an MCP client, but real ChatGPT conversations are **not** automatically synced.
 
 The deployed DLMF write mode remains independent of the publisher. A successful context publish only writes a Source snapshot into the Capture Inbox. Production Canonical Memory remains controlled by the existing `reference_only | shadow | distill` DLMF modes.

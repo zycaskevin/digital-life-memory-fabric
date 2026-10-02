@@ -18,7 +18,8 @@ export class ChatGptCaptureConflictError extends Error {
       | "stale"
       | "revision_conflict"
       | "lifecycle_regression"
-      | "concurrent_update",
+      | "concurrent_update"
+      | "precondition_failed",
   ) {
     super(`ChatGPT capture conflict: ${reason}`);
     this.name = "ChatGptCaptureConflictError";
@@ -38,6 +39,11 @@ export interface ChatGptCaptureInboxWriteResult {
   revisionHash: string;
   updatedAt: string;
   status: ChatGptCapturedConversation["status"];
+}
+
+export interface ChatGptCaptureInboxPutOptions {
+  /** Undefined keeps the legacy unconditional write contract. Null requires no existing snapshot. */
+  expectedRevision?: string | null;
 }
 
 export interface ChatGptCaptureInboxCurrentVersion {
@@ -230,9 +236,9 @@ export class ChatGptCaptureInboxStore {
     return { ready: true, contract: CHATGPT_CAPTURE_INBOX_CONTRACT };
   }
 
-  async currentVersion(
+  async currentSnapshot(
     conversationId: string,
-  ): Promise<ChatGptCaptureInboxCurrentVersion | undefined> {
+  ): Promise<ChatGptCapturedConversation | undefined> {
     if (
       conversationId !== conversationId.trim()
       || conversationId.length === 0
@@ -264,6 +270,14 @@ export class ChatGptCaptureInboxStore {
     if (snapshot.conversationId !== conversationId) {
       throw new Error("ChatGPT capture inbox identity collision");
     }
+    return structuredClone(snapshot);
+  }
+
+  async currentVersion(
+    conversationId: string,
+  ): Promise<ChatGptCaptureInboxCurrentVersion | undefined> {
+    const snapshot = await this.currentSnapshot(conversationId);
+    if (snapshot === undefined) return undefined;
     const digest = snapshot.metadata?.contextCaptureDigest;
     return {
       revision: snapshot.revision,
@@ -275,8 +289,21 @@ export class ChatGptCaptureInboxStore {
     };
   }
 
-  async put(value: unknown): Promise<ChatGptCaptureInboxWriteResult> {
+  async put(
+    value: unknown,
+    options: ChatGptCaptureInboxPutOptions = {},
+  ): Promise<ChatGptCaptureInboxWriteResult> {
     const snapshot = validateChatGptCapturedConversation(value);
+    if (
+      options.expectedRevision !== undefined
+      && options.expectedRevision !== null
+      && (
+        options.expectedRevision.length === 0
+        || options.expectedRevision !== options.expectedRevision.trim()
+      )
+    ) {
+      throw new Error("ChatGPT capture inbox expectedRevision is invalid");
+    }
     const root = await this.#ensureRoot();
     const idHash = sha256(snapshot.conversationId);
     const revisionHash = sha256(snapshot.revision);
@@ -308,6 +335,13 @@ export class ChatGptCaptureInboxStore {
           && (error as NodeJS.ErrnoException).code === "ENOENT")) {
           throw error;
         }
+      }
+    }
+
+    if (options.expectedRevision !== undefined) {
+      const actualRevision = existing?.revision ?? null;
+      if (actualRevision !== options.expectedRevision) {
+        throw new ChatGptCaptureConflictError("precondition_failed");
       }
     }
 

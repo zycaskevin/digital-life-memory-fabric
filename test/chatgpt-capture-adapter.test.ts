@@ -239,7 +239,7 @@ test("mutated completed ChatGPT snapshot re-enters while revision-only drift doe
   });
 });
 
-test("context publisher provenance-only corrections are observed without treating operational revision drift as evidence", async () => {
+test("context publisher operational metadata corrections do not change memory evidence fingerprint", async () => {
   await withRoot(async (root) => {
     const file = join(root, "conversation.json");
     const checkpointStore = new MemoryCheckpointStore();
@@ -299,9 +299,9 @@ test("context publisher provenance-only corrections are observed without treatin
       ),
     );
     result = await service().runOnce();
-    assert.equal(result.changed, 1);
-    assert.equal(result.sourceOnly, 1);
-    assert.equal(result.unchanged, 0);
+    assert.equal(result.changed, 0);
+    assert.equal(result.sourceOnly, 0);
+    assert.equal(result.unchanged, 1);
 
     await writeSnapshot(
       file,
