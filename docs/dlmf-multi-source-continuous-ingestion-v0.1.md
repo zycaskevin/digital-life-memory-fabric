@@ -485,3 +485,63 @@ Observed evidence:
 - shadow receipt: `status=complete`, `admissionComplete=true`, `providerUnitCount=1`, `curationDecisionCount=1`, `canonicalizationOutcome=no_memory_worthy_content`, candidate count 0, canonical count 0.
 
 This demonstrates that shadow mode executes the real DLMF intelligence/curation/admission path while preserving the production `life` namespace. It does not authorize production-wide distillation and it does not connect ChatGPT cloud history automatically.
+
+## 16. ChatGPT context publisher — explicit visible-context capture
+
+The first live ChatGPT transport remains a Source Adapter detail:
+
+```text
+ChatGPT
+  -> context_publisher
+  -> existing Capture Inbox
+  -> ChatGptSourceAdapter
+  -> Normalized Experience
+  -> DLMF
+```
+
+There is no separate publisher daemon or new authority. The existing loopback Capture Inbox process also exposes a standard Streamable HTTP MCP endpoint at `/mcp`. The MCP tool is:
+
+```text
+publish_current_conversation
+```
+
+Its use contract is intentionally narrow:
+
+- invoke it only after the user explicitly asks to sync, publish, save, or send the current ChatGPT conversation to DLMF;
+- send only visible `user` and `assistant` text that is available in the model's current context;
+- never send system/developer instructions, hidden reasoning, tool calls/results, or reconstructed/inferred text;
+- the first successful publish creates a DLMF publisher identity such as `chatgpt-context-...`;
+- later publishes for the same ChatGPT thread reuse that returned publisher identity;
+- `contextCompleteness` records whether the model believes it has `full_visible_context`, `partial_visible_context`, or an `unknown` portion of the visible thread.
+
+This transport is **context-derived capture**, not an authoritative ChatGPT transcript. A capture snapshot uses `status=completed` only to mean that this individual capture snapshot is complete. Metadata explicitly keeps `threadLifecycle=unknown` and `authoritativeTranscript=false`; it must not be interpreted as evidence that the ChatGPT cloud conversation itself ended.
+
+The publisher generates deterministic message IDs from publisher conversation identity, ordinal, role, and text. Identical in-process retries preserve the same snapshot timestamp/revision and become idempotent; a changed visible context receives a monotonically later capture timestamp even when two calls occur in the same wall-clock millisecond.
+
+### Private ChatGPT connection
+
+The DLMF endpoint stays loopback-only. For ChatGPT developer-mode use, the intended transport is OpenAI Secure MCP Tunnel:
+
+```text
+ChatGPT developer-mode app
+        |
+        v
+OpenAI Secure MCP Tunnel
+        |
+        v
+tunnel-client on GB10
+        |
+        v
+http://127.0.0.1:19007/mcp
+        |
+        v
+existing Capture Inbox process
+```
+
+Secure MCP Tunnel is network transport only. It does not become part of the DLMF authority model and it does not receive DLMF writer credentials.
+
+The account-side activation boundary requires an OpenAI Platform `tunnel_id`, a tunnel runtime API key, a running `tunnel-client` profile that targets the local MCP endpoint, and a ChatGPT developer-mode app associated with that tunnel. Those account/workspace objects are not inferred or synthesized by DLMF.
+
+Until that ChatGPT-side connection is created, the local MCP endpoint can be fully tested with an MCP client, but real ChatGPT conversations are **not** automatically synced.
+
+The deployed DLMF write mode remains independent of the publisher. A successful context publish only writes a Source snapshot into the Capture Inbox. Production Canonical Memory remains controlled by the existing `reference_only | shadow | distill` DLMF modes.

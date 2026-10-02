@@ -239,6 +239,85 @@ test("mutated completed ChatGPT snapshot re-enters while revision-only drift doe
   });
 });
 
+test("context publisher provenance-only corrections are observed without treating operational revision drift as evidence", async () => {
+  await withRoot(async (root) => {
+    const file = join(root, "conversation.json");
+    const checkpointStore = new MemoryCheckpointStore();
+    const contextSnapshot = (
+      revision: string,
+      updatedAt: string,
+      contextCompleteness: "unknown" | "full_visible_context",
+      title: string,
+    ): ChatGptCapturedConversation => ({
+      ...snapshot("completed", { revision }),
+      updatedAt,
+      metadata: {
+        transport: "context_publisher",
+        publisherContract: "dlmf/chatgpt-context-publisher/v1",
+        captureKind: "model_visible_context",
+        captureBoundary: "user_requested_snapshot",
+        statusSemantics: "capture_snapshot_complete",
+        threadLifecycle: "unknown",
+        contextCompleteness,
+        authoritativeTranscript: false,
+        userConfirmed: true,
+        title,
+      },
+    });
+    const service = () => new ChatGptCaptureIncrementalSyncService({
+      reader: new ChatGptCaptureDirectoryReader(root),
+      checkpointStore,
+      scope: {
+        tenantId: "tenant-arthur",
+        lifeDid: "did:arthurverse:nancy",
+        memoryNamespace: "life",
+      },
+      referenceOnly: true,
+      clock: () => new Date("2026-10-02T12:00:00.000Z"),
+    });
+
+    await writeSnapshot(
+      file,
+      contextSnapshot(
+        "context-r1",
+        "2026-10-02T11:00:00.000Z",
+        "unknown",
+        "Draft title",
+      ),
+    );
+    let result = await service().runOnce();
+    assert.equal(result.changed, 1);
+    assert.equal(result.sourceOnly, 1);
+
+    await writeSnapshot(
+      file,
+      contextSnapshot(
+        "context-r2",
+        "2026-10-02T11:00:01.000Z",
+        "full_visible_context",
+        "Corrected title",
+      ),
+    );
+    result = await service().runOnce();
+    assert.equal(result.changed, 1);
+    assert.equal(result.sourceOnly, 1);
+    assert.equal(result.unchanged, 0);
+
+    await writeSnapshot(
+      file,
+      contextSnapshot(
+        "context-r3",
+        "2026-10-02T11:00:02.000Z",
+        "full_visible_context",
+        "Corrected title",
+      ),
+    );
+    result = await service().runOnce();
+    assert.equal(result.changed, 0);
+    assert.equal(result.unchanged, 1);
+  });
+});
+
 test("ChatGPT completed snapshot with no user-authored text is source-only", async () => {
   await withRoot(async (root) => {
     const value = snapshot("completed");

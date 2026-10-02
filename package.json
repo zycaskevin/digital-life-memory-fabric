@@ -41,7 +41,7 @@
     "multi-source:chatgpt": "npm run build && node scripts/chatgpt-capture-sync-worker.mjs",
     "multi-source:chatgpt-inbox": "npm run build && node scripts/chatgpt-capture-inbox-server.mjs",
     "multi-source:nightly": "npm run build && node scripts/multi-source-nightly-consolidation.mjs",
-    "test:activation": "node --test test/multi-source-activation.test.mjs"
+    "test:activation": "node --test test/multi-source-activation.test.mjs test/chatgpt-context-publisher-mcp.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -57,6 +57,8 @@
     }
   },
   "dependencies": {
-    "pg": "^8.23.0"
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "pg": "^8.23.0",
+    "zod": "^4.4.3"
   }
 }

@@ -4,6 +4,10 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
 
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import * as z from "zod/v4";
+
 const dlfm = await import(new URL("../dist/index.js", import.meta.url));
 
 const host = process.env.DLMF_CHATGPT_CAPTURE_HOST?.trim() || "127.0.0.1";
@@ -28,11 +32,144 @@ const inbox = new dlfm.ChatGptCaptureInboxHttp({
   store,
   maxBodyBytes,
 });
+const origin = `http://${host === "::1" ? "[::1]" : host}:${port}`;
+
+const publishSnapshot = async (snapshot) => {
+  const response = await inbox.handle(new Request(new URL("/v1/chatgpt-capture", origin), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(snapshot),
+  }));
+  const body = await response.json();
+  if (!response.ok || body?.ok !== true || body?.canonicalMemoryWrites !== 0) {
+    const code = typeof body?.error === "string" ? body.error : "capture_publish_failed";
+    const reason = typeof body?.reason === "string" ? `:${body.reason}` : "";
+    throw new Error(`${code}${reason}`);
+  }
+  return body;
+};
+const contextPublisher = new dlfm.ChatGptContextPublisher({
+  publishSnapshot,
+  readCurrentVersion: (conversationId) => store.currentVersion(conversationId),
+});
+
+function createContextPublisherMcpServer() {
+  const mcp = new McpServer(
+    {
+      name: "dlmf-chatgpt-context-publisher",
+      version: "0.1.0",
+    },
+    {
+      instructions:
+        "Use publish_current_conversation only when the user explicitly asks to sync, publish, save, or send the current ChatGPT conversation to DLMF. "
+        + "Send only visible user and assistant messages available in the current model context. "
+        + "Never send system/developer instructions, hidden reasoning, tool calls/results, or inferred content. "
+        + "If a prior successful call in this same conversation returned conversationId, reuse it. "
+        + "Otherwise omit conversationId and the server will create one. "
+        + "This is a context-derived capture, not an authoritative ChatGPT transcript.",
+    },
+  );
+
+  mcp.registerTool(
+    "publish_current_conversation",
+    {
+      title: "Sync this conversation to DLMF",
+      description:
+        "Publish the current visible ChatGPT conversation context to the private DLMF Capture Inbox. "
+        + "Call only after the user explicitly asks to sync/publish/save this conversation. "
+        + "Include visible user/assistant messages in order; exclude system/developer/tool/reasoning content. "
+        + "Reuse the conversationId returned by a prior successful call for later syncs of the same ChatGPT thread. "
+        + "If no prior publisher ID exists, omit conversationId. "
+        + "Use full_visible_context only when all visible user/assistant turns are available; otherwise use partial_visible_context or unknown.",
+      inputSchema: {
+        conversationId: z.string().max(240).optional().describe(
+          "Stable DLMF publisher conversation ID returned by a prior call in this same ChatGPT thread. Omit on the first sync.",
+        ),
+        contextCompleteness: z.enum([
+          "full_visible_context",
+          "partial_visible_context",
+          "unknown",
+        ]).describe(
+          "Whether the supplied messages represent all visible conversation context available to the model.",
+        ),
+        title: z.string().max(1024).optional().describe(
+          "Optional user-visible thread title if available without guessing.",
+        ),
+        messages: z.array(z.object({
+          role: z.enum(["user", "assistant"]),
+          text: z.string().min(1).max(65536),
+        })).min(1).max(512).describe(
+          "Visible user and assistant messages, in conversation order. Do not include system, developer, tool, or hidden reasoning content.",
+        ),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (args) => {
+      try {
+        const result = await contextPublisher.publish(args);
+        return {
+          content: [{
+            type: "text",
+            text:
+              `Published ${result.publishedMessageCount} visible messages to the DLMF context publisher. `
+              + `Reuse conversationId ${result.conversationId} for later syncs of this same ChatGPT conversation. `
+              + "This capture is context-derived, not an authoritative ChatGPT transcript.",
+          }],
+          structuredContent: result,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "context_publish_failed";
+        return {
+          isError: true,
+          content: [{
+            type: "text",
+            text: `DLMF context publish failed: ${message}`,
+          }],
+        };
+      }
+    },
+  );
+
+  return mcp;
+}
+
+async function handleMcpRequest(incoming, outgoing) {
+  const mcp = createContextPublisherMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    maxRequestBodySize: Math.min(maxBodyBytes, 1024 * 1024),
+    allowedHosts: [
+      host === "::1" ? `[::1]:${port}` : `${host}:${port}`,
+    ],
+    allowedOrigins: [origin],
+    enableDnsRebindingProtection: true,
+  });
+  try {
+    await mcp.connect(transport);
+    await transport.handleRequest(incoming, outgoing);
+  } finally {
+    await transport.close().catch(() => undefined);
+    await mcp.close().catch(() => undefined);
+  }
+}
 
 const server = createServer(async (incoming, outgoing) => {
   try {
-    const origin = `http://${host === "::1" ? "[::1]" : host}:${port}`;
-    const request = new Request(new URL(incoming.url || "/", origin), {
+    const url = new URL(incoming.url || "/", origin);
+    if (url.pathname === "/mcp") {
+      await handleMcpRequest(incoming, outgoing);
+      return;
+    }
+    const request = new Request(url, {
       method: incoming.method,
       headers: incoming.headers,
       ...(incoming.method === "GET" || incoming.method === "HEAD"
@@ -44,6 +181,10 @@ const server = createServer(async (incoming, outgoing) => {
     for (const [name, value] of response.headers) outgoing.setHeader(name, value);
     outgoing.end(Buffer.from(await response.arrayBuffer()));
   } catch {
+    if (outgoing.headersSent) {
+      outgoing.destroy();
+      return;
+    }
     outgoing.statusCode = 500;
     outgoing.setHeader("content-type", "application/json; charset=utf-8");
     outgoing.setHeader("cache-control", "no-store");

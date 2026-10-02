@@ -68,6 +68,8 @@ export interface ChatGptCaptureSummary {
   status: ChatGptCapturedConversationStatus;
   startedAt?: string;
   updatedAt: string;
+  threadLifecycle?: "unknown";
+  statusSemantics?: "capture_snapshot_complete";
   sizeBytes: number;
 }
 
@@ -186,6 +188,64 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function contextPublisherProvenance(
+  snapshot: ChatGptCapturedConversation,
+): Record<string, unknown> {
+  const metadata = snapshot.metadata ?? {};
+  if (metadata.transport !== "context_publisher") return {};
+
+  const result: Record<string, unknown> = {
+    transport: "context_publisher",
+  };
+  if (metadata.publisherContract === "dlmf/chatgpt-context-publisher/v1") {
+    result.publisherContract = metadata.publisherContract;
+  }
+  if (metadata.captureKind === "model_visible_context") {
+    result.captureKind = metadata.captureKind;
+  }
+  if (metadata.captureBoundary === "user_requested_snapshot") {
+    result.captureBoundary = metadata.captureBoundary;
+  }
+  if (metadata.statusSemantics === "capture_snapshot_complete") {
+    result.statusSemantics = metadata.statusSemantics;
+  }
+  if (metadata.threadLifecycle === "unknown") {
+    result.threadLifecycle = metadata.threadLifecycle;
+  }
+  if (
+    metadata.contextCompleteness === "full_visible_context"
+    || metadata.contextCompleteness === "partial_visible_context"
+    || metadata.contextCompleteness === "unknown"
+  ) {
+    result.contextCompleteness = metadata.contextCompleteness;
+  }
+  if (metadata.authoritativeTranscript === false) {
+    result.authoritativeTranscript = false;
+  }
+  if (metadata.userConfirmed === true) {
+    result.userConfirmed = true;
+  }
+  if (
+    typeof metadata.contextCaptureDigest === "string"
+    && /^[0-9a-f]{64}$/u.test(metadata.contextCaptureDigest)
+  ) {
+    result.contextCaptureDigest = metadata.contextCaptureDigest;
+  }
+  if (typeof metadata.title === "string" && metadata.title.trim().length > 0) {
+    result.title = metadata.title;
+  }
+  return result;
+}
+
+function experienceEndedAt(
+  snapshot: ChatGptCapturedConversation,
+): ExperienceTimestamp {
+  return snapshot.metadata?.transport === "context_publisher"
+    && snapshot.metadata?.threadLifecycle === "unknown"
+    ? { certainty: "unknown" }
+    : exactTimestamp(snapshot.updatedAt, "captured conversation updatedAt");
+}
+
 function selectedChatGptMessages(
   snapshot: ChatGptCapturedConversation,
 ): ChatGptCapturedMessage[] {
@@ -203,9 +263,18 @@ function evidenceFingerprint(snapshot: ChatGptCapturedConversation): SourceFinge
     text: message.text,
     createdAt: message.createdAt ?? null,
   }));
+  const contextProvenance = contextPublisherProvenance(snapshot);
+  const fingerprintInput = Object.keys(contextProvenance).length === 0
+    ? selected
+    : {
+        selectedMessages: selected,
+        contextProvenance,
+      };
   return {
     algorithm: "sha256",
-    value: createHash("sha256").update(stableJson(selected), "utf8").digest("hex"),
+    value: createHash("sha256")
+      .update(stableJson(fingerprintInput), "utf8")
+      .digest("hex"),
   };
 }
 
@@ -388,6 +457,14 @@ export class ChatGptCaptureDirectoryReader implements ChatGptCaptureReader {
       status: snapshot.status,
       ...(snapshot.startedAt === undefined ? {} : { startedAt: snapshot.startedAt }),
       updatedAt: snapshot.updatedAt,
+      ...(snapshot.metadata?.transport === "context_publisher"
+        && snapshot.metadata?.threadLifecycle === "unknown"
+        ? { threadLifecycle: "unknown" as const }
+        : {}),
+      ...(snapshot.metadata?.transport === "context_publisher"
+        && snapshot.metadata?.statusSemantics === "capture_snapshot_complete"
+        ? { statusSemantics: "capture_snapshot_complete" as const }
+        : {}),
       sizeBytes,
     };
   }
@@ -509,7 +586,7 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
       sourceVersion: version,
       experienceId: experienceIdFor(source),
       startedAt: exactTimestamp(snapshot.startedAt, "captured conversation startedAt"),
-      endedAt: exactTimestamp(snapshot.updatedAt, "captured conversation updatedAt"),
+      endedAt: experienceEndedAt(snapshot),
       actors: [...actors.values()],
       events,
       content,
@@ -523,6 +600,7 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
         excludedMessageCount:
           snapshot.messages.length - userMessageCount - assistantMessageCount,
         evidencePolicy: "explicit_user_assistant_text_only",
+        ...contextPublisherProvenance(snapshot),
         transport: this.#transport,
         ...(this.#transport === "context_publisher"
           ? { cloudPublisherConnected: false }
@@ -560,12 +638,20 @@ implements MemorySourceAdapter<ChatGptCapturePayload> {
       sourceVersion: sourceVersion(summary),
       experienceId: experienceIdFor(source),
       startedAt: exactTimestamp(summary.startedAt, "captured conversation startedAt"),
-      endedAt: exactTimestamp(summary.updatedAt, "captured conversation updatedAt"),
+      endedAt: summary.threadLifecycle === "unknown"
+        ? { certainty: "unknown" }
+        : exactTimestamp(summary.updatedAt, "captured conversation updatedAt"),
       metadata: {
         discoveredAt: this.#clock().toISOString(),
         relativePath: summary.relativePath,
         status: summary.status,
         revision: summary.revision,
+        ...(summary.threadLifecycle === undefined
+          ? {}
+          : { threadLifecycle: summary.threadLifecycle }),
+        ...(summary.statusSemantics === undefined
+          ? {}
+          : { statusSemantics: summary.statusSemantics }),
       },
     };
   }

@@ -40,6 +40,13 @@ export interface ChatGptCaptureInboxWriteResult {
   status: ChatGptCapturedConversation["status"];
 }
 
+export interface ChatGptCaptureInboxCurrentVersion {
+  revision: string;
+  updatedAt: string;
+  status: ChatGptCapturedConversation["status"];
+  contextCaptureDigest?: string;
+}
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value !== null && typeof value === "object") {
@@ -221,6 +228,51 @@ export class ChatGptCaptureInboxStore {
       );
     }
     return { ready: true, contract: CHATGPT_CAPTURE_INBOX_CONTRACT };
+  }
+
+  async currentVersion(
+    conversationId: string,
+  ): Promise<ChatGptCaptureInboxCurrentVersion | undefined> {
+    if (
+      conversationId !== conversationId.trim()
+      || conversationId.length === 0
+    ) {
+      throw new Error("ChatGPT capture inbox conversationId is invalid");
+    }
+    const root = await this.#ensureRoot();
+    const destination = join(root, `${sha256(conversationId)}.json`);
+    let info;
+    try {
+      info = await lstat(destination);
+    } catch (error) {
+      if (
+        error instanceof Error
+        && "code" in error
+        && (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new Error("ChatGPT capture inbox destination must be a regular non-symlink file");
+    }
+    const current = await readContainedSourceFile(destination, root);
+    const snapshot = validateChatGptCapturedConversation(
+      JSON.parse(current.text) as unknown,
+    );
+    if (snapshot.conversationId !== conversationId) {
+      throw new Error("ChatGPT capture inbox identity collision");
+    }
+    const digest = snapshot.metadata?.contextCaptureDigest;
+    return {
+      revision: snapshot.revision,
+      updatedAt: snapshot.updatedAt,
+      status: snapshot.status,
+      ...(typeof digest === "string" && /^[0-9a-f]{64}$/u.test(digest)
+        ? { contextCaptureDigest: digest }
+        : {}),
+    };
   }
 
   async put(value: unknown): Promise<ChatGptCaptureInboxWriteResult> {
