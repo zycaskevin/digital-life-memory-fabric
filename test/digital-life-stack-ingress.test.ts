@@ -18,9 +18,10 @@ const SCOPE = {
   memoryNamespace: "life.core",
 };
 
-function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?: typeof SCOPE } = {}) {
+function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?: typeof SCOPE; withMemorySummary?: boolean; summaryScope?: typeof SCOPE; summaryInvalid?: boolean; summaryFails?: boolean } = {}) {
   let distillationCalls = 0;
   let retrievalCalls = 0;
+  let summaryCalls = 0;
   let capturedInput: TranscriptDistillationInput | undefined;
   const ingress = new DigitalLifeStackDlmfIngress({
     bearerToken: TOKEN,
@@ -41,6 +42,20 @@ function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?
       admissionPolicyVersion: "dls-admission-v1",
       retentionPolicyVersion: "dls-retention-v1",
     },
+    ...(options.withMemorySummary ? { namespaceSummary: {
+      async getNamespaceOperationsSummary(scope: typeof SCOPE) {
+        summaryCalls += 1;
+        if (options.summaryFails) throw new Error("private provider message");
+        return {
+          scope: options.summaryScope ?? scope,
+          highWatermark: 42,
+          memories: { total: options.summaryInvalid ? -1 : 3, active: 2, tombstoned: 1, superseded: 0 },
+          outbox: { pending: 0, processing: 0, done: 0, failed: 0 },
+          devices: { total: 0, maxLag: 0 },
+          materializations: { current: 0, lagging: 0, failed: 0, unavailable: 0, rebuilding: 0 },
+        };
+      },
+    }} : {}),
     distillation: {
       async run(input) {
         distillationCalls += 1;
@@ -58,6 +73,7 @@ function fixture(options: { ready?: boolean; schemaState?: string; allowedScope?
   return {
     ingress,
     calls: () => ({ distillationCalls, retrievalCalls }),
+    summaryCalls: () => summaryCalls,
     input: () => capturedInput,
   };
 }
@@ -145,6 +161,62 @@ test("no direct canonical commit or promotion endpoint exists", async () => {
     assert.equal(response.status, 404, path);
   }
   assert.deepEqual(calls(), { distillationCalls: 0, retrievalCalls: 0 });
+});
+
+test("scoped owner memory summary exposes only canonical DLMF counts and real high-watermark", async () => {
+  const { ingress, calls, summaryCalls } = fixture({ allowedScope: SCOPE, withMemorySummary: true });
+  const response = await ingress.handle(new Request(
+    "http://dlmf.local/v1/digital-life-stack/memories/summary",
+    { headers: { authorization: `Bearer ${TOKEN}` } },
+  ));
+  assert.equal(response.status, 200);
+  const body = await response.json() as Record<string, any>;
+  assert.equal(body.schema, "dlmf.digital-life-stack-memory-summary.v1");
+  assert.equal(body.canonicalAuthority, DIGITAL_LIFE_STACK_DLMF_AUTHORITY);
+  assert.deepEqual(body.scope, SCOPE);
+  assert.deepEqual(body.memories, { total: 3, active: 2, tombstoned: 1, superseded: 0 });
+  assert.equal(body.highWatermark, 42);
+  assert.equal(body.writeControl, "FROZEN");
+  assert.equal(body.rawMemoryContentIncluded, false);
+  assert.ok(!JSON.stringify(body).includes("private provider message"));
+  assert.deepEqual(calls(), { distillationCalls: 0, retrievalCalls: 0 });
+  assert.equal(summaryCalls(), 1);
+});
+
+test("owner memory summary fails closed for absent auth, unbound life, missing backend, query and stale schema", async () => {
+  for (const opts of [
+    { allowedScope: SCOPE, withMemorySummary: true },
+    { withMemorySummary: true },
+    { allowedScope: SCOPE },
+    { allowedScope: SCOPE, withMemorySummary: true, ready: false },
+  ]) {
+    const { ingress, summaryCalls } = fixture(opts);
+    const path = "http://dlmf.local/v1/digital-life-stack/memories/summary";
+    const unauth = await ingress.handle(new Request(path));
+    assert.equal(unauth.status, 401);
+    const unknown = await ingress.handle(new Request(path, { headers: { authorization: `Bearer ${TOKEN}` } }));
+    assert.equal(unknown.status, opts.allowedScope && opts.withMemorySummary && opts.ready !== false ? 200 : 503);
+    if (opts.ready === false) assert.equal(summaryCalls(), 0);
+    const extra = await ingress.handle(new Request(path + "?lifeDid=did:life:other", { headers: { authorization: `Bearer ${TOKEN}` } }));
+    assert.equal(extra.status, 400);
+  }
+});
+
+test("owner memory summary refuses cross-life responses, impossible counts and backend failures", async () => {
+  for (const opts of [
+    { allowedScope: SCOPE, withMemorySummary: true, summaryScope: { ...SCOPE, lifeDid: "did:life:other" } },
+    { allowedScope: SCOPE, withMemorySummary: true, summaryInvalid: true },
+    { allowedScope: SCOPE, withMemorySummary: true, summaryFails: true },
+  ]) {
+    const { ingress } = fixture(opts);
+    const response = await ingress.handle(new Request("http://dlmf.local/v1/digital-life-stack/memories/summary", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    }));
+    assert.equal(response.status, 503);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(typeof body.error, "string");
+    assert.ok(!JSON.stringify(body).includes("private provider message"));
+  }
 });
 
 test("experience ingress injects DLMF policy and returns content-free Development reference", async () => {

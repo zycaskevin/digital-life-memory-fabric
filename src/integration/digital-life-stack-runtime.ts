@@ -131,6 +131,7 @@ export function createDigitalLifeStackDlmfRuntime(
     distillation: projectingDistillation,
     retrieval,
     readiness,
+    namespaceSummary: canonicalStore,
   });
   return {
     ingress,

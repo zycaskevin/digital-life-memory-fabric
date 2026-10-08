@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { ValidationError } from "../domain/errors.js";
 import type { MemoryScope } from "../domain/types.js";
+import type { NamespaceOperationsSummary } from "../operations/types.js";
 import type { TranscriptDistillationService } from "../distillation/transcript-distillation-service.js";
 import type { DistillationReceipt, TranscriptDistillationInput } from "../distillation/types.js";
 import type {
@@ -34,6 +35,8 @@ export interface DigitalLifeStackDlmfIngressOptions {
   distillation: Pick<TranscriptDistillationService, "run">;
   retrieval: VerifiedRetrievalReader;
   readiness: DigitalLifeStackDlmfReadiness;
+  /** Optional DLMF owner-only bounded aggregate; never returns raw memory. */
+  namespaceSummary?: { getNamespaceOperationsSummary(scope: MemoryScope): Promise<NamespaceOperationsSummary> };
   policies: DigitalLifeStackDlmfPolicies;
 }
 
@@ -52,6 +55,7 @@ export class DigitalLifeStackDlmfIngress {
   readonly #distillation: Pick<TranscriptDistillationService, "run">;
   readonly #retrieval: VerifiedRetrievalReader;
   readonly #readiness: DigitalLifeStackDlmfReadiness;
+  readonly #namespaceSummary: DigitalLifeStackDlmfIngressOptions["namespaceSummary"];
   readonly #policies: DigitalLifeStackDlmfPolicies;
 
   constructor(options: DigitalLifeStackDlmfIngressOptions) {
@@ -62,6 +66,7 @@ export class DigitalLifeStackDlmfIngress {
     this.#distillation = options.distillation;
     this.#retrieval = options.retrieval;
     this.#readiness = options.readiness;
+    this.#namespaceSummary = options.namespaceSummary;
     this.#policies = validatePolicies(options.policies);
   }
 
@@ -100,6 +105,46 @@ export class DigitalLifeStackDlmfIngress {
           observedAt: new Date().toISOString(),
           schemaState: "unavailable",
         }, 503);
+      }
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/digital-life-stack/memories/summary") {
+      // The caller never chooses a scope. Only a service already bound to one
+      // exact tenant/life/namespace may expose this DLMF-owned read-only view.
+      if (!constantTimeBearer(request.headers.get("authorization"), this.#token)) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      if (url.search !== "") return json({ error: "unsupported_summary_query" }, 400);
+      if (this.#allowedScope === undefined || this.#namespaceSummary === undefined) {
+        return json({ error: "owner_memory_summary_unavailable" }, 503);
+      }
+      if (!(await this.#safeReadiness()).ready) {
+        return json({ error: "dlmf_not_ready" }, 503);
+      }
+      try {
+        const summary = await this.#namespaceSummary.getNamespaceOperationsSummary(this.#allowedScope);
+        if (!sameScope(summary.scope, this.#allowedScope)) {
+          return json({ error: "owner_memory_scope_mismatch" }, 503);
+        }
+        const counts = summary.memories;
+        const numbers = [summary.highWatermark, counts.total, counts.active, counts.tombstoned, counts.superseded];
+        if (numbers.some((value) => !Number.isSafeInteger(value) || value < 0)
+          || counts.active + counts.tombstoned + counts.superseded !== counts.total) {
+          return json({ error: "owner_memory_summary_invalid" }, 503);
+        }
+        return json({
+          schema: "dlmf.digital-life-stack-memory-summary.v1",
+          canonicalAuthority: DIGITAL_LIFE_STACK_DLMF_AUTHORITY,
+          scope: this.#allowedScope,
+          observedAt: new Date().toISOString(),
+          highWatermark: summary.highWatermark,
+          memories: { total: counts.total, active: counts.active,
+            tombstoned: counts.tombstoned, superseded: counts.superseded },
+          rawMemoryContentIncluded: false,
+          writeControl: "FROZEN",
+        });
+      } catch {
+        return json({ error: "owner_memory_summary_unavailable" }, 503);
       }
     }
 
