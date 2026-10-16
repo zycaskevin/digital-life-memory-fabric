@@ -117,6 +117,93 @@ test("stale, tombstoned, foreign and invalid provider references never become ca
   assert.equal(result.verification.suppressed, 3);
 });
 
+test("Hindsight recall failures log only safe stage/status/classification, never private data", async () => {
+  const diagnostics: string[] = [];
+  const previousWarn = console.warn;
+  console.warn = (...args: unknown[]) => { diagnostics.push(args.map(String).join(" ")); };
+  try {
+    const secret = "PRIVATE_OWNER_QUERY_AND_PROVIDER_RESPONSE";
+    const failures = [
+      { stage: "primary", providerId: "hindsight", error: Object.assign(new Error(secret), {
+        statusCode: 400, details: `provider rejected: ${secret}`,
+      }), kind: "provider_bad_request_unknown" },
+      { stage: "historical", providerId: "hindsight:historic", error: Object.assign(new Error(secret), {
+        statusCode: 400, details: `Query too long: 900 tokens exceeds maximum of 500. ${secret}`,
+      }), kind: "query_limit" },
+      { stage: "historical", providerId: "hindsight:historic", error: Object.assign(new Error(secret), {
+        statusCode: 504, details: `Provider timed out ${secret}`,
+      }), kind: "provider_timeout" },
+    ];
+    for (const scenario of failures) {
+      const client = { async recall() { throw scenario.error; } } as unknown as HindsightClientPort;
+      const projected = new HindsightCanonicalProjectionPort({
+        client,
+        banks: new DeterministicHindsightPlaneResolver("owner-private-test"),
+        providerId: scenario.providerId,
+      });
+      await assert.rejects(projected.search({ scope, query: secret, topK: 3 },
+        { signal: new AbortController().signal }), (error: unknown) => error === scenario.error);
+    }
+    assert.equal(diagnostics.length, failures.length);
+    for (const [index, event] of diagnostics.entries()) {
+      const scenario = failures[index];
+      assert.ok(scenario !== undefined && event !== undefined);
+      assert.ok(event.includes("DLMF_HINDSIGHT_RECALL_REJECTED"));
+      const payload = JSON.parse(event.slice(event.indexOf("{") )) as {
+        stage: string; status: number; kind: string;
+      };
+      assert.deepEqual(payload, {
+        stage: scenario.stage,
+        status: scenario.error.statusCode,
+        kind: scenario.kind,
+      });
+      assert.ok(!event.includes(secret));
+      assert.ok(!event.includes("owner-private-test"));
+      assert.ok(!event.includes("did:arthurverse:nancy"));
+    }
+  } finally {
+    console.warn = previousWarn;
+  }
+});
+
+test("Hindsight hostile getters and logger failures never replace the original exception", async () => {
+  const originalWarn = console.warn;
+  const originalError = new Error("SECRET_OWNER_PAYLOAD");
+  let detailsReads = 0;
+  Object.defineProperty(originalError, "statusCode", { get() {
+    throw new Error("SECRET_THROWING_GETTER");
+  } });
+  const badClient = { async recall() { throw originalError; } } as unknown as HindsightClientPort;
+  const projected = new HindsightCanonicalProjectionPort({
+    client: badClient, banks: new DeterministicHindsightPlaneResolver("SECRET_BANK"),
+  });
+  const diagnosticLogs: string[] = [];
+  console.warn = (...args: unknown[]) => diagnosticLogs.push(args.map(String).join(" "));
+  try {
+    await assert.rejects(projected.search({ scope, query: "SECRET_QUERY", topK: 3 },
+      { signal: new AbortController().signal }), (error: unknown) => error === originalError);
+    assert.deepEqual(diagnosticLogs, []);
+  } finally { console.warn = originalWarn; }
+
+  const mutating = new Error("SECRET_MUTATING");
+  Object.defineProperty(mutating, "statusCode", { value: 400 });
+  Object.defineProperty(mutating, "details", { get() {
+    detailsReads += 1;
+    if (detailsReads > 1) throw new Error("SECRET_SECOND_READ");
+    return "Invalid query";
+  } });
+  const mutatingClient = { async recall() { throw mutating; } } as unknown as HindsightClientPort;
+  const mutatingPort = new HindsightCanonicalProjectionPort({
+    client: mutatingClient, banks: new DeterministicHindsightPlaneResolver("SECRET_BANK"),
+  });
+  console.warn = () => { throw new Error("SECRET_LOGGER_FAILURE"); };
+  try {
+    await assert.rejects(mutatingPort.search({ scope, query: "SECRET_QUERY", topK: 3 },
+      { signal: new AbortController().signal }), (error: unknown) => error === mutating);
+    assert.equal(detailsReads, 1);
+  } finally { console.warn = originalWarn; }
+});
+
 test("the generic verifier still rejects conflicting revision claims from an unnormalized port", async () => {
   const store = new InMemoryCanonicalMemoryStore(); await seed(store, "mem_current", 3);
   const rawPort = { async search() { return { providerId: "raw", candidates: [

@@ -80,11 +80,27 @@ export class HindsightCanonicalProjectionPort implements MemoryRetrievalPort {
   ): Promise<unknown> {
     if (options.signal.aborted) throw new Error("hindsight_canonical_projection_aborted");
     const bank = projectionBank(this.#banks, request.scope);
-    const response = await this.#client.recall(bank, request.query, {
-      budget: this.#recallBudget,
-      trace: false,
-      queryTimestamp: new Date().toISOString(),
-    });
+    let response: Awaited<ReturnType<HindsightClientPort["recall"]>>;
+    try {
+      response = await this.#client.recall(bank, request.query, {
+        budget: this.#recallBudget,
+        trace: false,
+        queryTimestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      // Operational metadata only. Hindsight errors may embed raw queries,
+      // bank identifiers or credentials. A hostile getter or broken logger must
+      // never replace the original provider exception or expose private data.
+      try {
+        console.warn("DLMF_HINDSIGHT_RECALL_REJECTED", JSON.stringify({
+          stage: this.#providerId === "hindsight" ? "primary" : "historical",
+          ...safeHindsightFailure(error),
+        }));
+      } catch {
+        // Diagnostic reporting is explicitly non-authoritative and optional.
+      }
+      throw error;
+    }
     if (options.signal.aborted) throw new Error("hindsight_canonical_projection_aborted");
 
     const candidates = response.results.flatMap((result) => {
@@ -124,6 +140,31 @@ export class HindsightCanonicalProjectionPort implements MemoryRetrievalPort {
       candidates: [...byMemoryId.values()].slice(0, request.topK),
     };
   }
+}
+
+function safeHindsightFailure(error: unknown): { status: number | null; kind: string } {
+  const data = error !== null && typeof error === "object"
+    ? error as { statusCode?: unknown; details?: unknown } : {};
+  // Read once. SDK/plugin errors can have mutable or throwing accessors.
+  const statusValue = data.statusCode;
+  const detailValue = data.details;
+  const status = typeof statusValue === "number"
+    && Number.isSafeInteger(statusValue)
+    && statusValue >= 400 && statusValue <= 599
+    ? statusValue : null;
+  const detail = typeof detailValue === "string" ? detailValue.toLowerCase() : "";
+  const kind = /query too long|exceeds maximum|maximum tokens/.test(detail)
+    ? "query_limit"
+    : /query_timestamp|timestamp format/.test(detail) ? "timestamp_invalid"
+    : /bank.*not found|bank.*not exist/.test(detail) ? "bank_not_found"
+    : /rate limit|too many requests/.test(detail) ? "rate_limited"
+    : /timed out|timeout/.test(detail) ? "provider_timeout"
+    : /database|connection pool|db connection/.test(detail) ? "provider_database"
+    : /embedding|vector dimension/.test(detail) ? "provider_embedding"
+    : status === 400 ? "provider_bad_request_unknown"
+    : status !== null && status >= 500 ? "provider_server_error"
+    : "provider_transport_error";
+  return { status, kind };
 }
 
 export class DeterministicHindsightPlaneResolver implements HindsightPlaneResolver {
